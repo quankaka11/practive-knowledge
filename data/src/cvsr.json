@@ -1,0 +1,725 @@
+{
+  "id": "cvsr",
+  "name": "Computer Vision, Speech, OCR & RecSys",
+  "icon": "👁️",
+  "order": 8,
+  "notes": [
+    {
+      "title": "CNN: công thức phải tính được bằng tay",
+      "md": "**Output size** (PyTorch, floor):\n\n`out = floor((W − K + 2P) / S) + 1`\n\n- 'same' với stride 1: `P = (K − 1)/2`. Với K=3, P=1 → `out = ceil(W/S)`.\n- Pooling dùng cùng công thức (MaxPool 2×2, S=2 → chia đôi, floor).\n\n**Số tham số conv**: `(K·K·C_in + 1)·C_out` (bỏ +1 nếu bias=False, thường khi có BatchNorm phía sau). KHÔNG phụ thuộc H×W (weight sharing).\n\n**FLOPs (MAC)** ≈ `K²·C_in·C_out·H_out·W_out`.\n\n**Depthwise separable** (MobileNet): depthwise `K²·C_in` + pointwise `C_in·C_out`. Tỷ lệ tiết kiệm = `1 / (1/C_out + 1/K²)` ≈ K² (≈ 8–9 lần với 3×3). Phần pointwise chiếm ~95%+ chi phí.\n\n**Receptive field**: `r_l = r_{l−1} + (K_l − 1)·j_{l−1}`, `j_l = j_{l−1}·S_l` (r₀ = 1, j₀ = 1).\n- 2 lớp 3×3 (S=1) → 5×5 với 18C² tham số (< 25C²); 3 lớp → 7×7 (27C² < 49C²) + thêm phi tuyến (ý tưởng VGG).\n- Stride/pooling làm RF tăng nhanh vì jump nhân lên.\n\n**1×1 conv**: tuyến tính trên chiều kênh tại từng pixel → đổi số kênh, bottleneck (ResNet-50, Inception), trộn kênh.\n\n**Pooling**: không tham số, giữ số kênh, tạo bất biến tịnh tiến nhỏ. **Global Average Pooling** thay FC lớn ở cuối mạng.\n\n**Lỗi hay gặp**: quên floor, quên C_in hoặc bias khi đếm tham số, nghĩ padding 1 luôn giữ kích thước (chỉ đúng khi S=1)."
+    },
+    {
+      "title": "Kiến trúc: ResNet, EfficientNet, ViT, CLIP & augmentation",
+      "md": "| Model | Ý tưởng cốt lõi | Câu phỏng vấn hay gặp |\n|---|---|---|\n| ResNet | `y = F(x) + x`; bottleneck 1×1–3×3–1×1 | Giải **degradation** (training error mạng plain sâu tăng), không phải overfitting; gradient có thành phần identity |\n| EfficientNet | Compound scaling d=α^φ, w=β^φ, r=γ^φ, `α·β²·γ² ≈ 2` | Vì FLOPs ∝ d·w²·r² → mỗi φ tăng 1, FLOPs ×2; B0: α=1.2, β=1.1, γ=1.15 |\n| ViT | Cắt patch P×P → linear projection → + position embedding + [CLS] → Transformer encoder | Số token = (H/P)·(W/P) + 1: 224/16 → 197, 384/16 → 577. Ít inductive bias → cần data lớn (JFT, IN-21k) hoặc DeiT |\n| CLIP | Image encoder + text encoder, contrastive InfoNCE đối xứng trên ma trận N×N, ~400M cặp | Zero-shot: prompt 'a photo of a {label}', chọn argmax cosine; không sinh caption |\n\n**ViT**: attention ∝ N² → patch 16 → 8 làm token ×4, attention ×16. Đổi resolution → nội suy position embedding.\n\n**Augmentation**\n- Mixup: `x = λx₁ + (1−λ)x₂`, nhãn **mềm** cùng λ, λ ~ Beta(α, α).\n- CutMix: dán patch ảnh 2 vào ảnh 1, nhãn theo tỷ lệ diện tích.\n- Mosaic (YOLOv4): ghép 4 ảnh; detection phải biến đổi box tương ứng.\n- Flip/rotate phải giữ ngữ nghĩa nhãn: KHÔNG flip cho OCR, biển số, ảnh y tế trái/phải."
+    },
+    {
+      "title": "Object Detection: kiến trúc, IoU, NMS",
+      "md": "| | Two-stage | One-stage | Set prediction |\n|---|---|---|---|\n| Ví dụ | Faster R-CNN (RPN + RoI head), Mask R-CNN | YOLO, SSD, RetinaNet, FCOS | DETR, Deformable DETR, RT-DETR |\n| Ưu | Chính xác, tốt với vật nhỏ | Nhanh, realtime | Không anchor, không NMS |\n| Nhược | Chậm hơn | Cần NMS, mất cân bằng lớp (RetinaNet dùng focal loss) | DETR gốc hội tụ chậm (~500 epoch), yếu vật nhỏ |\n\n- **Anchor-based**: dự đoán offset so với anchor box định trước (cần tune tỷ lệ/kích thước). **Anchor-free**: dự đoán từ điểm/center (FCOS, CenterNet, YOLOX/v8). Anchor-free ≠ NMS-free (FCOS vẫn NMS).\n- **NMS-free** thực sự nhờ gán nhãn một-một: DETR (Hungarian matching), YOLOv10.\n\n**IoU** = `area(A∩B) / (area(A) + area(B) − area(A∩B))`. Giao: `w = max(0, min(x2) − max(x1))`, tương tự h. Biến thể loss: GIoU, DIoU, CIoU (xử lý khi không giao nhau).\n\n**Greedy NMS** (theo từng class): sort score → giữ box cao nhất → loại các box có IoU > ngưỡng với nó → lặp với box còn lại. Box đã bị loại **không** dùng để loại box khác. Soft-NMS: giảm score thay vì xóa (tốt cho cảnh đông người)."
+    },
+    {
+      "title": "Detection metrics: Precision-Recall, AP, mAP",
+      "md": "**Cách tính AP cho 1 class**\n1. Sort mọi detection theo confidence giảm dần.\n2. Gán TP nếu IoU ≥ ngưỡng với GT chưa được khớp (mỗi GT chỉ khớp 1 lần; trùng → FP).\n3. Tích lũy: `P = TP/(TP+FP)`, `R = TP / #GT` (mẫu số là tổng GT, kể cả object bị bỏ sót).\n4. Nội suy: `P_interp(r) = max P(r') với r' ≥ r`; AP = diện tích dưới đường đã nội suy.\n\n| | PASCAL VOC | COCO |\n|---|---|---|\n| Ngưỡng IoU | 0.5 (mAP@0.5) | 10 ngưỡng 0.50:0.05:0.95 (AP = mAP@[.5:.95]) |\n| Nội suy | VOC2007: 11 điểm; VOC2010+: all-point | 101 điểm recall |\n| Phụ | — | AP50, AP75, APs/APm/APl (theo kích thước) |\n\n- AP50 cao nhưng AP thấp → phát hiện được nhưng box lệch (localization kém).\n- mAP = trung bình AP qua class (COCO: qua class và ngưỡng IoU).\n- Production còn cần **latency** (ms/ảnh, p95), **throughput** (ảnh/s, FPS) — đổi bằng batch size, resolution, TensorRT/FP16/INT8.\n\n**Bẫy**: chia cho số TP thay vì số GT; nhầm AP (diện tích) với precision tại 1 ngưỡng confidence."
+    },
+    {
+      "title": "Segmentation: loại bài toán, model, Dice vs IoU",
+      "md": "| Loại | Output | Ví dụ |\n|---|---|---|\n| Semantic | Class cho mỗi pixel, không tách instance | FCN, DeepLab, U-Net, SegFormer |\n| Instance | Mask riêng cho mỗi object (things) | Mask R-CNN, YOLACT, YOLOv8-seg |\n| Panoptic | Mỗi pixel 1 class + 1 instance id, gồm stuff + things | Panoptic FPN, Mask2Former; metric PQ = SQ × RQ |\n\n- **U-Net**: encoder-decoder + skip connection (concat) giữ chi tiết không gian; mạnh với ảnh y tế ít data.\n- **Mask R-CNN**: Faster R-CNN + nhánh mask theo RoI; **RoIAlign** (bilinear) thay RoIPool tránh lệch lượng tử hóa.\n- **SAM**: promptable (point/box/mask), class-agnostic; ViT image encoder nặng chạy 1 lần + prompt encoder + mask decoder nhẹ; SA-1B ~1.1 tỷ mask / 11M ảnh. Cần thêm detector (vd Grounding DINO) nếu muốn có class.\n\n**Metric**\n- `IoU = |A∩B| / |A∪B|`\n- `Dice = 2|A∩B| / (|A| + |B|)` = F1 trên pixel\n- `Dice = 2·IoU / (1 + IoU)` → Dice ≥ IoU; IoU = 0.5 ↔ Dice ≈ 0.667.\n- mIoU = trung bình IoU qua class. Dice loss chống mất cân bằng foreground/background."
+    },
+    {
+      "title": "Generative: GAN, Diffusion, Latent Diffusion, VLM",
+      "md": "**GAN**: minimax giữa generator và discriminator. Vấn đề: mode collapse (ít đa dạng), train bất ổn. Chữa: WGAN-GP, spectral norm, minibatch discrimination. Sampling 1 bước → rất nhanh.\n\n**Diffusion (DDPM)**\n- Forward: thêm Gaussian noise dần; dạng đóng `x_t = √ᾱ_t·x₀ + √(1−ᾱ_t)·ε`.\n- Train: chọn t ngẫu nhiên, model ε_θ(x_t, t) dự đoán ε, loss MSE.\n- Reverse: khử nhiễu từng bước (DDPM ~1000 bước, stochastic).\n- **DDIM**: cùng model đã train, sampling non-Markovian, η=0 → deterministic, ít bước (20–50). Nhanh hơn nữa: DPM-Solver, LCM, consistency distillation.\n\n**Latent Diffusion / Stable Diffusion**: VAE nén 512×512×3 → 64×64×4 (f=8); U-Net (hoặc DiT) khử nhiễu trong latent; text qua CLIP text encoder → cross-attention.\n\n**Classifier-free guidance**: `ε̂ = ε(x,∅) + w·(ε(x,y) − ε(x,∅))`\n- Train: drop condition ~10% để 1 model học cả cond/uncond.\n- w = 0: unconditional; w = 1: conditional thuần; w > 1: bám prompt mạnh hơn, giảm đa dạng; SD mặc định 7.5. Chi phí 2 forward/bước.\n- Classifier guidance (khác!) cần classifier train trên ảnh nhiễu.\n\n| | GAN | Diffusion |\n|---|---|---|\n| Chất lượng/đa dạng | Sắc nét, dễ mode collapse | Đa dạng, phủ phân phối tốt |\n| Train | Bất ổn | Ổn định (regression) |\n| Sampling | 1 bước | Nhiều bước |\n\n**VLM (LLaVA)**: CLIP ViT-L/14 (frozen) → projector (linear/MLP) → LLM. Ảnh 336/14 → 576 visual token. Stage 1: chỉ train projector (alignment); stage 2: projector + LLM (visual instruction tuning)."
+    },
+    {
+      "title": "Speech: tín hiệu, framing, Mel, MFCC",
+      "md": "- **Nyquist**: lấy mẫu fs biểu diễn tối đa fs/2. 16 kHz → 8 kHz (chuẩn ASR); 8 kHz điện thoại → 4 kHz. Upsample không khôi phục dải đã mất. Sai sample rate → model 'nghe' audio nhanh/chậm → WER tăng vọt.\n- **Framing**: window 25 ms (400 mẫu @16k), hop 10 ms (160 mẫu) → ~100 frame/s.\n  - Không padding: `n = floor((N − win)/hop) + 1` (10 s → 998).\n  - center=True (librosa/torch.stft): `n = 1 + floor(N/hop)` (10 s → 1001).\n- **Pipeline đặc trưng**: waveform → pre-emphasis (tùy) → frame + Hann window → STFT → |·|² → Mel filterbank (80 bin) → log = **log-Mel** → DCT → **MFCC** (13 hệ số + Δ, ΔΔ).\n- Mel: filter hẹp ở tần số thấp, rộng ở cao (tai người phân biệt tốt âm trầm).\n- Spectrogram/Mel/MFCC bỏ phase → tái tạo audio cần vocoder.\n- Deep ASR dùng log-Mel (Whisper 80 bin; large-v3 128 bin) hoặc raw waveform (wav2vec 2.0); MFCC hợp với GMM-HMM cổ điển.\n- Augment: SpecAugment (mask time/frequency), speed perturbation, thêm noise/reverb."
+    },
+    {
+      "title": "ASR: CTC, Whisper, WER/CER",
+      "md": "**CTC**\n- Thêm token **blank**; giải mã: (1) gộp ký hiệu giống nhau liền kề → (2) xóa blank. `a a _ a b _ b b` → `aabb`.\n- Blank cho phép ký tự lặp thật ('ll' trong hello) và frame 'không nói gì'.\n- Loss = tổng xác suất mọi alignment hợp lệ (forward-backward) → không cần nhãn căn chỉnh frame. Giả định độc lập có điều kiện → hay ghép LM khi beam search.\n- Họ khác: attention encoder-decoder (Whisper), RNN-T/Transducer (streaming tốt).\n\n**Whisper**\n- Transformer encoder-decoder, 680k giờ weakly-supervised, đa ngôn ngữ.\n- Audio 16 kHz, cửa sổ **30 s** → 3000 frame log-Mel (80 bin; large-v3: 128) → 2 conv (stride 2) → 1500 vector.\n- Multitask token: `<|startoftranscript|>`, `<|vi|>`, `<|transcribe|>` / `<|translate|>` (chỉ X → English), `<|notimestamps|>`.\n- Không streaming native; audio dài xử lý theo cửa sổ 30 s; hallucination ở đoạn im lặng → dùng VAD.\n\n**Metric**\n- `WER = (S + D + I) / N`, N = số từ của **reference** → có thể **> 100%** (nhiều insertion).\n- CER: cùng công thức ở mức ký tự; dùng cho tiếng Trung/Nhật (không có khoảng trắng), OCR.\n- Tiếng Việt: tách theo khoảng trắng = âm tiết; sai dấu = 1 substitution. Chuẩn hóa trước khi tính: lowercase, bỏ dấu câu, NFC, số ↔ chữ."
+    },
+    {
+      "title": "Hệ thống speech: streaming, VAD, diarization, TTS, RTF",
+      "md": "| Thành phần | Trả lời câu hỏi | Ví dụ |\n|---|---|---|\n| VAD | Khi nào có tiếng nói? | Silero VAD, WebRTC VAD |\n| Diarization | Ai nói khi nào? (SPEAKER_00, 01…) | pyannote: segmentation + speaker embedding (x-vector/ECAPA) + clustering; metric DER |\n| Streaming ASR | Ra chữ khi đang nói | RNN-T, CTC chunk, Emformer; lookahead hạn chế → WER cao hơn offline |\n| Offline ASR | Chính xác nhất | Whisper, attention 2 chiều trên toàn đoạn |\n\n- Pattern two-pass: partial result streaming → offline pass sửa bản cuối.\n\n**TTS pipeline**: text normalization + G2P → **acoustic model** (Tacotron 2, FastSpeech 2: text/phoneme → mel, duration/pitch/energy) → **vocoder** (WaveNet, HiFi-GAN: mel → waveform). End-to-end: VITS. TTS kiểu LLM: dự đoán token neural codec (EnCodec) rồi decode. Đánh giá: MOS, WER qua ASR, speaker similarity.\n\n**RTF** = thời gian xử lý / thời lượng audio. RTF 0.15 ↔ nhanh 1/0.15 ≈ 6.7× realtime. Streaming cần RTF < 1 **và** latency thấp (partial/first-token latency); throughput = số stream đồng thời / GPU."
+    },
+    {
+      "title": "OCR & Document AI",
+      "md": "**Pipeline cổ điển**: tiền xử lý → layout analysis → text detection → recognition → post-processing.\n- Tiền xử lý: perspective correction, **deskew** (Hough, minAreaRect), **binarization** (Otsu toàn cục vs Sauvola/adaptive cục bộ khi ánh sáng không đều), denoise, CLAHE. Đừng resize quá nhỏ → mất dấu tiếng Việt.\n- Detection: DBNet, EAST, CRAFT (polygon, chữ cong/nghiêng).\n- Recognition: **CRNN** = CNN → BiLSTM → **CTC** (không cần vị trí từng ký tự); attention/Transformer: TrOCR, PARSeq.\n- Layout: phát hiện vùng title/table/figure, reading order (LayoutParser, DocLayNet).\n\n| Model | Đầu vào | Đặc điểm |\n|---|---|---|\n| TrOCR | Ảnh **dòng chữ** | ViT/BEiT encoder + text decoder; vẫn cần detector |\n| LayoutLM v1/v2/v3 | Text + bbox từ OCR (+ ảnh ở v2/v3) | 2D position embedding; mạnh cho KIE, form, classification |\n| Donut | Ảnh tài liệu | OCR-free: Swin encoder + BART decoder sinh JSON; có thể hallucinate |\n| VLM (Qwen-VL…) | Ảnh | Linh hoạt, phụ thuộc resolution, khó truy vết bbox |\n\n**Đánh giá**: CER/WER (CER cho OCR), field-level accuracy/F1 cho KIE.\n\n**Unicode tiếng Việt**: NFC (dựng sẵn, 'à' = U+00E0) vs NFD ('a' + U+0300). 'Hà Nội': NFC 6 code point, NFD 9. Luôn `unicodedata.normalize('NFC', s)` cho cả ref/hyp, dữ liệu train, query search. Nguồn NFD: macOS filename, copy từ web/Word, một số bộ gõ/OCR."
+    },
+    {
+      "title": "RecSys: mô hình & kiến trúc nhiều tầng",
+      "md": "| Cách tiếp cận | Dựa trên | Ưu | Nhược |\n|---|---|---|---|\n| Content-based | Feature item + hồ sơ user | Gợi ý được item mới | Overspecialization, cần feature tốt |\n| User-based CF | User tương tự | Đơn giản | User nhiều, đổi nhanh → khó scale |\n| Item-based CF | Item tương tự (co-occurrence) | Ổn định, tính trước được (Amazon) | Item cold start |\n| Matrix factorization | `r̂ = p_u·q_i + b_u + b_i + μ` | Gọn, mạnh | Cold start, chỉ ID |\n| Two-tower | User tower, item tower → dot product | Precompute item emb + ANN | Không có feature chéo |\n\n- **ALS**: cố định một bên → ridge regression nghiệm đóng cho bên kia; song song hóa tốt (Spark).\n- **Implicit feedback** (Hu-Koren-Volinsky): preference p ∈ {0,1}, confidence `c = 1 + α·r`; ô trống = chưa thấy, không phải ghét.\n- **Cold start**: item mới → content feature, exploration; user mới → popularity theo ngữ cảnh, onboarding, session-based.\n\n**Phễu**: candidate generation (triệu → nghìn, ưu tiên recall, nhiều nguồn) → ranking (nghìn → trăm, model nặng, feature chéo, multi-task pCTR/pCVR) → re-ranking (diversity MMR/DPP, business rule, dedup, freshness, fairness).\n\n**Negative sampling**: in-batch negatives rẻ nhưng phạt item hot quá mức → **logQ correction** `s − log Q(i)` (YouTube 2019); mixed negatives; hard negatives (cẩn thận false negative). Giống bi-encoder vs cross-encoder trong RAG."
+    },
+    {
+      "title": "RecSys: metrics, offline vs online, bias",
+      "md": "**Ranking metrics @k** (rel nhị phân trừ NDCG)\n- `Precision@k = #relevant trong top-k / k`; `Recall@k = #relevant trong top-k / R` (R = tổng relevant của user).\n- Hit rate@k: tỷ lệ user có ≥ 1 item relevant trong top-k.\n- MRR: trung bình 1/rank của item relevant đầu tiên.\n- `AP@k = (1/min(R,k))·Σ P@i·rel(i)`; MAP = trung bình AP qua user. (Mẫu số khác nhau giữa thư viện → nói rõ quy ước.)\n- `DCG@k = Σ gain_i / log2(i + 1)`, gain = rel hoặc 2^rel − 1; `NDCG = DCG / IDCG`, IDCG từ thứ tự lý tưởng của **toàn bộ** item relevant (không chỉ item đã trả về).\n\n**Beyond accuracy**: coverage (tỷ lệ catalog từng được gợi ý), diversity (1 − similarity trung bình trong danh sách), novelty, serendipity.\n\n**Offline vs online**\n- Offline trên log của policy cũ → exposure bias, popularity bias; offline tăng ≠ online tăng.\n- Online A/B: CTR, CVR, watch time, retention; chú ý novelty effect, đủ thời gian/cỡ mẫu, guardrail metrics.\n- Giảm bias: IPS (inverse propensity scoring), exploration (bandit), popularity debiasing.\n\n**Feedback loop**: model gợi ý → item được tương tác → retrain trên log đó → gợi ý item đó nhiều hơn → 'rich get richer', coverage giảm, filter bubble."
+    }
+  ],
+  "questions": [
+    {
+      "id": "cvsr-001",
+      "sub": "Convolution output size",
+      "level": 2,
+      "type": "numeric",
+      "trap": true,
+      "q": "Ảnh xám 64×64 đi qua lần lượt:\n\n1. Conv K=5, stride 1, padding 0\n2. MaxPool 2×2, stride 2\n3. Conv K=3, stride 2, padding 1\n\nKích thước không gian (cao = rộng) của feature map đầu ra là bao nhiêu? Dùng công thức chuẩn của PyTorch (làm tròn xuống – floor). Nhập số nguyên.",
+      "answer": 15,
+      "tolerance": 0,
+      "unit": "pixel",
+      "explain": "Công thức: `out = floor((W − K + 2P)/S) + 1`.\n\n- Bước 1: (64 − 5 + 0)/1 + 1 = 60.\n- Bước 2 (pooling cùng công thức, K=2, S=2): (60 − 2)/2 + 1 = 30.\n- Bước 3: (30 − 3 + 2)/2 = 14.5 → floor = 14 → +1 = 15.\n\nBẫy 1: không floor mà làm tròn 15.5 → 16. Bẫy 2: tưởng 'K=3, P=1' luôn giữ nguyên kích thước — chỉ đúng khi stride = 1; với stride 2 kích thước ≈ chia đôi. Mẹo nhanh: với K=3, P=1 thì `out = ceil(W/S)` = ceil(30/2) = 15."
+    },
+    {
+      "id": "cvsr-002",
+      "sub": "Số tham số Conv",
+      "level": 1,
+      "type": "numeric",
+      "trap": false,
+      "q": "Lớp `nn.Conv2d(in_channels=64, out_channels=128, kernel_size=3, bias=True)` có bao nhiêu tham số học được? Nhập số nguyên.",
+      "answer": 73856,
+      "tolerance": 0,
+      "unit": "tham số",
+      "explain": "Mỗi filter có kích thước K×K×C_in = 3×3×64 = 576 trọng số, cộng 1 bias → 577. Có C_out = 128 filter → 128 × 577 = 73 856. Công thức tổng quát: `params = (K·K·C_in + 1)·C_out`.\n\nSố tham số KHÔNG phụ thuộc kích thước ảnh H×W (weight sharing) — khác hẳn fully connected. Sai thường gặp: quên nhân C_in (ra 9×128 + 128 = 1 280) hoặc quên bias (73 728). Khi sau conv có BatchNorm, người ta thường đặt bias=False vì tham số β của BN đã làm nhiệm vụ dịch chuyển."
+    },
+    {
+      "id": "cvsr-003",
+      "sub": "Depthwise separable conv",
+      "level": 3,
+      "type": "numeric",
+      "trap": false,
+      "q": "So sánh conv chuẩn 3×3 với depthwise separable conv (depthwise 3×3 + pointwise 1×1) cho C_in = 128, C_out = 256, bỏ qua bias. Số tham số của conv chuẩn gấp bao nhiêu lần depthwise separable? Làm tròn 2 chữ số thập phân.",
+      "answer": 8.69,
+      "tolerance": 0.01,
+      "unit": "lần",
+      "explain": "- Conv chuẩn: K²·C_in·C_out = 9·128·256 = 294 912.\n- Depthwise: mỗi kênh vào có 1 filter 3×3 riêng → 9·128 = 1 152.\n- Pointwise 1×1: C_in·C_out = 128·256 = 32 768.\n- Tổng separable = 33 920 → tỷ lệ = 294 912 / 33 920 ≈ 8.69.\n\nCông thức gọn: tỷ lệ = 1 / (1/C_out + 1/K²) = 1/(1/256 + 1/9) ≈ 8.69 → với K=3 và C_out lớn, tiết kiệm tiệm cận K² = 9 lần. FLOPs tiết kiệm cùng tỷ lệ vì mỗi trọng số đều nhân với H_out·W_out. Bẫy: nghĩ tiết kiệm C_out lần, hoặc không nhận ra phần pointwise mới chiếm ~97% chi phí (32 768/33 920) — vì vậy MobileNet tối ưu chủ yếu ở 1×1 conv."
+    },
+    {
+      "id": "cvsr-004",
+      "sub": "Receptive field, 1×1 conv, pooling",
+      "level": 2,
+      "type": "multi",
+      "trap": false,
+      "q": "Chọn TẤT CẢ phát biểu ĐÚNG.",
+      "options": [
+        "Xếp chồng 2 conv 3×3 (stride 1) cho receptive field 5×5 nhưng ít tham số hơn 1 conv 5×5 (18C² so với 25C²) và thêm một lần phi tuyến.",
+        "Conv 1×1 chỉ hữu ích với ảnh 1 kênh, vì nó không nhìn được pixel lân cận nên không trích xuất được đặc trưng gì.",
+        "Conv 1×1 thường làm bottleneck giảm số kênh trước conv 3×3 đắt tiền (ResNet-50, Inception), trộn thông tin giữa các kênh.",
+        "Global Average Pooling thay các lớp fully connected lớn ở cuối mạng, giảm mạnh tham số và cho phép đầu vào nhiều kích thước.",
+        "Max pooling 2×2 stride 2 có trọng số học được như conv và làm số kênh tăng gấp đôi để bù cho việc giảm H×W."
+      ],
+      "answer": [
+        0,
+        2,
+        3
+      ],
+      "explain": "- 'Xếp chồng 2 conv 3×3 cho RF 5×5' — ĐÚNG: RF = 3 + (3 − 1) = 5; tham số 2·9·C² = 18C² < 25C² (insight của VGG). Tổng quát `r_l = r_{l−1} + (K−1)·jump`, jump nhân với stride nên RF tăng nhanh sau pooling/stride.\n- '1×1 conv chỉ hữu ích với ảnh 1 kênh' — SAI: 1×1 conv là biến đổi tuyến tính trên chiều kênh tại mỗi pixel (như FC áp dụng theo từng vị trí), rất hữu ích với feature map nhiều kênh.\n- '1×1 conv làm bottleneck' — ĐÚNG: giảm 256 → 64 kênh rồi mới 3×3, sau đó 1×1 tăng lại 256.\n- 'Global Average Pooling thay FC' — ĐÚNG: lấy trung bình mỗi kênh thành 1 số, thay FC 7×7×512×4096 của VGG (~100M tham số).\n- 'Max pooling có tham số và nhân đôi kênh' — SAI: pooling không có tham số và giữ nguyên số kênh, chỉ giảm H×W; nhân đôi số kênh là do conv quyết định."
+    },
+    {
+      "id": "cvsr-005",
+      "sub": "ResNet",
+      "level": 2,
+      "type": "single",
+      "trap": true,
+      "q": "Trong paper ResNet (He et al., 2015), động lực chính để thêm skip connection `y = F(x) + x` là gì?",
+      "options": [
+        "Giảm overfitting: mạng sâu hơn có test error cao hơn do học thuộc dữ liệu train, nên shortcut đóng vai trò regularizer giống dropout.",
+        "Giải quyết degradation: mạng plain sâu hơn có training error cao hơn; shortcut giúp dễ học identity và truyền gradient trực tiếp.",
+        "Thay thế BatchNorm: shortcut cộng x vào output nên tự ổn định phân phối activation, nhờ đó không cần BN sau mỗi conv.",
+        "Giảm số tham số: nhánh F(x) chỉ học phần dư có biên độ nhỏ nên mỗi block dùng ít filter hơn hẳn mạng plain cùng độ sâu."
+      ],
+      "answer": 1,
+      "explain": "He et al. quan sát mạng plain 56 lớp có training error CAO hơn mạng 20 lớp. Overfit thì training error phải thấp — nên đây là bài toán tối ưu khó (degradation), không phải overfitting → phương án 'giảm overfitting / regularizer' là bẫy phổ biến nhất.\n\nVới residual, nếu lớp thêm vào là thừa, mạng chỉ cần đẩy F(x) → 0 để có identity — dễ hơn nhiều so với học identity bằng chuỗi conv + ReLU. Gradient: ∂y/∂x = ∂F/∂x + I, thành phần I giúp tín hiệu lan về các lớp đầu. Phương án 'thay thế BatchNorm' sai: ResNet vẫn dùng BN sau mỗi conv. Phương án 'giảm số tham số' sai: shortcut identity không giảm tham số; giảm tham số là nhờ thiết kế bottleneck 1×1."
+    },
+    {
+      "id": "cvsr-006",
+      "sub": "EfficientNet",
+      "level": 3,
+      "type": "single",
+      "trap": false,
+      "q": "EfficientNet dùng compound scaling: depth `d = α^φ`, width `w = β^φ`, resolution `r = γ^φ` với ràng buộc `α·β²·γ² ≈ 2`. Vì sao β và γ bị bình phương trong ràng buộc?",
+      "options": [
+        "Vì ablation cho thấy width và resolution ảnh hưởng tới accuracy mạnh gấp đôi depth, nên cần trọng số lớn hơn trong ràng buộc.",
+        "Vì bình phương giữ các hệ số luôn dương và làm hàm mục tiêu lồi, giúp grid search tìm α, β, γ trên B0 hội tụ nhanh hơn.",
+        "Vì FLOPs conv tuyến tính theo depth nhưng bình phương theo width (C_in·C_out) và resolution (H·W); φ tăng 1 thì FLOPs ≈ ×2.",
+        "Vì width và resolution phải tăng nhanh hơn depth để tránh vanishing gradient khi mạng sâu thêm theo hệ số α^φ."
+      ],
+      "answer": 2,
+      "explain": "FLOPs conv ∝ d · w² · r²: tăng depth α lần → FLOPs ×α; tăng số kênh β lần → cả C_in và C_out cùng tăng → ×β²; tăng cạnh ảnh γ lần → H·W tăng ×γ². Ràng buộc α·β²·γ² ≈ 2 nghĩa là tổng FLOPs ≈ 2^φ — dễ kiểm soát ngân sách tính toán.\n\nVới B0, grid search nhỏ cho α = 1.2, β = 1.1, γ = 1.15; sau đó cố định và tăng φ để có B1–B7. Insight chính: scale cân bằng cả 3 chiều tốt hơn chỉ tăng một chiều (chỉ tăng depth hoặc width thì accuracy bão hòa nhanh). Các phương án còn lại nghe hợp lý nhưng không phải lý do trong paper."
+    },
+    {
+      "id": "cvsr-007",
+      "sub": "ViT patch embedding",
+      "level": 1,
+      "type": "numeric",
+      "trap": true,
+      "q": "ViT-B/16 nhận ảnh 384×384, patch 16×16, có thêm 1 token [CLS]. Chuỗi đưa vào Transformer encoder dài bao nhiêu token? Nhập số nguyên.",
+      "answer": 577,
+      "tolerance": 0,
+      "unit": "token",
+      "explain": "Số patch = (384/16)² = 24² = 576. Cộng 1 token [CLS] → 577.\n\nBẫy: quên [CLS] (ra 576) hoặc lấy 384²/16 (chia diện tích cho cạnh patch thay vì cho diện tích patch). Ở 224×224 thì 14² + 1 = 197 — con số kinh điển. Khi fine-tune ở resolution cao hơn lúc pretrain, số patch đổi nên position embedding phải nội suy 2D. Chi phí self-attention ∝ N²: từ 197 lên 577 token, attention tốn ≈ (577/197)² ≈ 8.6 lần."
+    },
+    {
+      "id": "cvsr-008",
+      "sub": "ViT vs CNN",
+      "level": 3,
+      "type": "multi",
+      "trap": false,
+      "q": "Chọn TẤT CẢ phát biểu ĐÚNG về Vision Transformer so với CNN.",
+      "options": [
+        "ViT không cần position embedding vì thứ tự patch trong chuỗi đầu vào và giá trị pixel của mỗi patch đã mã hóa đủ thông tin vị trí.",
+        "ViT ít inductive bias (không có sẵn tính cục bộ, translation equivariance) nên train từ đầu trên ImageNet-1k thường thua ResNet; cần pretrain lớn hoặc DeiT.",
+        "Token [CLS] là bắt buộc trong ViT; thay bằng mean pooling các patch token để phân loại sẽ làm model không hội tụ.",
+        "Giữ nguyên ảnh, giảm patch size từ 16 xuống 8 làm số token tăng khoảng 4 lần và chi phí self-attention tăng khoảng 16 lần."
+      ],
+      "answer": [
+        1,
+        3
+      ],
+      "explain": "- 'Không cần position embedding' — SAI: self-attention là permutation-equivariant; không có position embedding thì mô hình không biết patch nào nằm ở đâu (giống bag-of-patches).\n- 'Ít inductive bias nên cần data lớn' — ĐÚNG: kết luận chính của paper ViT; với dữ liệu lớn, ViT vượt CNN vì ít bị 'trói' bởi giả định cục bộ. Ngoài ra self-attention cho mỗi patch nhìn toàn ảnh ngay từ lớp đầu, còn receptive field của CNN tăng dần theo độ sâu.\n- '[CLS] là bắt buộc' — SAI: global average pooling trên patch token hoạt động tốt (Swin và nhiều biến thể ViT dùng GAP).\n- 'Patch 16 → 8: token ×4, attention ×16' — ĐÚNG: số token = (H/P)², P giảm 2 lần → token ×4 → attention O(N²) ×16. Đây là lý do Swin dùng window attention để chi phí tuyến tính theo số token."
+    },
+    {
+      "id": "cvsr-009",
+      "sub": "CLIP",
+      "level": 2,
+      "type": "single",
+      "trap": false,
+      "q": "Dùng CLIP để phân loại zero-shot ảnh vào 10 lớp mà không fine-tune. Quy trình đúng là gì?",
+      "options": [
+        "Gắn classification head 10 lớp lên image encoder đã đóng băng và train vài epoch với ảnh có nhãn của 10 lớp đó.",
+        "Đưa ảnh vào text decoder của CLIP để sinh caption, rồi so khớp caption với tên lớp bằng string matching hoặc BM25.",
+        "Encode ảnh bằng image encoder, rồi gán nhãn theo kNN với embedding của các ảnh mẫu có nhãn trong tập train.",
+        "Tạo prompt 'a photo of a {label}' cho từng lớp, encode bằng text encoder, chọn lớp có cosine similarity lớn nhất."
+      ],
+      "answer": 3,
+      "explain": "CLIP train contrastive trên ~400M cặp ảnh–văn bản: với batch N cặp, tính ma trận cosine N×N, loss cross-entropy đối xứng (InfoNCE, ảnh→text và text→ảnh) kéo N cặp đúng trên đường chéo lên, đẩy N² − N cặp sai xuống, có temperature học được. Vì ảnh và text chung không gian embedding, zero-shot = biến tên lớp thành câu prompt, encode, lấy argmax cosine. Prompt ensembling (nhiều template) tăng thêm vài điểm accuracy.\n\nPhương án 'gắn classification head và train vài epoch' là linear probe/fine-tune — không còn zero-shot. Phương án 'text decoder sinh caption' sai: CLIP không có text decoder, không sinh caption (đó là BLIP, CoCa...). Phương án 'kNN với ảnh mẫu có nhãn' là few-shot, cần dữ liệu có nhãn."
+    },
+    {
+      "id": "cvsr-010",
+      "sub": "Object detection architectures",
+      "level": 2,
+      "type": "multi",
+      "trap": true,
+      "q": "Chọn TẤT CẢ phát biểu ĐÚNG về các họ object detector.",
+      "options": [
+        "Faster R-CNN là two-stage: Region Proposal Network sinh proposal, sau đó RoI head phân loại và tinh chỉnh box cho từng proposal.",
+        "Mọi detector anchor-free (FCOS, CenterNet...) đều không cần NMS, vì không còn anchor box định trước chồng lấn lên nhau.",
+        "YOLO là one-stage: dự đoán box và class trực tiếp trên lưới feature map trong một lần forward, thường nhanh hơn two-stage.",
+        "DETR gốc hội tụ nhanh hơn Faster R-CNN (ít epoch hơn) nhờ global attention, và đặc biệt mạnh với vật thể nhỏ.",
+        "DETR coi detection là set prediction, Hungarian matching một-một giữa prediction và ground truth nên không cần NMS."
+      ],
+      "answer": [
+        0,
+        2,
+        4
+      ],
+      "explain": "- 'Mọi detector anchor-free đều không cần NMS' — SAI, là bẫy: anchor-free chỉ bỏ anchor box định trước, dự đoán trực tiếp từ điểm/center; FCOS vẫn sinh nhiều box chồng lấn cho cùng vật thể nên vẫn dùng NMS (CenterNet thay NMS bằng max-pool 3×3 trên heatmap). Thứ thực sự loại bỏ NMS là gán nhãn một-một: DETR (Hungarian matching), YOLOv10 (consistent dual assignments).\n- 'DETR gốc hội tụ nhanh và mạnh với vật nhỏ' — SAI: DETR gốc cần ~500 epoch (Faster R-CNN ~36) và yếu với vật thể nhỏ; Deformable DETR khắc phục bằng deformable attention đa tỷ lệ, hội tụ nhanh hơn ~10 lần.\n- Các phát biểu về Faster R-CNN (RPN + RoI head), YOLO (one-stage) và DETR (set prediction, không NMS) đều ĐÚNG.\n\nTrade-off tổng quát: two-stage thường chính xác hơn, one-stage nhanh hơn — nhưng YOLO hiện đại đã thu hẹp khoảng cách đáng kể."
+    },
+    {
+      "id": "cvsr-011",
+      "sub": "IoU",
+      "level": 1,
+      "type": "numeric",
+      "trap": false,
+      "q": "Box định dạng (x1, y1, x2, y2): ground truth A = (2, 2, 8, 6), prediction B = (5, 3, 11, 9). Tính IoU, làm tròn 3 chữ số thập phân.",
+      "answer": 0.176,
+      "tolerance": 0.002,
+      "unit": "",
+      "explain": "- Diện tích A = (8 − 2)·(6 − 2) = 24; B = (11 − 5)·(9 − 3) = 36.\n- Giao: x từ max(2, 5) = 5 đến min(8, 11) = 8 → 3; y từ max(2, 3) = 3 đến min(6, 9) = 6 → 3; giao = 9.\n- Hợp = 24 + 36 − 9 = 51 → IoU = 9/51 ≈ 0.176.\n\nLỗi hay gặp: lấy hợp = 24 + 36 = 60 (quên trừ giao → 0.15), hoặc quên clamp `max(0, ·)` khi hai box không giao nhau (ra diện tích âm). Với ngưỡng 0.5 (VOC), prediction này là False Positive. Một số codebase cũ dùng tọa độ pixel inclusive (+1 khi tính chiều dài) — cần thống nhất khi so sánh kết quả."
+    },
+    {
+      "id": "cvsr-012",
+      "sub": "NMS",
+      "level": 3,
+      "type": "single",
+      "trap": true,
+      "q": "4 box cùng class, score: A = 0.9, B = 0.8, C = 0.7, D = 0.6. IoU từng cặp:\n\n| Cặp | IoU |\n|---|---|\n| A–B | 0.60 |\n| A–C | 0.30 |\n| A–D | 0.20 |\n| B–C | 0.70 |\n| B–D | 0.10 |\n| C–D | 0.55 |\n\nChạy greedy NMS với ngưỡng 0.5 (loại box có IoU > 0.5 với một box đã được giữ). Những box nào còn lại?",
+      "options": [
+        "A, D",
+        "A, C",
+        "A, C, D",
+        "A"
+      ],
+      "answer": 1,
+      "explain": "Greedy NMS: sắp xếp theo score, giữ box cao nhất, loại các box còn lại có IoU > ngưỡng với nó, lặp lại với tập còn lại.\n\n- Vòng 1: giữ A. So với A: B (0.60 > 0.5) bị loại; C (0.30), D (0.20) còn lại.\n- Vòng 2: trong {C, D}, giữ C. D có IoU với C = 0.55 > 0.5 → bị loại.\n- Kết quả: {A, C}.\n\nBẫy 1: dùng B (đã bị loại) để loại C → ra {A, D}; box đã bị suppress không được dùng để suppress box khác. Bẫy 2: chỉ so với box cao nhất A → giữ cả C và D. NMS cứng có thể xóa nhầm vật thể thật chồng lấn (đám đông) — Soft-NMS giảm score theo IoU thay vì xóa hẳn."
+    },
+    {
+      "id": "cvsr-013",
+      "sub": "Average Precision",
+      "level": 3,
+      "type": "numeric",
+      "trap": true,
+      "q": "Một class có 4 ground-truth object. Detector trả về 5 detection, sắp theo confidence giảm dần, kết quả khớp lần lượt: **TP, FP, TP, TP, FP**.\n\nTính AP kiểu all-point interpolation (VOC 2010+): precision tại mỗi mức recall = max precision ở mọi recall ≥ mức đó; AP = diện tích dưới đường PR đã nội suy. Làm tròn 3 chữ số thập phân.",
+      "answer": 0.625,
+      "tolerance": 0.005,
+      "unit": "",
+      "explain": "Bảng tích lũy (recall = TP/4):\n\n| # | Kết quả | Precision | Recall |\n|---|---|---|---|\n| 1 | TP | 1/1 = 1.00 | 0.25 |\n| 2 | FP | 1/2 = 0.50 | 0.25 |\n| 3 | TP | 2/3 ≈ 0.667 | 0.50 |\n| 4 | TP | 3/4 = 0.75 | 0.75 |\n| 5 | FP | 3/5 = 0.60 | 0.75 |\n\nNội suy: tại R = 0.25 → max P (R ≥ 0.25) = 1.0; tại R = 0.50 → max(0.667, 0.75, 0.6) = 0.75; tại R = 0.75 → 0.75. AP = 0.25·1.0 + 0.25·0.75 + 0.25·0.75 = 0.625. Recall tối đa chỉ 0.75 (1 object bị bỏ sót) nên đoạn 0.75 → 1 đóng góp 0.\n\nBẫy: lấy trung bình precision tại các TP rồi chia cho số TP tìm được ((1 + 0.667 + 0.75)/3 ≈ 0.806) — bỏ qua object bị miss; hoặc quên nội suy ((1 + 0.667 + 0.75)/4 ≈ 0.604). mAP = trung bình AP qua các class."
+    },
+    {
+      "id": "cvsr-014",
+      "sub": "mAP: VOC vs COCO",
+      "level": 2,
+      "type": "single",
+      "trap": true,
+      "q": "Hai detector trên COCO val:\n\n| Model | AP50 | AP (mAP@[.5:.95]) |\n|---|---|---|\n| A | 0.70 | 0.40 |\n| B | 0.65 | 0.45 |\n\nNhận định nào hợp lý nhất?",
+      "options": [
+        "A tốt hơn vì AP50 là metric chính thức của leaderboard COCO; còn AP@[.5:.95] chỉ là metric phụ để tham khảo thêm.",
+        "B định vị box chặt hơn: giữ precision ở ngưỡng IoU cao (0.75–0.95), box của A thường chỉ đạt IoU 0.5–0.7.",
+        "B có recall cao hơn A ở mọi ngưỡng IoU, vì AP lớn hơn luôn kéo theo recall lớn hơn ở từng ngưỡng.",
+        "Hai model tương đương; chênh lệch chỉ do AP nội suy 101 điểm recall còn AP50 nội suy 11 điểm."
+      ],
+      "answer": 1,
+      "explain": "Metric chính của COCO là AP = mAP@[.5:.95]: trung bình AP trên 10 ngưỡng IoU 0.50, 0.55, …, 0.95 (và trên 80 class), nội suy 101 điểm recall. AP50 tương đương VOC mAP@0.5 — chỉ cần IoU ≥ 0.5 là TP nên dễ dãi về localization.\n\nA có AP50 cao hơn nhưng AP thấp hơn → nhiều box của A chỉ đạt IoU 0.5–0.7, thành FP ở ngưỡng cao; B định vị chính xác hơn. Phương án 'AP50 là metric chính thức' sai: metric chính là AP. Phương án 'B có recall cao hơn ở mọi ngưỡng' sai: AP là diện tích dưới đường PR, không suy ra được recall cao hơn ở mọi ngưỡng. Phương án '101 điểm vs 11 điểm' sai: trong COCO cả AP và AP50 đều dùng nội suy 101 điểm (11 điểm là VOC2007). COCO còn báo cáo AP75 và APs/APm/APl theo kích thước vật thể."
+    },
+    {
+      "id": "cvsr-015",
+      "sub": "Segmentation",
+      "level": 2,
+      "type": "multi",
+      "trap": false,
+      "q": "Chọn TẤT CẢ phát biểu ĐÚNG về image segmentation.",
+      "options": [
+        "SAM (Segment Anything) trả về mask kèm nhãn semantic cho từng mask, nên có thể dùng trực tiếp thay một model semantic segmentation có class.",
+        "Semantic segmentation gán class cho mỗi pixel nhưng không phân biệt hai chiếc xe đứng cạnh nhau là hai instance khác nhau.",
+        "Panoptic segmentation hợp nhất semantic (cho 'stuff' như trời, đường) và instance (cho 'things' như người, xe): mỗi pixel có đúng một class và một instance id.",
+        "Mask R-CNN = Faster R-CNN + nhánh dự đoán mask cho từng RoI, dùng RoIAlign (nội suy bilinear) thay RoIPool để tránh lệch do lượng tử hóa.",
+        "U-Net dùng encoder-decoder với skip connection nối feature độ phân giải cao từ encoder sang decoder, rất phổ biến trong ảnh y tế ít dữ liệu."
+      ],
+      "answer": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "explain": "- 'SAM trả mask kèm nhãn semantic' — SAI: SAM là promptable segmentation (prompt bằng point, box, mask), class-agnostic — chỉ trả mask + điểm chất lượng dự đoán, không có nhãn class. Muốn có class phải ghép detector/classifier (vd Grounding DINO + SAM). SAM gồm image encoder ViT nặng (chạy 1 lần/ảnh) + prompt encoder + mask decoder nhẹ (chạy realtime theo prompt), train trên SA-1B (~1.1 tỷ mask, 11 triệu ảnh).\n- Semantic không tách instance — ĐÚNG, đó là khác biệt với instance segmentation.\n- Panoptic = stuff + things, mỗi pixel 1 class + 1 instance id — ĐÚNG; metric là PQ = SQ × RQ.\n- Mask R-CNN + RoIAlign — ĐÚNG: RoIAlign quan trọng với mask vì lệch nửa pixel cũng làm hỏng biên.\n- U-Net encoder-decoder + skip connection — ĐÚNG: skip connection giữ chi tiết không gian bị mất khi downsample."
+    },
+    {
+      "id": "cvsr-016",
+      "sub": "Dice vs IoU",
+      "level": 2,
+      "type": "numeric",
+      "trap": false,
+      "q": "Mask dự đoán có 60 pixel foreground, mask ground truth có 50 pixel, phần giao có 40 pixel. Tính Dice coefficient, làm tròn 3 chữ số thập phân.",
+      "answer": 0.727,
+      "tolerance": 0.002,
+      "unit": "",
+      "explain": "Dice = 2|A∩B| / (|A| + |B|) = 2·40 / (60 + 50) = 80/110 ≈ 0.727.\nIoU = |A∩B| / |A∪B| = 40 / (60 + 50 − 40) = 40/70 ≈ 0.571.\n\nQuan hệ: Dice = 2·IoU/(1 + IoU) = 2·0.571/1.571 ≈ 0.727 → Dice luôn ≥ IoU (bằng nhau chỉ khi 0 hoặc 1). Dice chính là F1 trên pixel: precision = 40/60, recall = 40/50 → F1 = 0.727. Bẫy: so IoU của paper này với Dice của paper khác — hai metric không so trực tiếp được. Dice loss (1 − soft Dice) hay dùng trong ảnh y tế vì ít bị ảnh hưởng bởi mất cân bằng foreground/background hơn cross-entropy."
+    },
+    {
+      "id": "cvsr-017",
+      "sub": "Data augmentation",
+      "level": 2,
+      "type": "multi",
+      "trap": false,
+      "q": "Chọn TẤT CẢ phát biểu ĐÚNG về augmentation.",
+      "options": [
+        "Horizontal flip luôn an toàn với mọi bài toán thị giác nên nên bật mặc định, kể cả nhận dạng chữ và biển số.",
+        "Mixup trộn tuyến tính hai ảnh `x = λx₁ + (1−λ)x₂` và trộn nhãn với cùng hệ số λ, với λ ~ Beta(α, α).",
+        "CutMix cắt một vùng chữ nhật của ảnh 2 dán vào ảnh 1, nhãn được trộn theo tỷ lệ diện tích vùng dán.",
+        "Với Mixup, nhãn của ảnh trộn được gán bằng one-hot của ảnh có λ lớn hơn để giữ cross-entropy chuẩn.",
+        "Mosaic (phổ biến từ YOLOv4) ghép 4 ảnh thành một, giúp model thấy nhiều ngữ cảnh và nhiều vật thể nhỏ hơn trong một batch."
+      ],
+      "answer": [
+        1,
+        2,
+        4
+      ],
+      "explain": "- 'Horizontal flip luôn an toàn' — SAI: flip làm chữ/số bị ngược (b ↔ d, biển báo rẽ trái ↔ phải, ảnh y tế có trái/phải giải phẫu) — augmentation phải giữ nguyên ngữ nghĩa của nhãn.\n- 'Mixup gán one-hot của ảnh có λ lớn hơn' — SAI: cốt lõi của Mixup là soft label λ·y₁ + (1−λ)·y₂, đóng vai trò regularization, làm mượt decision boundary và cải thiện calibration.\n- Các mô tả Mixup (trộn ảnh + nhãn với λ ~ Beta), CutMix (nhãn theo diện tích) và Mosaic (ghép 4 ảnh) đều ĐÚNG.\n\nCutMix khác Cutout ở chỗ vùng bị cắt được lấp bằng pixel thật của ảnh khác, nên không lãng phí pixel. Với detection, mọi phép hình học (crop, mosaic, flip, scale) phải biến đổi bounding box tương ứng và loại box bị cắt quá nhỏ."
+    },
+    {
+      "id": "cvsr-018",
+      "sub": "GAN & Diffusion",
+      "level": 3,
+      "type": "single",
+      "trap": true,
+      "q": "Chọn phát biểu **SAI**.",
+      "options": [
+        "Mode collapse ở GAN là khi generator chỉ sinh vài kiểu mẫu ít đa dạng nhưng vẫn đánh lừa được discriminator, bỏ qua nhiều mode của phân phối dữ liệu.",
+        "Trong DDPM, forward process có dạng đóng `x_t = √ᾱ_t·x₀ + √(1−ᾱ_t)·ε` nên có thể lấy mẫu x_t ở bước t bất kỳ mà không cần chạy tuần tự t bước.",
+        "DDIM phải huấn luyện lại model với objective khác DDPM thì mới có thể sampling ít bước (vd 50 thay vì 1000).",
+        "So với GAN, diffusion huấn luyện ổn định hơn và phủ phân phối tốt hơn, nhưng sampling chậm hơn vì cần nhiều bước denoising."
+      ],
+      "answer": 2,
+      "explain": "Phát biểu SAI (đáp án) là 'DDIM phải huấn luyện lại model': DDIM dùng CHÍNH model ε_θ đã train với objective DDPM; chỉ đổi quá trình sampling sang non-Markovian. Với η = 0, sampling deterministic (cùng noise ban đầu → cùng ảnh, cho phép nội suy/inversion) và có thể nhảy bước (20–50 step).\n\nCác phát biểu còn lại đều đúng: mode collapse chữa bằng WGAN-GP, minibatch discrimination, unrolled GAN; dạng đóng của forward process có được nhờ tổng các Gaussian vẫn là Gaussian — khi train chỉ cần chọn t ngẫu nhiên, thêm noise, cho model dự đoán ε, loss MSE; GAN là bài toán minimax dễ mất cân bằng còn diffusion là regression ổn định nhưng sampling nhiều bước. Các cách tăng tốc diffusion khác: DPM-Solver, distillation (LCM, consistency models)."
+    },
+    {
+      "id": "cvsr-019",
+      "sub": "Latent diffusion & CFG",
+      "level": 3,
+      "type": "multi",
+      "trap": true,
+      "q": "Stable Diffusion dùng classifier-free guidance:\n\n`ε̂ = ε(x_t, ∅) + w·(ε(x_t, y) − ε(x_t, ∅))`\n\nChọn TẤT CẢ phát biểu ĐÚNG.",
+      "options": [
+        "Với công thức trên, w = 1 tương đương sampling hoàn toàn không điều kiện, tức model bỏ qua prompt và sinh ảnh ngẫu nhiên.",
+        "Latent diffusion khử nhiễu trong latent của VAE (512×512×3 → 64×64×4), rẻ hơn nhiều so với diffusion trên pixel.",
+        "CFG cần huấn luyện thêm một classifier riêng trên ảnh nhiễu x_t để lấy gradient ∇log p(y|x_t) dẫn hướng sampling.",
+        "Để có ε(x_t, ∅), khi train người ta ngẫu nhiên drop điều kiện text (~10%) để một model học cả conditional và unconditional.",
+        "Tăng w (7.5 → 20) thường bám prompt hơn nhưng giảm đa dạng, dễ bão hòa màu; mỗi bước sampling tốn khoảng 2 lần forward."
+      ],
+      "answer": [
+        1,
+        3,
+        4
+      ],
+      "explain": "- 'w = 1 là unconditional' — SAI, là bẫy: w = 1 → ε̂ = ε(x_t, y), tức conditional thuần; w = 0 mới là unconditional; w > 1 là ngoại suy 'đẩy mạnh' về phía prompt. Negative prompt thực chất thay ∅ bằng embedding của negative prompt.\n- 'CFG cần classifier riêng trên ảnh nhiễu' — SAI: đó là classifier guidance (Dhariwal & Nichol); CFG (Ho & Salimans) bỏ classifier nhờ trick drop điều kiện.\n- Latent diffusion trong latent VAE — ĐÚNG: VAE downsample hệ số 8; text prompt qua CLIP text encoder rồi vào U-Net bằng cross-attention.\n- Drop điều kiện ~10% khi train — ĐÚNG, đây là lý do 1 model cho được cả hai nhánh.\n- Tăng w bám prompt hơn, giảm đa dạng, 2 forward/bước — ĐÚNG: cond + uncond thường gộp thành batch 2 → chi phí inference gần gấp đôi; một số model distill guidance vào 1 lần forward."
+    },
+    {
+      "id": "cvsr-020",
+      "sub": "VLM (LLaVA)",
+      "level": 3,
+      "type": "single",
+      "trap": false,
+      "q": "LLaVA-1.5 gồm vision encoder CLIP ViT-L/14 (ảnh 336×336) + projector MLP + LLM (Vicuna). Phát biểu nào ĐÚNG?",
+      "options": [
+        "Mỗi ảnh thành 576 visual token (24×24) đưa vào LLM; giai đoạn 1 chỉ train projector, vision encoder và LLM đóng băng.",
+        "Ảnh được nén thành 1 vector [CLS] rồi cộng vào embedding của token đầu tiên trong prompt để tiết kiệm context.",
+        "Vision encoder, projector và LLM đều được fine-tune end-to-end ngay từ giai đoạn 1 để alignment giữa ảnh và text hội tụ nhanh hơn.",
+        "Mỗi ảnh thành 32 query token qua Q-Former; giai đoạn 1 train cả vision encoder lẫn Q-Former, LLM đóng băng."
+      ],
+      "answer": 0,
+      "explain": "336/14 = 24 → 24² = 576 patch feature (LLaVA lấy feature lớp áp chót, bỏ CLS) → projector (LLaVA gốc: linear; 1.5: MLP 2 lớp) map sang chiều embedding của LLM → nối với text token như 'từ' bình thường.\n\nTrain 2 giai đoạn: (1) feature alignment trên cặp ảnh–caption, chỉ train projector; (2) visual instruction tuning, train projector + LLM, vision encoder vẫn frozen. Hệ quả thực tế: mỗi ảnh 'ăn' hàng trăm token context; kỹ thuật ảnh độ phân giải cao (AnyRes, tiling) còn tốn nhiều token hơn. Phương án 'nén thành 1 vector [CLS]' làm mất thông tin không gian; phương án 'fine-tune end-to-end từ giai đoạn 1' sai quy trình; phương án '32 query token qua Q-Former' là kiến trúc của BLIP-2 (InstructBLIP), không phải LLaVA — LLaVA dùng projector đơn giản và giữ vision encoder frozen."
+    },
+    {
+      "id": "cvsr-021",
+      "sub": "Sampling rate & Nyquist",
+      "level": 2,
+      "type": "single",
+      "trap": true,
+      "q": "Model ASR được train trên audio 16 kHz. Dữ liệu tổng đài là audio điện thoại 8 kHz. Phát biểu nào ĐÚNG?",
+      "options": [
+        "Upsample 8 kHz lên 16 kHz bằng nội suy sinc sẽ khôi phục dải 4–8 kHz bị mất, nên chỉ cần resample là đạt WER như audio 16 kHz.",
+        "Đưa thẳng file 8 kHz vào model mà không resample, vì log-Mel chuẩn hóa theo từng frame nên model không nhạy với sample rate.",
+        "Resample lên 16 kHz để khớp front-end, nhưng vẫn thiếu năng lượng trên 4 kHz (Nyquist = fs/2); nên fine-tune/augment với dữ liệu 8 kHz.",
+        "Nyquist của audio 8 kHz là 8 kHz, bao trọn dải giọng nói (~80 Hz–8 kHz), nên không mất thông tin và kết quả tương đương 16 kHz."
+      ],
+      "answer": 2,
+      "explain": "Định lý Nyquist: lấy mẫu ở fs chỉ biểu diễn được tần số tới fs/2. Audio 8 kHz → tối đa 4 kHz (điện thoại thường lọc 300–3400 Hz); 16 kHz → 8 kHz, đủ cho phần lớn thông tin âm vị (âm xát như 's', 'x' có năng lượng cao tần).\n\nPhương án 'upsample khôi phục dải 4–8 kHz' sai: upsample chỉ nội suy, không tạo lại thông tin đã mất. Phương án 'đưa thẳng file 8 kHz không resample' sai nghiêm trọng: model kỳ vọng 16 000 mẫu/giây, nhận 8 000 → hiểu như audio phát nhanh gấp đôi, tần số bị dịch lên gấp đôi trên trục Mel → WER tăng vọt; chuẩn hóa log-Mel không sửa được sự co giãn trục thời gian/tần số này. Phương án 'Nyquist của 8 kHz là 8 kHz' nhầm Nyquist = fs (đúng là fs/2 = 4 kHz). Giải pháp thực tế: resample + fine-tune trên dữ liệu narrowband, hoặc augment dữ liệu train bằng downsample 8 kHz rồi upsample lại."
+    },
+    {
+      "id": "cvsr-022",
+      "sub": "Spectrogram, Mel, MFCC",
+      "level": 1,
+      "type": "single",
+      "trap": false,
+      "q": "Phát biểu nào ĐÚNG về đặc trưng âm thanh?",
+      "options": [
+        "MFCC giữ lại thông tin phase của STFT qua các hệ số DCT bậc cao, nên có thể tái tạo chính xác waveform từ MFCC.",
+        "Log-Mel = power STFT qua filterbank tam giác thang Mel (hẹp ở tần thấp, rộng ở tần cao) rồi lấy log; MFCC = DCT của log-Mel.",
+        "Thang Mel tăng độ phân giải ở dải cao vì tai người nhạy với âm cao hơn âm trầm, nên filter ở dải cao hẹp hơn.",
+        "Whisper và các model ASR hiện đại dùng MFCC 13 chiều + delta + delta-delta làm đầu vào vì đây là đặc trưng tối ưu cho deep learning."
+      ],
+      "answer": 1,
+      "explain": "Pipeline: waveform → framing (cửa sổ 25 ms, hop 10 ms) + window Hann → STFT → power spectrum → Mel filterbank (vd 80 filter) → log → (DCT → MFCC, thường 13 hệ số + delta).\n\nThang Mel gần tuyến tính dưới ~1 kHz và logarit ở trên: tai người phân biệt tốt ở tần số thấp, kém ở cao → filter hẹp ở thấp, rộng ở cao; nên phương án 'Mel tăng độ phân giải ở dải cao' là ngược. Phương án 'MFCC giữ phase' sai: magnitude/Mel/MFCC đều bỏ phase; tái tạo audio cần vocoder (Griffin-Lim, HiFi-GAN). Phương án 'Whisper dùng MFCC 13 chiều' sai: deep model dùng log-Mel (Whisper 80 bin, large-v3 128 bin); bước DCT vốn phục vụ GMM với covariance đường chéo, NN không cần. wav2vec 2.0 thậm chí học trực tiếp từ raw waveform."
+    },
+    {
+      "id": "cvsr-023",
+      "sub": "Framing (frame/hop)",
+      "level": 2,
+      "type": "numeric",
+      "trap": true,
+      "q": "Audio 10 giây, sample rate 16 kHz. Trích đặc trưng với window 25 ms, hop 10 ms, KHÔNG padding (chỉ lấy frame nằm trọn trong tín hiệu). Có bao nhiêu frame? Nhập số nguyên.",
+      "answer": 998,
+      "tolerance": 0,
+      "unit": "frame",
+      "explain": "- Số mẫu N = 10 × 16 000 = 160 000.\n- Window = 0.025 × 16 000 = 400 mẫu; hop = 0.010 × 16 000 = 160 mẫu.\n- Số frame = floor((N − win)/hop) + 1 = floor(159 600/160) + 1 = 997 + 1 = 998.\n\nBẫy: trả lời 1000 (= 10 s / 10 ms) — chỉ xấp xỉ. Nếu dùng center=True (mặc định của librosa và torch.stft, pad n_fft/2 ở hai đầu) thì số frame = 1 + floor(N/hop) = 1001. Đây chính là công thức conv output size với K = window, S = hop. Ví dụ Whisper: 30 s → 3000 frame log-Mel, qua conv stride 2 còn 1500 vector cho encoder."
+    },
+    {
+      "id": "cvsr-024",
+      "sub": "CTC decoding",
+      "level": 2,
+      "type": "single",
+      "trap": true,
+      "q": "Output greedy (argmax từng frame) của một model CTC là:\n\n`a a _ a b _ b b`\n\n(`_` là blank). Chuỗi giải mã cuối cùng là gì?",
+      "options": [
+        "ab",
+        "aab",
+        "aabb",
+        "aaabbb"
+      ],
+      "answer": 2,
+      "explain": "Quy tắc CTC: (1) gộp các ký hiệu GIỐNG NHAU LIỀN KỀ, (2) sau đó mới xóa blank.\n\n- Bước 1: `a a _ a b _ b b` → `a _ a b _ b`.\n- Bước 2: xóa blank → `a a b b` = 'aabb'.\n\nBlank giữa hai 'a' là thứ cho phép CTC sinh ký tự lặp thật (như 'll' trong 'hello'). Bẫy: xóa blank trước rồi mới gộp → `a a a b b b` → 'ab' (sai); quên hẳn bước gộp, chỉ xóa blank → 'aaabbb' (sai). CTC giả định output độc lập có điều kiện giữa các frame và độ dài nhãn ≤ số frame; loss CTC cộng xác suất mọi alignment hợp lệ bằng forward-backward, nên không cần nhãn căn chỉnh từng frame. Beam search + LM thường cải thiện đáng kể so với greedy."
+    },
+    {
+      "id": "cvsr-025",
+      "sub": "Whisper",
+      "level": 2,
+      "type": "multi",
+      "trap": false,
+      "q": "Chọn TẤT CẢ phát biểu ĐÚNG về OpenAI Whisper.",
+      "options": [
+        "Transformer encoder-decoder; encoder nhận log-Mel (80 bin tới large-v2, large-v3 là 128 bin) của đoạn audio 30 giây.",
+        "Whisper là model CTC encoder-only, nên streaming từng frame dễ dàng với độ trễ thấp giống các model RNN-T on-device.",
+        "Audio dài hơn 30 giây được encoder xử lý trong một lần forward, vì positional embedding sinusoidal không giới hạn độ dài.",
+        "Đa nhiệm điều khiển bằng special token ở decoder: <|startoftranscript|>, ngôn ngữ, <|transcribe|>/<|translate|>, <|notimestamps|>."
+      ],
+      "answer": [
+        0,
+        3
+      ],
+      "explain": "Whisper train weakly-supervised trên 680k giờ audio đa ngôn ngữ. Audio resample 16 kHz, pad/cắt về 30 s → 3000 frame log-Mel (window 25 ms, hop 10 ms) → 2 lớp conv (lớp 2 stride 2) → 1500 vector cho encoder. Decoder sinh token tự hồi quy, có thể sinh timestamp token. Task `<|translate|>` chỉ dịch speech từ ngôn ngữ khác sang tiếng Anh.\n\nPhương án 'CTC encoder-only, dễ streaming' sai: Whisper không dùng CTC; vì cửa sổ 30 s cố định và decode autoregressive nên không streaming native — giải pháp streaming phải chia chunk + VAD (whisper-streaming, faster-whisper + VAD). Phương án 'audio dài xử lý trong một lần forward' sai: encoder có đúng 1500 vị trí (positional embedding cố định cho 30 s); audio dài được xử lý theo cửa sổ trượt 30 s nối tiếp (dựa vào timestamp để dịch cửa sổ) hoặc chia chunk chạy song song. Lỗi hay gặp: hallucination ở đoạn im lặng/nhạc nền → nên lọc bằng VAD trước."
+    },
+    {
+      "id": "cvsr-026",
+      "sub": "WER",
+      "level": 2,
+      "type": "numeric",
+      "trap": false,
+      "q": "Reference: `tôi muốn đặt vé đi hà nội`\n\nHypothesis: `muốn đặt về đi hà nội ngày mai`\n\nTính WER (đơn vị %, làm tròn 2 chữ số thập phân). Tách từ theo khoảng trắng.",
+      "answer": 57.14,
+      "tolerance": 0.05,
+      "unit": "%",
+      "explain": "Reference có N = 7 từ. Căn chỉnh tối thiểu (Levenshtein mức từ):\n\n- 'tôi' bị mất → D = 1\n- 'vé' → 'về' → S = 1\n- thêm 'ngày', 'mai' → I = 2\n\nWER = (S + D + I)/N = (1 + 1 + 2)/7 = 4/7 ≈ 57.14%.\n\nMẫu số là số từ của REFERENCE (7), không phải hypothesis (8) — vì vậy insertion có thể đẩy WER > 100% (vd ref 2 từ, hyp 5 từ đều sai). Với tiếng Việt, tách theo khoảng trắng thực chất là đếm âm tiết; sai dấu ('vé' → 'về') vẫn tính nguyên 1 substitution. Trước khi tính cần chuẩn hóa thống nhất ref/hyp: lowercase, bỏ dấu câu, Unicode NFC, số '2' vs 'hai'."
+    },
+    {
+      "id": "cvsr-027",
+      "sub": "Streaming ASR, VAD, diarization",
+      "level": 2,
+      "type": "single",
+      "trap": false,
+      "q": "Xây hệ thống ghi biên bản cuộc họp nhiều người nói, có phụ đề realtime. Mô tả nào ĐÚNG vai trò các thành phần?",
+      "options": [
+        "VAD nhận diện ai đang nói bằng speaker embedding; diarization chuyển speech thành text theo lượt; streaming ASR chỉ dùng cho audio dưới 30 giây.",
+        "Diarization và VAD là một, cùng trả lời 'ai nói khi nào'; streaming ASR luôn chính xác hơn offline vì chunk ngắn nên ít lỗi tích lũy.",
+        "VAD tìm đoạn có tiếng nói; diarization gom đoạn theo người nói (speaker embedding + clustering); streaming ASR đổi chút accuracy lấy latency.",
+        "Streaming ASR dùng attention hai chiều trên toàn câu nên không cần VAD; diarization chỉ áp dụng được khi mỗi người nói dùng một micro riêng."
+      ],
+      "answer": 2,
+      "explain": "- VAD (Silero VAD, WebRTC VAD): phân loại speech/non-speech, dùng để cắt đoạn, giảm tính toán và giảm hallucination của ASR.\n- Diarization (vd pyannote): segmentation + speaker embedding (x-vector/ECAPA) + clustering → nhãn SPEAKER_00, SPEAKER_01… — không biết danh tính thật trừ khi có enrollment giọng; metric là DER.\n- Streaming ASR (RNN-T, CTC chunk-based, Emformer) chỉ thấy quá khứ + lookahead ngắn → latency thấp nhưng WER thường cao hơn offline (nhìn toàn câu, attention hai chiều).\n\nPattern phổ biến: hiển thị partial result từ streaming, sau đó chạy offline pass để sửa bản cuối (two-pass). Các phương án khác đảo lộn vai trò hoặc khẳng định sai về streaming."
+    },
+    {
+      "id": "cvsr-028",
+      "sub": "TTS pipeline",
+      "level": 1,
+      "type": "single",
+      "trap": false,
+      "q": "Trong pipeline TTS hai tầng kinh điển (text → acoustic model → vocoder), vocoder làm nhiệm vụ gì?",
+      "options": [
+        "Chuẩn hóa văn bản: đổi '12/5' thành 'mười hai tháng năm', số, ký hiệu và viết tắt sang dạng đọc được trước G2P.",
+        "Chuyển chuỗi phoneme thành mel-spectrogram, dự đoán duration, pitch và energy để quyết định ngữ điệu từng âm.",
+        "Chấm điểm MOS tự động cho giọng tổng hợp và loại các câu chất lượng thấp trước khi phát cho người dùng.",
+        "Chuyển mel-spectrogram (đặc trưng âm học trung gian) thành waveform, ví dụ WaveNet, HiFi-GAN."
+      ],
+      "answer": 3,
+      "explain": "Pipeline: (1) text front-end: text normalization + G2P (grapheme → phoneme) — với tiếng Việt cần xử lý thanh điệu, số, ngày tháng, từ mượn; (2) acoustic model (Tacotron 2, FastSpeech 2, Glow-TTS) sinh mel-spectrogram, dự đoán duration/pitch/energy; (3) vocoder sinh waveform. Vậy phương án 'chuẩn hóa văn bản' là việc của front-end, còn 'phoneme → mel-spectrogram' là việc của acoustic model.\n\nMel không có phase nên cần vocoder để 'dựng' lại tín hiệu; HiFi-GAN (GAN-based, non-autoregressive) nhanh hơn rất nhiều so với WaveNet autoregressive. VITS gộp acoustic + vocoder end-to-end; TTS kiểu LLM dự đoán token của neural codec (EnCodec/SoundStream) rồi decode. Đánh giá: MOS (chủ quan), WER khi cho ASR nghe lại (độ rõ), speaker similarity khi clone giọng."
+    },
+    {
+      "id": "cvsr-029",
+      "sub": "Real-time factor",
+      "level": 1,
+      "type": "numeric",
+      "trap": false,
+      "q": "Hệ thống ASR xử lý một file ghi âm dài 2 giờ hết 18 phút. Tính real-time factor (RTF), làm tròn 2 chữ số thập phân.",
+      "answer": 0.15,
+      "tolerance": 0.005,
+      "unit": "",
+      "explain": "RTF = thời gian xử lý / thời lượng audio = 18 phút / 120 phút = 0.15. RTF < 1 nghĩa là nhanh hơn thời gian thực — ở đây ≈ 1/0.15 ≈ 6.7× realtime.\n\nBẫy: tính ngược 120/18 ≈ 6.67 — đó là tốc độ 'x lần realtime' (inverse RTF), không phải RTF. Với streaming, RTF < 1 là điều kiện cần nhưng chưa đủ: còn phải xét latency (từ lúc nói tới lúc ra chữ, partial/final latency) và throughput khi nhiều stream chạy đồng thời trên một GPU. TTS cũng dùng RTF = thời gian sinh / thời lượng audio sinh ra."
+    },
+    {
+      "id": "cvsr-030",
+      "sub": "OCR pipeline & CRNN + CTC",
+      "level": 2,
+      "type": "single",
+      "trap": false,
+      "q": "Trong pipeline OCR hai giai đoạn (text detection → text recognition), recognizer CRNN thường được train với CTC loss. Lý do chính là gì?",
+      "options": [
+        "Học được từ cặp (ảnh dòng chữ, chuỗi ký tự) mà không cần vị trí từng ký tự — CTC cộng mọi alignment giữa cột feature và ký tự.",
+        "CTC giúp CRNN tự phát hiện vị trí các dòng chữ trên toàn trang tài liệu, nên pipeline không cần bước text detection riêng nữa.",
+        "CTC là loss duy nhất dùng được với BiLSTM; recognizer dùng Transformer decoder không áp dụng được cho bài toán OCR.",
+        "CTC cho phép train không cần nhãn văn bản, nên loại bỏ hoàn toàn nhu cầu dữ liệu tổng hợp hay dữ liệu gán nhãn."
+      ],
+      "answer": 0,
+      "explain": "CRNN: CNN trích feature từ ảnh dòng chữ (chiều cao co về 1) → mỗi cột feature là một 'time step' → BiLSTM mô hình ngữ cảnh → softmax trên bộ ký tự + blank → CTC. Giống ASR: số cột > số ký tự, CTC cộng mọi alignment hợp lệ nên chỉ cần nhãn chuỗi.\n\nPhương án 'CTC giúp phát hiện vị trí dòng chữ' sai: recognizer chỉ đọc một crop dòng/từ; detection (DBNet, EAST, CRAFT) mới tìm vị trí text (thường dạng polygon cho chữ nghiêng/cong). Phương án 'Transformer decoder không áp dụng được' sai: recognizer attention/Transformer (TrOCR, PARSeq) rất phổ biến. Phương án 'không cần dữ liệu tổng hợp' sai: vẫn cần nhãn text; dữ liệu tổng hợp (SynthText, render font) vẫn là chìa khóa, nhất là tiếng Việt nhiều dấu. Pipeline đầy đủ: tiền xử lý → layout analysis → detection → recognition → post-processing (từ điển, LM, regex cho số tiền/ngày)."
+    },
+    {
+      "id": "cvsr-031",
+      "sub": "Document AI: TrOCR, Donut, LayoutLM",
+      "level": 3,
+      "type": "multi",
+      "trap": false,
+      "q": "Chọn TẤT CẢ phát biểu ĐÚNG về các model Document AI.",
+      "options": [
+        "TrOCR làm cả detection + recognition cho trang tài liệu: nhận ảnh A4, xuất toàn bộ text kèm bounding box từng dòng.",
+        "Vì không có bước OCR, Donut miễn nhiễm với lỗi lan truyền và cũng không thể bị hallucination như các model sinh văn bản.",
+        "LayoutLM kết hợp text embedding với 2D position embedding từ bbox; v2/v3 thêm thông tin ảnh — nhưng vẫn cần OCR ngoài cho text + bbox.",
+        "Donut là OCR-free: encoder ảnh (Swin) + decoder (BART) sinh trực tiếp chuỗi có cấu trúc (vd JSON trường hóa đơn) từ ảnh.",
+        "TrOCR dùng image Transformer encoder (khởi tạo từ BEiT/DeiT) và text Transformer decoder tự hồi quy, không dùng CNN backbone."
+      ],
+      "answer": [
+        2,
+        3,
+        4
+      ],
+      "explain": "- 'TrOCR làm detection + recognition cả trang' — SAI: TrOCR là recognizer mức dòng chữ (text-line), vẫn cần detector cắt dòng trước.\n- 'Donut không thể bị hallucination' — SAI: Donut bỏ được lỗi lan truyền từ OCR nhưng là model sinh nên vẫn có thể hallucinate giá trị, khó đọc chữ nhỏ khi resolution thấp, và cần fine-tune theo schema.\n- Mô tả LayoutLM (text + 2D position, vẫn cần OCR), Donut (Swin + BART, OCR-free) và kiến trúc TrOCR (image Transformer encoder + text decoder) đều ĐÚNG.\n\nLựa chọn thực tế: OCR + LayoutLM (kiểm soát tốt, có bbox để truy vết, mạnh cho KIE/form/classification) vs OCR-free (Donut, Pix2Struct, hoặc VLM như Qwen-VL) — pipeline đơn giản nhưng phụ thuộc resolution và khó debug. Layout analysis (LayoutParser, DocLayNet) phát hiện vùng title/table/figure để đọc đúng reading order."
+    },
+    {
+      "id": "cvsr-032",
+      "sub": "Tiền xử lý ảnh tài liệu",
+      "level": 1,
+      "type": "single",
+      "trap": false,
+      "q": "Ảnh chụp hóa đơn bằng điện thoại bị nghiêng ~7° và ánh sáng không đều (một góc tối). Bước tiền xử lý nào hợp lý nhất trước khi OCR?",
+      "options": [
+        "Áp ngưỡng toàn cục Otsu cho cả ảnh rồi resize xuống 50% để giảm nhiễu và tăng tốc detector trên ảnh lớn.",
+        "Chuyển sang HSV và chỉ giữ kênh Hue làm đầu vào OCR, vì Hue không phụ thuộc cường độ sáng của từng vùng ảnh.",
+        "Không cần xử lý: detector hiện đại như DBNet bất biến hoàn toàn với góc xoay và ánh sáng không đều nhờ augmentation khi train.",
+        "Deskew (ước lượng góc bằng Hough/minAreaRect rồi xoay lại) và binarization thích nghi cục bộ (Sauvola/adaptive threshold)."
+      ],
+      "answer": 3,
+      "explain": "Otsu chọn 1 ngưỡng cho toàn ảnh → vùng tối thành đen đặc, vùng sáng mất nét; adaptive/Sauvola tính ngưỡng theo cửa sổ cục bộ nên chịu được ánh sáng không đều. Deskew quan trọng vì nhiều recognizer giả định dòng chữ nằm ngang.\n\nPhương án 'Otsu + resize 50%' còn sai ở chỗ resize quá nhỏ làm mất dấu tiếng Việt (dấu chỉ vài pixel). Phương án 'giữ kênh Hue' sai: Hue không mang thông tin nét chữ đen trên nền trắng (vùng xám có Hue không xác định). Phương án 'không cần xử lý' sai: hầu hết detector/recognizer chỉ chịu được nghiêng nhỏ. Bước khác: perspective correction (tìm 4 góc giấy), denoise, CLAHE. Lưu ý: với model deep learning hiện đại, binarization đôi khi làm GIẢM chất lượng — nên A/B trên tập validation thay vì áp dụng mù quáng."
+    },
+    {
+      "id": "cvsr-033",
+      "sub": "CER tiếng Việt",
+      "level": 2,
+      "type": "numeric",
+      "trap": false,
+      "q": "Reference: `Đà Nẵng mưa to`\n\nOCR output: `Đà Nắng mưa`\n\nTính CER (đơn vị %, làm tròn 2 chữ số thập phân). Cả hai chuỗi đã chuẩn hóa Unicode NFC; khoảng trắng tính là ký tự.",
+      "answer": 28.57,
+      "tolerance": 0.05,
+      "unit": "%",
+      "explain": "Reference (NFC) có 14 ký tự: Đ, à, ␣, N, ẵ, n, g, ␣, m, ư, a, ␣, t, o.\n\nEdit distance mức ký tự: 'ẵ' → 'ắ' là 1 substitution (sai thanh ngã → sắc); thiếu '␣', 't', 'o' là 3 deletion. CER = (S + D + I)/N = (1 + 3 + 0)/14 = 4/14 ≈ 28.57%.\n\nNếu tính WER: ref 4 từ, 'Nẵng' → 'Nắng' (S) + 'to' bị mất (deletion) → 2/4 = 50% — CER mịn hơn, phù hợp OCR và các ngôn ngữ không có khoảng trắng (Trung, Nhật). Bẫy: nếu chuẩn hóa NFD, 'ẵ' tách thành 'a' + dấu trăng + dấu ngã → độ dài chuỗi và số lỗi đổi (ra 4/18 ≈ 22.22%), kết quả không so sánh được giữa các hệ thống."
+    },
+    {
+      "id": "cvsr-034",
+      "sub": "Unicode NFC vs NFD",
+      "level": 3,
+      "type": "single",
+      "trap": true,
+      "q": "Khi đánh giá OCR tiếng Việt, hai chuỗi ref và hyp hiển thị trên màn hình giống hệt nhau ('Hà Nội'), nhưng `ref == hyp` trả về False và CER tính ra rất cao. Nguyên nhân khả dĩ nhất và cách sửa?",
+      "options": [
+        "Một chuỗi ở NFC ('à' = U+00E0), chuỗi kia ở NFD ('a' + U+0300); chuẩn hóa cả hai bằng `unicodedata.normalize('NFC', s)`.",
+        "Font chữ của OCR khác font của ground truth nên glyph khác nhau; cần render lại ground truth bằng cùng font với ảnh.",
+        "Python so sánh chuỗi theo byte UTF-16 nên tiếng Việt có dấu luôn bị lệch; cần encode cả hai sang ASCII trước khi so sánh.",
+        "CER phân biệt hoa thường theo mặc định; chỉ cần lowercase cả hai chuỗi trước khi tính là ref và hyp sẽ khớp."
+      ],
+      "answer": 0,
+      "explain": "Unicode cho phép biểu diễn ký tự có dấu theo 2 cách: dựng sẵn (NFC) hoặc ký tự gốc + combining marks (NFD). 'Hà Nội' ở NFC dài 6 code point, ở NFD dài 9 ('ộ' = o + U+0323 + U+0302 – dấu nặng đứng trước dấu mũ theo thứ tự canonical). Thử đo: CER giữa bản NFC và bản NFD của CÙNG chuỗi 'Đà Nẵng mưa to' lên tới 50% dù nhìn giống hệt.\n\nNguồn NFD hay gặp: tên file trên macOS, dữ liệu copy từ web/Word, một số bộ gõ và OCR engine. Hệ quả ngoài CER: search/BM25 không match, tokenizer tách khác, dedup thất bại, label không khớp vocab. Phương án 'so sánh theo byte UTF-16, encode ASCII' sai: Python 3 so sánh theo code point, và encode ASCII làm mất dấu. Phương án 'khác font' và 'phân biệt hoa thường' không giải thích được việc hai chuỗi trông giống hệt mà vẫn khác nhau."
+    },
+    {
+      "id": "cvsr-035",
+      "sub": "Content-based vs CF, cold start",
+      "level": 1,
+      "type": "single",
+      "trap": false,
+      "q": "Một sàn thương mại điện tử vừa đăng 500 sản phẩm mới, chưa có lượt xem/mua nào. Cách tiếp cận nào có thể gợi ý ngay các sản phẩm này cho người dùng?",
+      "options": [
+        "Item-based collaborative filtering dựa trên ma trận đồng mua (co-purchase) giữa các item trong 90 ngày gần nhất.",
+        "Matrix factorization train trên lịch sử tương tác, vì embedding khởi tạo ngẫu nhiên của item mới đủ để xếp hạng.",
+        "User-based collaborative filtering: tìm người dùng có lịch sử tương tự rồi gợi ý những gì họ đã mua gần đây.",
+        "Content-based: dùng đặc trưng item (mô tả, danh mục, ảnh, giá) so khớp với hồ sơ sở thích của người dùng."
+      ],
+      "answer": 3,
+      "explain": "Collaborative filtering (user-based, item-based, MF) chỉ dựa vào tín hiệu tương tác → item chưa có tương tác không có vector/độ tương tự có ý nghĩa (item cold start). Content-based dùng metadata hoặc embedding nội dung (text embedding, CLIP cho ảnh) nên gợi ý được item mới; nhược điểm là overspecialization (chỉ gợi ý thứ giống cái đã thích) và phụ thuộc chất lượng feature.\n\nThực tế dùng hybrid: two-tower với item tower nhận feature nội dung, kèm exploration (bandit, slot ưu tiên item mới). User cold start (người dùng mới) xử lý bằng popularity theo ngữ cảnh, onboarding hỏi sở thích, feature nhân khẩu học hoặc session-based recommendation."
+    },
+    {
+      "id": "cvsr-036",
+      "sub": "Collaborative filtering & Matrix factorization",
+      "level": 3,
+      "type": "multi",
+      "trap": true,
+      "q": "Chọn TẤT CẢ phát biểu ĐÚNG.",
+      "options": [
+        "Matrix factorization dự đoán `r̂_ui ≈ p_u · q_i` (+ bias user/item/global), với p_u, q_i là vector ẩn k chiều.",
+        "ALS luân phiên cố định item factors để giải user factors bằng least squares dạng đóng, rồi ngược lại; song song hóa tốt.",
+        "Với implicit feedback (click, xem), ô trống chắc chắn là 'không thích', nên coi là rating 0 với độ tin cậy ngang tương tác dương.",
+        "Item-based CF thường ổn định hơn user-based khi user nhiều và đổi nhanh, vì quan hệ giữa item biến động chậm, tính trước được.",
+        "MF chuẩn tự tạo được embedding cá nhân hóa cho user mới chưa có tương tác ngay lúc suy luận, không cần fold-in hay retrain."
+      ],
+      "answer": [
+        0,
+        1,
+        3
+      ],
+      "explain": "- 'Implicit: ô trống chắc chắn là không thích' — SAI, bẫy kinh điển: 'không tương tác' thường là chưa thấy (missing not at random) chứ không phải không thích. Weighted MF của Hu, Koren & Volinsky (2008) dùng preference nhị phân p_ui và confidence `c_ui = 1 + α·r_ui`: ô quan sát có confidence cao, ô trống confidence thấp.\n- 'MF tạo embedding cho user mới không cần cập nhật' — SAI: user mới không có dòng trong ma trận → không có p_u; cần fold-in (giải least squares cho user đó khi có vài tương tác) hoặc model dùng feature (two-tower, factorization machines).\n- Công thức MF `p_u · q_i` + bias — ĐÚNG.\n- ALS — ĐÚNG: khi cố định một bên, bài toán theo bên còn lại là ridge regression có nghiệm đóng — lý do ALS phổ biến trên Spark.\n- Item-based ổn định hơn user-based — ĐÚNG: item-to-item CF của Amazon là ví dụ nổi tiếng."
+    },
+    {
+      "id": "cvsr-037",
+      "sub": "Two-tower retrieval",
+      "level": 2,
+      "type": "single",
+      "trap": false,
+      "q": "Vì sao two-tower model phù hợp cho candidate retrieval trên hàng triệu item nhưng thường KHÔNG dùng làm model ranking cuối cùng?",
+      "options": [
+        "User và item encode độc lập, chỉ gặp nhau ở dot product: item embedding tính sẵn + ANN nên nhanh, nhưng thiếu feature chéo user×item.",
+        "Vì two-tower chỉ nhận được ID của user và item, không đưa được feature nội dung hay ngữ cảnh của request vào tower.",
+        "Vì two-tower phải chạy một mạng sâu cho từng cặp (user, item) ở mỗi request, nên chỉ đủ ngân sách latency ở bước đầu.",
+        "Vì dot product không chuẩn hóa nên score giữa các item không so sánh được với nhau, do đó không dùng để sắp xếp danh sách hiển thị cuối."
+      ],
+      "answer": 0,
+      "explain": "Đây chính là cấu trúc bi-encoder vs cross-encoder trong RAG: two-tower (bi-encoder) cho phép precompute item embedding + ANN (FAISS, ScaNN) → truy xuất top-k trong vài ms; đổi lại, user và item chỉ 'gặp nhau' ở dot product cuối.\n\nRanking model (DLRM, DCN, DeepFM, GBDT) nhận feature chéo (user × item × context, lịch sử tương tác với chính item đó, vị trí hiển thị…) và dự đoán pCTR/pCVR chính xác hơn, nhưng đắt nên chỉ chạy trên vài trăm–vài nghìn candidate. Phương án 'chỉ nhận ID' sai: mỗi tower nhận được feature tùy ý (ID, text, ngữ cảnh). Phương án 'chạy mạng sâu cho từng cặp' là ngược — chính vì KHÔNG phải chạy mạng cho từng cặp nên mới nhanh. Phương án 'dot product không chuẩn hóa nên không so sánh được' sai: với cùng một user, dot product giữa user vector và các item vector so sánh được trực tiếp và chính là score để sort (chuẩn hóa thành cosine hay không là lựa chọn thiết kế)."
+    },
+    {
+      "id": "cvsr-038",
+      "sub": "Negative sampling & logQ correction",
+      "level": 3,
+      "type": "single",
+      "trap": false,
+      "q": "Huấn luyện two-tower bằng in-batch negatives (item dương của các user khác trong batch làm negative cho user hiện tại) với sampled softmax. Vấn đề nào phát sinh và logQ correction xử lý ra sao?",
+      "options": [
+        "In-batch negatives quá dễ nên gradient gần 0; logQ correction thay chúng bằng negative lấy ngẫu nhiên đều từ toàn corpus.",
+        "In-batch negatives làm loss không khả vi theo item tower; logQ correction xấp xỉ gradient bằng REINFORCE để train được.",
+        "In-batch negatives buộc batch size nhỏ để tránh trùng item; logQ correction cho phép tăng batch size mà không đổi loss.",
+        "Item phổ biến làm negative quá thường xuyên (tỷ lệ tần suất) nên bị phạt quá mức; logQ correction dùng `s(u,i) − log Q(i)`."
+      ],
+      "answer": 3,
+      "explain": "In-batch negatives rẻ (tái sử dụng embedding đã có trong batch) nhưng phân phối negative = phân phối item trong dữ liệu train → item hot bị đẩy xuống như negative quá nhiều, item đuôi dài ít bị phạt. Sampled softmax chỉ xấp xỉ đúng full softmax khi hiệu chỉnh theo xác suất sample Q(i) — Yi et al. (2019, YouTube) ước lượng Q(i) theo tần suất streaming và dùng logit `s − log Q(i)`.\n\nKỹ thuật bổ sung: mixed negative sampling (thêm negative ngẫu nhiên đều để phủ item đuôi dài), hard negative mining (item gần nhưng không được click) — cẩn thận false negative. Cùng một ý tưởng với contrastive loss của CLIP và embedding model trong RAG. Các phương án còn lại (negative quá dễ, loss không khả vi, giới hạn batch size) mô tả sai bản chất: in-batch negatives khả vi bình thường và càng hiệu quả khi batch càng lớn."
+    },
+    {
+      "id": "cvsr-039",
+      "sub": "MAP@k",
+      "level": 3,
+      "type": "numeric",
+      "trap": false,
+      "q": "Tính MAP@5 cho 2 user. Quy ước: `AP@k = (1/min(R, k)) · Σ P@i · rel(i)`, với R = tổng số item relevant của user, tổng lấy trên các vị trí i ≤ k có item relevant.\n\n- User 1: R = 2, item relevant ở vị trí 1 và 3.\n- User 2: R = 3, item relevant ở vị trí 2 và 5.\n\nLàm tròn 3 chữ số thập phân.",
+      "answer": 0.567,
+      "tolerance": 0.002,
+      "unit": "",
+      "explain": "- User 1: P@1 = 1/1 = 1; P@3 = 2/3. AP = (1 + 0.667)/min(2, 5) = 1.667/2 ≈ 0.833.\n- User 2: P@2 = 1/2; P@5 = 2/5. AP = (0.5 + 0.4)/min(3, 5) = 0.9/3 = 0.3 (item relevant thứ 3 không vào top-5 nên đóng góp 0).\n- MAP@5 = (0.833 + 0.3)/2 ≈ 0.567.\n\nBẫy: chia cho số hit tìm được (User 2: 0.9/2 = 0.45) → vô tình thưởng cho model bỏ sót item. Các thư viện dùng mẫu số khác nhau (R, min(R, k), số hit) — trong phỏng vấn nên nói rõ quy ước. MAP nhạy với thứ hạng nhưng chỉ dùng relevance nhị phân; muốn mức relevant khác nhau thì dùng NDCG."
+    },
+    {
+      "id": "cvsr-040",
+      "sub": "NDCG@k",
+      "level": 3,
+      "type": "numeric",
+      "trap": false,
+      "q": "Graded relevance của 5 item mô hình trả về (theo rank 1 → 5): `[2, 0, 3, 0, 1]`. Toàn bộ item relevant của user trong catalog có relevance `{3, 2, 1, 1}`. Dùng gain = rel (tuyến tính), discount = 1/log2(i + 1). Tính NDCG@5, làm tròn 3 chữ số thập phân.",
+      "answer": 0.749,
+      "tolerance": 0.003,
+      "unit": "",
+      "explain": "DCG@5 = 2/log2(2) + 0/log2(3) + 3/log2(4) + 0/log2(5) + 1/log2(6) = 2 + 0 + 1.5 + 0 + 0.387 = 3.887.\n\nIDCG@5 dùng thứ tự lý tưởng từ TOÀN BỘ item relevant: [3, 2, 1, 1, 0] → 3/1 + 2/1.585 + 1/2 + 1/2.322 = 3 + 1.262 + 0.5 + 0.431 = 5.193.\n\nNDCG@5 = 3.887/5.193 ≈ 0.749.\n\nBẫy: tính IDCG bằng cách sort lại chính 5 item đã trả về ([3, 2, 1, 0, 0]) → 0.816 — bỏ qua item relevant bị bỏ sót, thổi phồng điểm. Biến thể phổ biến khác dùng gain = 2^rel − 1 (nhấn mạnh item rất relevant) — cần nêu rõ khi báo cáo."
+    },
+    {
+      "id": "cvsr-041",
+      "sub": "Multi-stage pipeline",
+      "level": 2,
+      "type": "single",
+      "trap": false,
+      "q": "Trong kiến trúc gợi ý nhiều tầng (candidate generation → ranking → re-ranking), mô tả nào ĐÚNG về tầng re-ranking?",
+      "options": [
+        "Tối ưu ở mức cả danh sách + ràng buộc nghiệp vụ: đa dạng (MMR/DPP), loại trùng, độ mới, fairness, lọc item đã mua/hết hàng.",
+        "Truy xuất vài nghìn candidate từ hàng triệu item bằng ANN trên embedding của user và item, ưu tiên recall.",
+        "Huấn luyện lại embedding item ngay trong mỗi request để phản ánh sở thích mới nhất của người dùng theo thời gian thực.",
+        "Chạy model pCTR lớn nhất trên toàn bộ catalog hàng triệu item, vì đây là tầng cuối nên cần chính xác nhất."
+      ],
+      "answer": 0,
+      "explain": "Phễu điển hình:\n\n- Candidate generation: nhiều nguồn (two-tower ANN, item-to-item CF, trending, theo follow), triệu → vài nghìn, chi phí thấp, ưu tiên recall.\n- Ranking: model nặng với nhiều feature chéo, multi-task (pCTR, pCVR, watch time), nghìn → vài trăm, ưu tiên precision.\n- Re-ranking: xử lý tương tác giữa các item trong cùng danh sách (tránh 10 video giống nhau), business rules, exploration.\n\nPhương án 'truy xuất vài nghìn candidate bằng ANN' là mô tả candidate generation. Phương án 'pCTR cho toàn bộ hàng triệu item' không khả thi trong ngân sách latency (thường < 100–200 ms). Phương án 'train lại embedding mỗi request' không cần — tính thời gian thực thể hiện qua feature (session, lịch sử gần đây). Tương tự RAG: retriever (recall) → reranker (precision) → post-processing."
+    },
+    {
+      "id": "cvsr-042",
+      "sub": "Offline vs online, popularity bias, feedback loop",
+      "level": 3,
+      "type": "multi",
+      "trap": false,
+      "q": "Model mới tăng NDCG@10 offline 4%, nhưng A/B test cho CTR không đổi và catalog coverage giảm. Chọn TẤT CẢ nhận định ĐÚNG.",
+      "options": [
+        "Vì NDCG offline tăng 4% có ý nghĩa thống kê, kết quả A/B chắc chắn do lỗi triển khai; nên bỏ qua A/B và ship model.",
+        "Log offline sinh từ policy cũ (chỉ có tương tác trên item từng hiển thị) nên bị exposure bias; A/B online mới là thước đo quyết định.",
+        "Model có thể khuếch đại popularity bias: item hot dễ 'đúng' trên log offline nhưng ít giá trị gia tăng, làm giảm coverage/diversity.",
+        "Hit rate@k, coverage và diversity đều là biến thể của recall nên tương quan gần như tuyệt đối; chỉ cần theo dõi một trong ba.",
+        "Retrain liên tục trên log do chính model sinh ra có thể tạo feedback loop: item được gợi ý càng nhiều tương tác, càng được gợi ý thêm."
+      ],
+      "answer": [
+        1,
+        2,
+        4
+      ],
+      "explain": "Offline metrics (Precision/Recall@k, NDCG, hit rate) đo trên log của policy cũ: item chưa từng được hiển thị không thể có click, nên model 'bắt chước' policy cũ và gợi ý item phổ biến thì được thưởng (exposure bias, popularity bias). Online A/B đo hành vi thật (CTR, conversion, watch time, retention) — cần chú ý novelty effect, đủ thời gian/cỡ mẫu, guardrail metrics. Giảm thiểu: inverse propensity scoring, exploration (epsilon-greedy, bandit), regularize popularity.\n\nPhương án 'chắc chắn lỗi triển khai, bỏ qua A/B' sai: chênh lệch offline/online rất thường gặp. Phương án 'ba metric tương quan tuyệt đối, chỉ cần theo dõi một' sai: hit rate = tỷ lệ user có ≥ 1 item relevant trong top-k (accuracy); coverage = tỷ lệ catalog được gợi ý cho ít nhất một user; diversity = độ khác nhau giữa các item trong một danh sách (vd 1 − similarity trung bình). Phát biểu về feedback loop đúng: 'rich get richer', dẫn tới filter bubble và coverage giảm dần."
+    }
+  ]
+}

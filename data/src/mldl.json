@@ -1,0 +1,795 @@
+{
+  "id": "mldl",
+  "name": "Machine Learning & Deep Learning",
+  "icon": "📈",
+  "order": 7,
+  "notes": [
+    {
+      "title": "Bias–variance & regularization",
+      "md": "**Error = Bias² + Variance + Irreducible noise.**\n\n| Triệu chứng | Chẩn đoán | Xử lý |\n|---|---|---|\n| Train tốt, val kém, gap lớn | High variance (overfit) | thêm data/augmentation, L1/L2, dropout, early stopping, giảm độ phức tạp, ensemble (bagging) |\n| Train kém, val kém tương đương | High bias (underfit) | model mạnh hơn, thêm feature, giảm regularization, train lâu hơn, boosting |\n\n- Learning curve: overfit → gap train/val thu hẹp khi thêm data; underfit → hai đường hội tụ sớm ở mức lỗi cao, thêm data **không** giúp.\n- **L1 (Lasso)** λΣ|w|: gradient độ lớn hằng số λ → đẩy w về **đúng 0** → sparse, chọn feature. **L2 (Ridge)** λΣw²: gradient 2λw → co nhỏ, hiếm khi = 0, ổn định khi feature tương quan. **ElasticNet** = kết hợp.\n- **Weight decay vs L2**: với SGD thuần tương đương (đổi hệ số). Với Adam thì KHÔNG: số hạng λw bị chia √v̂ → **AdamW** tách rời decay: θ ← θ − lr·λ·θ ngoài bước Adam.\n- Regularization khác: dropout, early stopping, data augmentation, label smoothing, max-norm, giảm số tham số.\n- Lỗi hay gặp: regularize cả bias/LayerNorm weight (thường loại khỏi weight decay); tune λ trên test set."
+    },
+    {
+      "title": "Cross-validation & data leakage",
+      "md": "| Tình huống | Splitter |\n|---|---|\n| i.i.d., mất cân bằng | `StratifiedKFold` |\n| Nhiều mẫu/1 thực thể (bệnh nhân, user, session) | `GroupKFold` / `StratifiedGroupKFold` |\n| Chuỗi thời gian | `TimeSeriesSplit` / walk-forward (expanding hoặc sliding window), có `gap` |\n| Chọn hyperparameter + ước lượng không lệch | **Nested CV** (inner chọn, outer đánh giá) |\n\n**Các dạng leakage kinh điển**\n- Preprocessing fit trên toàn bộ data trước khi split (scaler, imputer, PCA, feature selection, target encoding) → luôn đặt trong `Pipeline` để fit theo từng fold.\n- Oversampling/SMOTE trước khi split → bản sao/nội suy của mẫu val nằm trong train.\n- **Target leakage**: feature chỉ biết được SAU thời điểm dự đoán (vd 'số lần gọi hỗ trợ sau khi huỷ').\n- Time-series: rolling/lag không `shift(1)`, random shuffle, scale bằng thống kê tương lai.\n- Duplicate / near-duplicate giữa train và test; cùng group ở 2 phía.\n- Dấu hiệu: val score đẹp bất thường, feature importance dồn vào 1 feature lạ."
+    },
+    {
+      "title": "Metrics phân loại",
+      "md": "Confusion: TP, FP, FN, TN.\n\n- Precision = TP/(TP+FP) — trong số báo dương, bao nhiêu đúng.\n- Recall (TPR, sensitivity) = TP/(TP+FN) — bắt được bao nhiêu dương thật.\n- Specificity = TN/(TN+FP); FPR = 1 − specificity.\n- F1 = 2PR/(P+R) (trung bình điều hoà, bị kéo về giá trị nhỏ hơn).\n- **Fβ = (1+β²)·P·R / (β²·P + R)**: β>1 coi trọng recall (F2), β<1 coi trọng precision (F0.5).\n- Macro (trung bình đều các lớp) vs micro (gộp TP/FP/FN) vs weighted.\n\n| | ROC-AUC | PR-AUC (Average Precision) |\n|---|---|---|\n| Trục | TPR vs FPR | Precision vs Recall |\n| Baseline ngẫu nhiên | 0.5 | = prevalence (vd 0.002) |\n| Mất cân bằng nặng | lạc quan (TN khổng lồ) | phản ánh tốt lớp hiếm |\n\n- ROC-AUC = P(score dương ngẫu nhiên > score âm ngẫu nhiên), tie tính 0.5.\n- **Log loss** = −(1/N)Σ[y·ln p + (1−y)·ln(1−p)]; phạt rất nặng dự đoán tự tin mà sai.\n- **Calibration**: reliability diagram, Brier score, ECE; sửa bằng Platt (sigmoid) / isotonic trên tập riêng. Biến đổi đơn điệu tăng không đổi AUC.\n- Threshold: chọn trên validation/OOF theo mục tiêu business (recall ≥ x, cost matrix, max F1), không chọn trên test. Class weight/SMOTE làm xác suất bị lệch → cần calibrate lại nếu dùng xác suất."
+    },
+    {
+      "title": "Metrics hồi quy & class imbalance",
+      "md": "| Metric | Công thức | Ghi chú |\n|---|---|---|\n| MAE | mean(|y−ŷ|) | bền với outlier, tối ưu → trung vị |\n| MSE / RMSE | mean((y−ŷ)²), √MSE | phạt lỗi lớn, tối ưu → trung bình; RMSE ≥ MAE |\n| MAPE | mean(|y−ŷ|/|y|)·100 | **nổ khi y≈0**, bất đối xứng (phạt over-forecast nặng hơn) |\n| sMAPE | mean(2|y−ŷ|/(|y|+|ŷ|)) | bị chặn ở 200% nhưng vẫn bất ổn khi cả y, ŷ ≈ 0 |\n| MASE | MAE / MAE(naive in-sample) | <1: tốt hơn naive; không phụ thuộc scale |\n| R² | 1 − SS_res/SS_tot | có thể **âm** trên test (tệ hơn dự đoán hằng = mean) |\n\n- **Huber**: bậc 2 khi |e| ≤ δ, tuyến tính khi |e| > δ.\n\n**Class imbalance**\n- Metric: PR-AUC, F1/Fβ, recall@precision, không dùng accuracy.\n- `class_weight='balanced'`: w_c = n_samples / (n_classes × n_c).\n- Focal loss: FL = −α(1−p_t)^γ·log p_t (γ≈2, α≈0.25 trong RetinaNet) – giảm trọng số mẫu dễ.\n- Resampling (random over/under, SMOTE, ADASYN) **chỉ trên train fold** – dùng `imblearn.pipeline.Pipeline`.\n- Chỉnh threshold thường hiệu quả và rẻ hơn resampling."
+    },
+    {
+      "title": "Model cổ điển: linear, logistic, SVM, kNN, tree",
+      "md": "- **Linear regression**: MSE, nghiệm đóng (XᵀX)⁻¹Xᵀy hoặc GD. Giả định: tuyến tính, sai số độc lập, phương sai đều.\n- **Logistic regression**: p = σ(wᵀx+b), σ(z)=1/(1+e^−z). Loss BCE. **Gradient: ∂L/∂w = (p − y)·x, ∂L/∂b = p − y** (gọn nhờ σ' = σ(1−σ) triệt tiêu).\n- **SVM**: tối đa margin 2/||w||. **C lớn** → phạt vi phạm nặng, margin hẹp, dễ overfit; C nhỏ → margin rộng. RBF **gamma lớn** → mỗi điểm ảnh hưởng vùng nhỏ, biên ngoằn ngoèo → overfit. Cần scale feature.\n- **kNN**: lazy, k nhỏ → variance cao; cần scale; chậm ở inference; curse of dimensionality.\n- **Decision tree**:\n  - Gini = 1 − Σp_k² (max 0.5 với 2 lớp); Entropy = −Σp_k·log₂p_k (max 1 với 2 lớp).\n  - Information Gain = H(parent) − Σ(n_i/n)·H(child_i).\n  - Ví dụ: [6,3,1] → Gini = 1 − (0.36+0.09+0.01) = 0.54.\n  - Không cần scale, overfit nếu không giới hạn max_depth/min_samples_leaf; không ngoại suy.\n\n| Cần scale feature | Không cần |\n|---|---|\n| kNN, SVM, k-means, PCA, linear/logistic có regularization, neural nets | Decision tree, Random Forest, GBDT (XGBoost/LightGBM/CatBoost) |"
+    },
+    {
+      "title": "Ensemble: bagging, boosting, stacking",
+      "md": "- Variance của trung bình M model tương quan ρ: **ρσ² + (1−ρ)σ²/M** → M→∞ còn ρσ²; muốn ensemble hiệu quả cần model **đa dạng**.\n- **Bagging / Random Forest**: bootstrap (≈63.2% mẫu unique, **36.8% OOB** vì (1−1/n)ⁿ → e⁻¹) + chọn ngẫu nhiên `max_features` mỗi split → giảm tương quan → giảm variance. Thêm cây không làm overfit nặng hơn (chỉ tốn compute).\n- **Boosting**: các cây nối tiếp fit residual/gradient; giảm bias (và cả variance nhờ shrinkage). learning_rate ↓ ⇒ cần n_estimators ↑ (≈ tỉ lệ nghịch) + early stopping.\n\n| | XGBoost | LightGBM | CatBoost |\n|---|---|---|---|\n| Mọc cây | depthwise mặc định (`lossguide` tuỳ chọn) | **leaf-wise** (best-first) | cây đối xứng (oblivious) |\n| Tham số chính | max_depth, eta, subsample, colsample, lambda | **num_leaves** (< 2^max_depth), min_data_in_leaf | depth, l2_leaf_reg |\n| Categorical | native (`enable_categorical`) bản mới | native (`categorical_feature`) | **ordered target statistics** + ordered boosting |\n| NaN | native (default direction) | native | native |\n\n- **Stacking**: meta-model học trên **out-of-fold predictions** của base models (không dùng in-sample prediction → leakage). **Blending**: dùng 1 holdout thay K-fold – đơn giản hơn nhưng phí data.\n- Meta-model nên đơn giản (logistic/ridge)."
+    },
+    {
+      "title": "k-means & PCA",
+      "md": "**k-means**: minimize inertia (WCSS) = Σ||x − μ_c||². Lloyd: gán cụm ↔ cập nhật tâm, hội tụ về **local optimum**.\n- **k-means++**: chọn tâm kế tiếp với xác suất ∝ D(x)² → khởi tạo tốt hơn; vẫn nên chạy nhiều `n_init`.\n- Chọn k: **elbow** (inertia luôn giảm khi k tăng → tìm 'khuỷu', không chọn min), **silhouette** s = (b−a)/max(a,b) ∈ [−1, 1], gap statistic.\n- Giả định cụm cầu, kích thước tương đương; nhạy outlier & scale. Cụm hình dạng lạ → DBSCAN, GMM, spectral.\n\n**PCA**: chiếu lên các vector riêng của ma trận hiệp phương sai (sau khi **center**, thường **standardize**).\n- Explained variance ratio của PC_i = λ_i / Σλ.\n- Chọn k nhỏ nhất để cumulative ratio ≥ ngưỡng (90–95%).\n- Ví dụ λ = [5.1, 3.0, 1.6, 1.2, 0.7, 0.4] (tổng 12): cum = 0.425, 0.675, 0.808, **0.908** → k = 4 cho ≥ 90%.\n- PCA tuyến tính, không dùng nhãn; fit trên train rồi transform val/test (fit trên toàn bộ = leakage)."
+    },
+    {
+      "title": "Feature engineering",
+      "md": "- **Encoding**: one-hot (cardinality thấp; cho linear/NN), ordinal (cho tree khi có thứ tự), **target encoding** (cardinality cao) → bắt buộc **out-of-fold + smoothing**: enc = (n·mean_cat + m·global_mean)/(n + m); frequency/count encoding; embedding (NN); hashing.\n- **Scaling**: StandardScaler (z-score), MinMaxScaler, RobustScaler (median/IQR, bền outlier); log/Box-Cox/Yeo-Johnson cho phân phối lệch. Tree-based không cần.\n- **Missing values**: impute (median/mode/KNN/iterative) **fit trên train**; thêm cờ `is_missing` khi thiếu có ý nghĩa (MNAR); GBDT xử lý NaN native.\n- **Binning**: quantile/uniform bins – giúp linear model học phi tuyến, nhưng mất thông tin với tree.\n- **Interaction**: tích/tỷ lệ (giá/m², thu nhập/khoản vay), polynomial features.\n- **Datetime**: day-of-week, month, holiday, cyclical encoding sin/cos(2π·t/T).\n- **Time-series**: lag_k = y.shift(k); rolling mean/std **phải shift(1) trước khi rolling**; khi nhiều chuỗi dùng `groupby(id)` trước shift; horizon h > 1 thì lag nhỏ nhất ≥ h (direct strategy).\n- Kiểm soát chất lượng data: duplicate, outlier, range check, schema/drift check, label noise (confident learning/cleanlab)."
+    },
+    {
+      "title": "Time-series forecasting",
+      "md": "- **Stationarity**: mean/variance/autocovariance không đổi theo thời gian.\n  - **ADF**: H0 = có unit root (**không dừng**); p < 0.05 → bác bỏ → dừng.\n  - **KPSS**: H0 = **dừng** (ngược ADF) → nên dùng cả hai.\n  - Biến đổi: differencing (d), seasonal differencing (D, lag m), log để ổn định variance.\n- **ARIMA(p,d,q)**: p = bậc AR, d = số lần sai phân, q = bậc MA. SARIMA(p,d,q)(P,D,Q)_m.\n\n| | ACF | PACF |\n|---|---|---|\n| AR(p) | tắt dần | **cắt sau lag p** |\n| MA(q) | **cắt sau lag q** | tắt dần |\n| ARMA | tắt dần | tắt dần |\n\n- **Prophet**: y = trend (piecewise linear/logistic) + seasonality (Fourier) + holidays + noise; dễ dùng, vẫn phải backtest.\n- ML approach: lag/rolling/calendar features + GBDT; recursive vs direct multi-step.\n- **Đánh giá**: walk-forward backtest (expanding/sliding), không shuffle; so với **naive** (y_{t−1}) và **seasonal naive** (y_{t−m}); MASE, sMAPE, RMSE; tránh MAPE khi có y≈0.\n- Leakage: feature tương lai (giá khuyến mãi chưa biết), scale bằng thống kê toàn chuỗi, rolling không shift."
+    },
+    {
+      "title": "Hyperparameter optimization",
+      "md": "| Phương pháp | Ý tưởng | Khi nào |\n|---|---|---|\n| Grid search | thử mọi tổ hợp | ít tham số, rời rạc |\n| Random search | lấy mẫu ngẫu nhiên | nhiều tham số, chỉ vài cái quan trọng (Bergstra & Bengio 2012) |\n| Bayesian (GP, **TPE**) | mô hình hoá p(score|config) từ các lần thử trước → chọn điểm hứa hẹn | train đắt |\n| Hyperband / ASHA / pruning | dừng sớm trial tệ | DL, budget lớn |\n\n- **Optuna**: TPE sampler mặc định, `MedianPruner`, define-by-run search space.\n- Learning rate, regularization lấy mẫu **log-uniform**.\n- **Early stopping**: theo dõi val metric, `patience`; với GBDT dùng `early_stopping_rounds` (eval set không được là test).\n- **Nested CV**: số lần fit = outer_k × (n_configs × inner_k + 1 refit). Score của inner CV được chọn là **lạc quan** (optimistic bias) → cần outer loop/holdout để báo cáo.\n- Thứ tự ưu tiên tune GBDT: learning_rate + n_estimators (early stop) → num_leaves/max_depth → min_child_samples → subsample/colsample → reg_lambda/alpha."
+    },
+    {
+      "title": "Deep learning cốt lõi",
+      "md": "- **Backprop** = chain rule: ∂L/∂w = ∂L/∂a · ∂a/∂z · ∂z/∂w. Softmax + CE: ∂L/∂z = p − y.\n- **Activation**: sigmoid σ' ≤ 0.25 (saturation → vanishing); tanh; ReLU (dying ReLU); Leaky ReLU; GELU = x·Φ(x) (BERT/GPT); SiLU/Swish.\n- **Softmax ổn định**: softmax(x) = softmax(x − max x) – kết quả giữ nguyên, tránh overflow. Dùng log-sum-exp.\n- **Init**: Xavier Var = 2/(fan_in+fan_out) (tanh/sigmoid); **He** Var = 2/fan_in (ReLU). Init toàn 0 → đối xứng, các neuron học như nhau.\n- **BatchNorm**: train dùng thống kê batch + cập nhật running stats; eval dùng running stats; batch nhỏ → kém → GroupNorm/LayerNorm. **LayerNorm** chuẩn hoá theo feature của từng mẫu, train = eval (Transformer).\n- **Dropout (inverted)**: train: giữ với xác suất 1−p và **chia cho (1−p)**; eval: identity. PyTorch `p` = xác suất **drop**.\n- **Optimizer**: SGD+momentum v = μv + g; Adam: m = β1m + (1−β1)g, v = β2v + (1−β2)g², m̂ = m/(1−β1ᵗ), v̂ = v/(1−β2ᵗ), θ −= lr·m̂/(√v̂+ε). Bước 1: |Δθ| ≈ lr bất kể |g|. Warmup + cosine/linear decay; OneCycle.\n- **Vanishing/exploding**: ReLU, init đúng, normalization, residual connection, gradient clipping, LSTM/GRU.\n- **Loss**: CE (multi-class, logits), `BCEWithLogitsLoss` (multi-label/binary, ổn định hơn sigmoid+BCE), MSE/MAE/Huber, label smoothing.\n- **Đếm tham số**: Linear = in·out + out; Conv2d = C_in·C_out·k_h·k_w (+C_out nếu bias); BatchNorm = 2C trainable (+running_mean/var là buffer); pooling/ReLU/Flatten = 0; Embedding = V·d; LSTM (PyTorch) = 4·(h·in + h·h + 2h). Ví dụ MLP 784→256→128→10 = 200,960 + 32,896 + 1,290 = **235,146**."
+    },
+    {
+      "title": "PyTorch thực chiến & fine-tuning",
+      "md": "```python\nmodel.train()\nfor x, y in loader:\n    optimizer.zero_grad(set_to_none=True)\n    with torch.autocast('cuda', dtype=torch.float16):\n        logits = model(x)\n        loss = criterion(logits, y)   # CrossEntropyLoss nhận LOGITS\n    scaler.scale(loss).backward()\n    scaler.unscale_(optimizer)        # trước khi clip\n    torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)\n    scaler.step(optimizer)\n    scaler.update()\n    running += loss.item()            # không cộng tensor\n\nmodel.eval()\nwith torch.no_grad():                 # hoặc torch.inference_mode()\n    preds = model(x_val).argmax(1)\n```\n- `model.eval()` đổi hành vi Dropout/BatchNorm; `no_grad()` tắt autograd. Cần **cả hai** khi inference.\n- `.detach()` cắt tensor khỏi graph (vd target network, logging); `.item()` lấy số Python.\n- `DataLoader(num_workers>0, pin_memory=True)` tăng throughput; trên Windows cần `if __name__ == '__main__':`; seed worker để reproducible.\n- bf16 không cần GradScaler (dải mũ như fp32); fp16 cần.\n- **Transfer learning**: data ít + domain gần → freeze backbone, train head; sau đó unfreeze dần, **LR nhỏ cho layer sớm** (discriminative LR), LR nhỏ hơn train từ đầu; normalize theo mean/std của pretrained.\n- **Augmentation** chỉ trên train (trừ TTA); tránh augmentation đổi nghĩa nhãn (flip chữ số/biển rẽ trái). Mixup/CutMix, RandAugment.\n- **Label noise**: label smoothing, loss bền (MAE/GCE), co-teaching, làm sạch bằng confident learning; kiểm tra nhãn ở các mẫu loss cao nhất."
+    }
+  ],
+  "questions": [
+    {
+      "id": "mldl-001",
+      "sub": "Bias–variance",
+      "level": 1,
+      "type": "single",
+      "trap": false,
+      "q": "Một model có train accuracy 99.5%, validation accuracy 74%. Khi vẽ learning curve, thêm dữ liệu train thì khoảng cách train–val thu hẹp dần. Chẩn đoán và hướng xử lý hợp lý nhất?",
+      "options": [
+        "High bias (underfitting) → tăng độ phức tạp model, thêm feature tương tác, giảm hệ số regularization λ",
+        "High variance (overfitting) → thêm data/augmentation, tăng regularization hoặc early stopping",
+        "Irreducible error cao do nhãn nhiễu → gap train/val là giới hạn Bayes, không thể cải thiện thêm bằng model",
+        "Data drift giữa train và val → train lại với learning rate lớn hơn và nhiều epoch hơn để hội tụ tốt hơn"
+      ],
+      "answer": 1,
+      "explain": "Train gần như hoàn hảo nhưng val thấp hơn ~25 điểm là dấu hiệu kinh điển của **high variance (overfitting)**: model học thuộc cả nhiễu của train. Learning curve có gap thu hẹp khi thêm data càng khẳng định điều đó – thêm data/augmentation thực sự giúp được. Các xử lý: L1/L2, dropout, early stopping, giảm max_depth/số tham số, bagging. High bias thì train cũng kém (train ≈ val ở mức thấp) và thêm data không giúp, nên chẩn đoán 'high bias' sai. Irreducible error không thể giải thích train 99.5%. Data drift là giả thuyết khác, và tăng learning rate không liên quan tới việc giảm overfit."
+    },
+    {
+      "id": "mldl-002",
+      "sub": "Gradient exploding & NaN",
+      "level": 2,
+      "type": "multi",
+      "trap": false,
+      "q": "Train một mạng sâu (hoặc LSTM), loss đang giảm thì đột ngột thành `NaN`/`inf` sau vài trăm step. Những biện pháp nào HỢP LÝ để xử lý? (chọn tất cả đáp án đúng)",
+      "options": [
+        "Gradient clipping theo norm, vd `torch.nn.utils.clip_grad_norm_(params, 1.0)`",
+        "Giảm learning rate và/hoặc dùng warmup trong vài trăm–vài nghìn step đầu",
+        "Thay `sigmoid` + `BCELoss` tự ghép bằng `BCEWithLogitsLoss` để tránh log(0)",
+        "Tăng learning rate để model nhanh chóng thoát khỏi vùng gây NaN",
+        "Bỏ hết các lớp normalization vì chúng là nguyên nhân chia cho 0"
+      ],
+      "answer": [
+        0,
+        1,
+        2
+      ],
+      "explain": "Loss nổ thành NaN thường do **exploding gradient** (bước cập nhật quá lớn) hoặc **bất ổn số học** (log(0), exp tràn). Clipping theo norm chặn độ lớn gradient – chuẩn mực cho RNN/Transformer. Giảm LR/warmup giúp giai đoạn đầu (khi Adam chưa ước lượng tốt v và trọng số còn ngẫu nhiên) không nhảy quá xa. `BCEWithLogitsLoss` dùng log-sum-exp nên ổn định hơn sigmoid rồi log (sigmoid bão hoà về đúng 0/1 trong fp32/fp16 → tự viết `log(sigmoid(z))` cho log(0) = −inf; `nn.BCELoss` có clamp log ≥ −100 nên không ra inf nhưng gradient bị bão hoà, và autocast fp16 không cho phép dùng BCELoss). Tăng LR làm vấn đề nặng hơn. Normalization layer có ε trong mẫu số nên không chia cho 0, ngược lại chúng giúp ổn định train; nên bỏ chúng là sai."
+    },
+    {
+      "id": "mldl-003",
+      "sub": "L1 vs L2",
+      "level": 2,
+      "type": "single",
+      "trap": false,
+      "q": "Vì sao regularization **L1 (Lasso)** thường tạo ra trọng số **đúng bằng 0** (sparse), còn **L2 (Ridge)** chỉ làm trọng số nhỏ lại mà hiếm khi bằng 0?",
+      "options": [
+        "Vì L2 phạt nặng hơn L1 với mọi giá trị trọng số, nên trọng số bị kéo về gần 0 nhưng không vượt qua được",
+        "Vì L1 chỉ áp dụng cho bias, còn L2 áp dụng cho toàn bộ trọng số nên các trọng số bị co đều nhau",
+        "Vì gradient của λ|w| luôn có độ lớn λ kể cả khi w rất nhỏ, còn gradient 2λw của L2 tiến về 0 khi w → 0",
+        "Vì L1 tương đương với dropout (tắt hẳn neuron) còn L2 tương đương với early stopping nên chỉ co nhỏ trọng số"
+      ],
+      "answer": 2,
+      "explain": "Với L1, lực kéo về 0 luôn là λ (không giảm khi w nhỏ) nên khi lợi ích của feature trong loss nhỏ hơn λ, nghiệm tối ưu nằm đúng tại w = 0 (soft-thresholding). Về hình học, vùng ràng buộc |w₁|+|w₂| ≤ t là hình thoi có góc trên trục toạ độ, đường đồng mức loss hay chạm vào góc → một số trọng số bằng 0. Với L2, gradient 2λw nhỏ dần khi w → 0 nên trọng số chỉ co lại, vùng ràng buộc là hình tròn không có góc. Phương án 'L2 phạt nặng hơn L1 với mọi giá trị' sai: khi |w| < 1 thì w² < |w|, L2 phạt NHẸ hơn. Các phương án 'L1 chỉ áp dụng cho bias' và 'L1 tương đương dropout' là nhầm lẫn khái niệm (L2 trong mô hình tuyến tính có liên hệ gần đúng với early stopping, nhưng đó không phải lý do của sparsity)."
+    },
+    {
+      "id": "mldl-004",
+      "sub": "AdamW vs L2",
+      "level": 3,
+      "type": "single",
+      "trap": true,
+      "q": "Khi dùng Adam, cách 'L2 regularization' truyền thống (cộng λ·w vào gradient trước khi đưa vào Adam – như `torch.optim.Adam(params, weight_decay=λ)`) khác gì so với **AdamW**?",
+      "options": [
+        "Với Adam, λ·w bị chia cho √v̂ nên trọng số có gradient lớn bị decay ít hơn; AdamW tách decay ra: θ ← θ − lr·λ·θ ngoài bước Adam",
+        "Hai cách tương đương về toán học với Adam, giống như với SGD thuần; AdamW chỉ đổi tên và đặt weight_decay mặc định là 0.01",
+        "AdamW bỏ bias correction của Adam để tiết kiệm bộ nhớ trạng thái, còn weight decay vẫn cộng λ·w vào gradient như L2 trong loss",
+        "AdamW áp dụng weight decay lên moment bậc nhất (m ← m − λ·m) thay vì lên trọng số, nhờ đó ổn định hơn khi batch nhỏ"
+      ],
+      "answer": 0,
+      "explain": "Với SGD thuần, thêm λ/2·||w||² vào loss cho gradient g + λw, tương đương weight decay (chỉ khác hệ số). Nhưng Adam chuẩn hoá từng chiều bằng √v̂, nên phần λw cũng bị chia cho √v̂: trọng số nào có gradient lớn/thường xuyên thì bị regularize **yếu hơn** – không như mong muốn. Loshchilov & Hutter ('Decoupled Weight Decay Regularization') đề xuất AdamW: cập nhật Adam chỉ với gradient của loss, rồi trừ riêng lr·λ·θ. Đây là lý do AdamW là mặc định khi train Transformer. Bẫy là phương án 'hai cách tương đương' – đúng với SGD nhưng sai với optimizer thích nghi. AdamW vẫn giữ bias correction và không đụng vào m."
+    },
+    {
+      "id": "mldl-005",
+      "sub": "Chọn chiến lược CV",
+      "level": 2,
+      "type": "single",
+      "trap": false,
+      "q": "Dataset X-quang: 2.000 bệnh nhân, mỗi bệnh nhân có 3–10 ảnh; nhãn bệnh mất cân bằng (8% dương tính, nhãn gán theo bệnh nhân). Mục tiêu là ước lượng hiệu năng trên **bệnh nhân mới**. Chiến lược cross-validation phù hợp nhất?",
+      "options": [
+        "`KFold(shuffle=True, random_state=42)` trên toàn bộ ảnh, vì shuffle đảm bảo phân phối các fold đồng đều",
+        "`StratifiedKFold(n_splits=5)` trên ảnh để giữ đúng tỷ lệ 8% dương tính ở mỗi fold, tránh fold không có ca bệnh",
+        "`TimeSeriesSplit` theo thứ tự `patient_id` tăng dần, coi ID như trục thời gian của dữ liệu",
+        "`StratifiedGroupKFold` với `groups=patient_id`: mọi ảnh của một bệnh nhân nằm cùng một fold"
+      ],
+      "answer": 3,
+      "explain": "Các ảnh của cùng một bệnh nhân rất giống nhau (cùng giải phẫu, cùng máy chụp). Nếu split theo ảnh, model gặp 'anh em' của ảnh val trong train → điểm val bị thổi phồng (leakage theo group) và không phản ánh bệnh nhân mới. Vì vậy phải split theo **group = patient_id**; `StratifiedGroupKFold` (sklearn ≥ 1.0) đồng thời cố giữ tỷ lệ lớp. `KFold(shuffle=True)` và `StratifiedKFold` trên ảnh đều split theo ảnh nên dính leakage, stratify không cứu được. TimeSeriesSplit chỉ dùng khi có thứ tự thời gian thực, `patient_id` không mang ý nghĩa thời gian."
+    },
+    {
+      "id": "mldl-006",
+      "sub": "Data leakage",
+      "level": 2,
+      "type": "multi",
+      "trap": true,
+      "q": "Thao tác nào sau đây gây **data leakage**? (chọn tất cả đáp án đúng)",
+      "options": [
+        "Fit `StandardScaler` trên toàn bộ dataset rồi mới `train_test_split`",
+        "Chạy SMOTE trên toàn bộ tập train, sau đó mới chạy `cross_val_score` 5-fold trên tập đã oversample",
+        "Đặt `SimpleImputer(strategy='median')` trong `Pipeline` rồi đưa Pipeline vào `cross_val_score`",
+        "Dùng feature 'số lần gọi tổng đài trong 30 ngày SAU ngày khách huỷ' để train model dự đoán churn",
+        "Tạo feature 'số giao dịch của thẻ trong 7 ngày TRƯỚC thời điểm dự đoán' cho model phát hiện fraud",
+        "Dữ liệu có nhiều bản ghi trùng lặp, split ngẫu nhiên khiến cùng một bản ghi nằm ở cả train và test"
+      ],
+      "answer": [
+        0,
+        1,
+        3,
+        5
+      ],
+      "explain": "Scaler fit trên toàn bộ dataset dùng mean/std có thông tin của test → leakage (nhẹ nhưng là lỗi quy trình; với PCA/feature selection/target encoding thì nặng hơn nhiều). SMOTE trước CV: mẫu tổng hợp nội suy từ các điểm sẽ nằm ở fold val → val bị lạc quan; phải để SMOTE trong `imblearn` Pipeline. Feature 'gọi tổng đài SAU ngày huỷ' là **target leakage** kinh điển – lúc inference không có. Duplicate qua train/test khiến model được 'chấm bài đã học'. Bẫy: `SimpleImputer` trong `Pipeline` đưa vào `cross_val_score` là cách làm ĐÚNG – Pipeline đảm bảo imputer chỉ fit trên fold train. Feature 'số giao dịch 7 ngày TRƯỚC thời điểm dự đoán' cũng hợp lệ vì chỉ dùng thông tin quá khứ."
+    },
+    {
+      "id": "mldl-007",
+      "sub": "Leakage trong time-series",
+      "level": 3,
+      "type": "single",
+      "trap": true,
+      "q": "Forecast doanh số theo ngày (một cửa hàng). Target là `sales` của ngày t:\n\n```python\ndf = df.sort_values('date')\ndf['roll7'] = df['sales'].rolling(7).mean()\ndf['lag1']  = df['sales'].shift(1)\nX, y = df[['roll7', 'lag1']], df['sales']\n```\n\nVal MAE tốt bất thường. Vấn đề là gì?",
+      "options": [
+        "`lag1` gây leakage vì `shift(1)` dời chuỗi lên trên, hàng t nhận giá trị của ngày t+1",
+        "`roll7` ở ngày t chứa chính `sales_t` → leakage; cần `shift(1)` trước khi `rolling(7)`",
+        "Không có leakage; MAE tốt là nhờ `roll7` làm mượt nhiễu ngày lẻ, đúng như mong đợi với chuỗi bán lẻ",
+        "Lỗi ở `sort_values`: phải tạo lag/rolling trước rồi mới sắp xếp theo `date`, nếu không thứ tự bị lệch"
+      ],
+      "answer": 1,
+      "explain": "`rolling(7).mean()` tại hàng t tính trung bình của các ngày t−6 … t, tức là **chứa chính target** `sales_t` (chiếm 1/7). Model chỉ cần 'giải ngược' là ra target → val tốt giả. Cách đúng: `shift(1)` trước rồi mới rolling, để cửa sổ là t−7 … t−1. Bẫy: `shift(1)` (số dương) dời dữ liệu XUỐNG, hàng t nhận giá trị của t−1 – là quá khứ, hợp lệ; `shift(-1)` mới lấy tương lai. Sắp xếp theo thời gian là BẮT BUỘC trước khi tạo lag. Với nhiều cửa hàng còn phải `groupby('store')` trước shift/rolling, và nếu forecast horizon h ngày thì lag nhỏ nhất phải ≥ h."
+    },
+    {
+      "id": "mldl-008",
+      "sub": "F1 tính tay",
+      "level": 1,
+      "type": "numeric",
+      "trap": true,
+      "q": "Model phát hiện lỗi sản phẩm trên 1.000 mẫu cho kết quả: TP = 40, FP = 10, FN = 20, TN = 930. Tính **F1-score của lớp dương** (làm tròn 3 chữ số thập phân).",
+      "answer": 0.727,
+      "tolerance": 0.002,
+      "unit": "",
+      "explain": "Precision = TP/(TP+FP) = 40/50 = 0.8. Recall = TP/(TP+FN) = 40/60 ≈ 0.6667. F1 = 2·P·R/(P+R) = 2·0.8·0.6667/(1.4667) ≈ 0.7273 → **0.727**. Bẫy: accuracy = (40+930)/1000 = 0.97 trông rất đẹp nhưng model bỏ sót 1/3 lỗi thật – với dữ liệu mất cân bằng (6% dương) accuracy gần như vô nghĩa. Một lỗi khác hay gặp là lấy trung bình cộng (0.8+0.667)/2 = 0.733; F1 là trung bình **điều hoà** nên luôn ≤ trung bình cộng và bị kéo về giá trị nhỏ hơn."
+    },
+    {
+      "id": "mldl-009",
+      "sub": "F-beta",
+      "level": 2,
+      "type": "numeric",
+      "trap": false,
+      "q": "Sàng lọc ung thư nên ưu tiên recall, team chọn **F2-score**. Kết quả: TP = 30, FP = 30, FN = 10. Tính F2 (làm tròn 3 chữ số thập phân).",
+      "answer": 0.682,
+      "tolerance": 0.002,
+      "unit": "",
+      "explain": "P = 30/60 = 0.5; R = 30/40 = 0.75. Công thức Fβ = (1+β²)·P·R / (β²·P + R) với β = 2: (1+4)·0.5·0.75 / (4·0.5 + 0.75) = 1.875 / 2.75 ≈ **0.682**. So sánh: F1 = 2·0.375/1.25 = 0.6. F2 cao hơn F1 vì recall (0.75) tốt hơn precision (0.5) và F2 coi recall quan trọng gấp β = 2 lần. Lỗi hay gặp: đặt β² vào nhầm chỗ (β²·R + P ở mẫu số) – khi đó công thức lại thiên về precision và cho kết quả 1.875/3.5 ≈ 0.536."
+    },
+    {
+      "id": "mldl-010",
+      "sub": "ROC-AUC vs PR-AUC",
+      "level": 2,
+      "type": "single",
+      "trap": false,
+      "q": "Bài toán fraud có 0.2% giao dịch gian lận. Model A đạt ROC-AUC = 0.97. Nhận định nào ĐÚNG nhất?",
+      "options": [
+        "ROC-AUC 0.97 nghĩa là ở ngưỡng mặc định 0.5, khoảng 97% giao dịch bị gắn cờ fraud là fraud thật",
+        "PR-AUC luôn lớn hơn hoặc bằng ROC-AUC trên cùng model, nên PR-AUC chắc chắn còn cao hơn 0.97",
+        "ROC-AUC dễ cao giả vì FPR có mẫu số TN khổng lồ; PR-AUC phản ánh lớp hiếm tốt hơn, baseline ≈ 0.002",
+        "Nên bỏ ROC-AUC/PR-AUC và báo cáo accuracy vì accuracy dễ giải thích cho phía business hơn"
+      ],
+      "answer": 2,
+      "explain": "Với 0.2% dương, giả sử 1 triệu giao dịch: 998.000 âm. FPR = 1% nghe nhỏ nhưng là ~9.980 false positive, trong khi chỉ có 2.000 fraud → precision có thể dưới 20% dù ROC-AUC rất cao. PR-AUC dùng precision nên nhạy với FP tuyệt đối; baseline của một classifier ngẫu nhiên trên đường PR bằng prevalence (0.002), nên PR-AUC = 0.3 có thể đã là tốt. ROC-AUC không phải là precision, và PR-AUC thường **thấp hơn** nhiều so với ROC-AUC khi mất cân bằng (nên ý 'PR-AUC luôn ≥ ROC-AUC' sai). Accuracy của model đoán toàn 'không fraud' đã là 99.8% – vô dụng."
+    },
+    {
+      "id": "mldl-011",
+      "sub": "ROC-AUC tính tay",
+      "level": 3,
+      "type": "numeric",
+      "trap": false,
+      "q": "Score dự đoán:\n\n- Lớp dương (3 mẫu): 0.9, 0.7, 0.4\n- Lớp âm (4 mẫu): 0.8, 0.7, 0.3, 0.2\n\nTính **ROC-AUC** (cặp bằng điểm tính 0.5; làm tròn 3 chữ số thập phân).",
+      "answer": 0.708,
+      "tolerance": 0.002,
+      "unit": "",
+      "explain": "ROC-AUC = xác suất một mẫu dương ngẫu nhiên có score cao hơn một mẫu âm ngẫu nhiên (thống kê Mann–Whitney). Có 3×4 = 12 cặp. Dương 0.9 thắng cả 4 âm → 4. Dương 0.7: thắng 0.3, 0.2 (2), hoà 0.7 (0.5), thua 0.8 → 2.5. Dương 0.4: thắng 0.3, 0.2 → 2. Tổng = 8.5 → AUC = 8.5/12 ≈ **0.708** (khớp `roc_auc_score`). Cách nhìn này giải thích vì sao AUC chỉ phụ thuộc **thứ hạng** score: mọi biến đổi đơn điệu tăng (calibration bằng Platt, nhân hằng số dương) không đổi AUC. Lỗi hay gặp: tính hoà bằng 0 hoặc 1 → ra 0.667 hoặc 0.75."
+    },
+    {
+      "id": "mldl-012",
+      "sub": "Calibration",
+      "level": 3,
+      "type": "single",
+      "trap": false,
+      "q": "Model GBDT train với `scale_pos_weight` lớn có ROC-AUC = 0.91 nhưng xác suất bị lệch: các mẫu dự đoán 0.8 thực tế chỉ ~55% là dương. Bạn áp dụng **Platt scaling** (logistic regression một chiều trên score, hệ số dương) fit trên tập calibration riêng. Điều gì xảy ra?",
+      "options": [
+        "ROC-AUC tăng đáng kể vì xác suất sau calibration khớp với tần suất thực tế hơn",
+        "ROC-AUC giảm vì Platt scaling nén các score về quanh 0.5 làm nhiều mẫu bị hoà điểm",
+        "Log loss và Brier score giữ nguyên vì cả hai chỉ phụ thuộc vào thứ hạng của score",
+        "ROC-AUC giữ nguyên vì thứ hạng không đổi; log loss và Brier score thường cải thiện"
+      ],
+      "answer": 3,
+      "explain": "Platt scaling là hàm sigmoid(a·s + b₀) với a > 0 – đơn điệu tăng nghiêm ngặt, nên thứ tự các mẫu không đổi → ROC-AUC, PR-AUC giữ nguyên. Ngược lại log loss và Brier score phụ thuộc trực tiếp giá trị xác suất, nên được cải thiện khi xác suất khớp tần suất thực. Tình huống trong đề rất phổ biến: class weight / `scale_pos_weight` / oversampling đẩy xác suất lớp dương lên cao → model 'quá tự tin'; cần calibrate (Platt hoặc isotonic, `CalibratedClassifierCV`) trên dữ liệu KHÔNG dùng để train. Lưu ý isotonic là bậc thang nên có thể tạo ra các mức hoà và làm AUC thay đổi chút ít."
+    },
+    {
+      "id": "mldl-013",
+      "sub": "Log loss tính tay",
+      "level": 2,
+      "type": "numeric",
+      "trap": false,
+      "q": "Binary classifier dự đoán xác suất lớp dương p = [0.9, 0.2, 0.6, 0.7] cho 4 mẫu có nhãn y = [1, 0, 1, 0]. Tính **log loss trung bình** dùng log tự nhiên (ln), làm tròn 3 chữ số thập phân.",
+      "answer": 0.511,
+      "tolerance": 0.002,
+      "unit": "",
+      "explain": "Log loss = −(1/N)·Σ[y·ln p + (1−y)·ln(1−p)]. Từng mẫu: y=1, p=0.9 → −ln 0.9 = 0.1054; y=0, p=0.2 → −ln 0.8 = 0.2231; y=1, p=0.6 → −ln 0.6 = 0.5108; y=0, p=0.7 → −ln 0.3 = 1.2040. Tổng = 2.0433, chia 4 = **0.511**. Nhận xét: mẫu cuối sai một cách 'tự tin' (0.7 cho lớp âm) đóng góp hơn một nửa tổng loss – đó là đặc tính của log loss: phạt rất nặng dự đoán chắc chắn mà sai (p → 0 cho lớp đúng thì loss → ∞). Lỗi hay gặp: quên dùng 1−p cho mẫu nhãn 0."
+    },
+    {
+      "id": "mldl-014",
+      "sub": "Threshold tuning",
+      "level": 2,
+      "type": "multi",
+      "trap": false,
+      "q": "Classifier trả xác suất; business yêu cầu **recall lớp dương ≥ 90%**. Chọn các phát biểu ĐÚNG về threshold tuning.",
+      "options": [
+        "Hạ threshold (vd 0.5 → 0.3) thường làm recall tăng và precision giảm",
+        "Threshold nên được chọn trên validation set hoặc out-of-fold predictions, không chọn trên test set",
+        "Thay đổi threshold không làm thay đổi ROC-AUC của model",
+        "Tăng threshold luôn làm tăng đồng thời cả precision lẫn recall",
+        "Threshold 0.5 luôn tối ưu F1 nếu model đã được calibrate tốt"
+      ],
+      "answer": [
+        0,
+        1,
+        2
+      ],
+      "explain": "Hạ threshold → nhiều mẫu được gán dương hơn → FN giảm (recall tăng), FP thường tăng (precision giảm) – đánh đổi P/R. Threshold là một hyperparameter, chọn nó trên test làm điểm test lạc quan; đúng quy trình là chọn trên val/OOF (vd threshold lớn nhất mà recall ≥ 0.9) rồi báo cáo một lần trên test. ROC-AUC tổng hợp trên MỌI threshold nên không phụ thuộc ngưỡng bạn chọn. Tăng threshold làm recall không tăng (thường giảm), nên ý 'tăng cả precision lẫn recall' sai. Ngưỡng tối ưu F1 phụ thuộc phân phối lớp – với model đã calibrate, threshold tối ưu F1 bằng một nửa F1 tối ưu (Lipton et al.), thường nhỏ hơn 0.5 khi lớp dương hiếm."
+    },
+    {
+      "id": "mldl-015",
+      "sub": "MAPE & y ≈ 0",
+      "level": 2,
+      "type": "numeric",
+      "trap": true,
+      "q": "Forecast nhu cầu 4 SKU: thực tế y = [200, 2, 50, 100], dự đoán ŷ = [180, 5, 55, 100]. Tính **MAPE** (đơn vị %, làm tròn 1 chữ số thập phân).",
+      "answer": 42.5,
+      "tolerance": 0.1,
+      "unit": "%",
+      "explain": "APE từng điểm = |y−ŷ|/|y|: 20/200 = 10%; 3/2 = **150%**; 5/50 = 10%; 0/100 = 0%. MAPE = (10+150+10+0)/4 = **42.5%**. Bẫy: sai số tuyệt đối của SKU thứ hai chỉ là 3 đơn vị (MAE toàn bộ = (20+3+5+0)/4 = 7) nhưng vì y = 2 rất nhỏ nên nó chiếm gần hết MAPE; nếu y = 0 thì MAPE vô hạn. MAPE còn bất đối xứng (dự báo thấp bị chặn ở 100%, dự báo cao thì không). Với chuỗi có giá trị nhỏ/bằng 0 (intermittent demand) nên dùng MAE, WAPE = Σ|e|/Σ|y| (ở đây 28/352 ≈ 8%), MASE hoặc RMSE."
+    },
+    {
+      "id": "mldl-016",
+      "sub": "Metric & loss hồi quy",
+      "level": 2,
+      "type": "single",
+      "trap": true,
+      "q": "Chọn phát biểu **SAI** về loss/metric hồi quy.",
+      "options": [
+        "R² luôn nằm trong đoạn [0, 1], kể cả khi tính trên tập test",
+        "Trên cùng một tập dự đoán, RMSE ≥ MAE; RMSE phạt các sai số lớn nặng hơn",
+        "Tối thiểu MSE cho dự đoán hướng về trung bình có điều kiện, tối thiểu MAE hướng về trung vị có điều kiện",
+        "Huber loss hành xử như MSE khi |error| ≤ δ và như MAE khi |error| > δ, nên ít nhạy với outlier hơn MSE"
+      ],
+      "answer": 0,
+      "explain": "R² = 1 − SS_res/SS_tot. Trên train của linear regression có intercept, R² ∈ [0, 1]; nhưng trên tập test (hoặc model bất kỳ) SS_res có thể lớn hơn SS_tot → **R² âm**, nghĩa là model tệ hơn việc dự đoán hằng số bằng trung bình (sklearn `r2_score` trả về giá trị âm bình thường). Các phát biểu còn lại đúng: RMSE ≥ MAE theo bất đẳng thức giữa trung bình bậc 2 và bậc 1; MSE → mean, MAE → median là lý do MAE bền hơn với outlier; Huber kết hợp cả hai với ngưỡng δ."
+    },
+    {
+      "id": "mldl-017",
+      "sub": "Class imbalance",
+      "level": 2,
+      "type": "multi",
+      "trap": false,
+      "q": "Dataset churn: 95% không churn, 5% churn. Chọn các cách làm ĐÚNG.",
+      "options": [
+        "Dùng `class_weight='balanced'`: trọng số lớp c = n_samples / (n_classes × n_c), ở đây lớp churn có trọng số ≈ 10",
+        "Chạy SMOTE trên toàn bộ dữ liệu trước khi split để cả val và test cũng cân bằng 50/50, metric ổn định hơn",
+        "Đặt SMOTE bên trong `imblearn.pipeline.Pipeline` để nó chỉ được áp dụng trên fold train của mỗi lần CV",
+        "Focal loss FL = −α(1−p_t)^γ·log(p_t) giảm trọng số của mẫu dễ (p_t cao) để model tập trung vào mẫu khó",
+        "Báo cáo accuracy trên test là đủ vì nó đã tính trên toàn bộ mẫu của cả hai lớp"
+      ],
+      "answer": [
+        0,
+        2,
+        3
+      ],
+      "explain": "Với N mẫu, lớp churn có 0.05N mẫu → w = N/(2·0.05N) = 10; lớp còn lại w = N/(2·0.95N) ≈ 0.526. SMOTE phải nằm trong pipeline để fit/resample chỉ trên fold train; val/test phải giữ phân phối THẬT (5%) thì metric mới phản ánh production – nên chạy SMOTE trên toàn bộ dữ liệu trước khi split sai cả về leakage lẫn về đánh giá. Focal loss (RetinaNet, γ ≈ 2, α ≈ 0.25) nhân thêm (1−p_t)^γ: mẫu đã dự đoán đúng tự tin (p_t = 0.95) bị giảm trọng số 400 lần. Accuracy vô dụng: đoán toàn 'không churn' đạt 95%; nên dùng PR-AUC, F1/Fβ, recall@precision."
+    },
+    {
+      "id": "mldl-018",
+      "sub": "Gradient logistic regression",
+      "level": 2,
+      "type": "numeric",
+      "trap": false,
+      "q": "Logistic regression, một mẫu: x = [1, 2], w = [0.5, −0.25], b = 0.3, nhãn y = 1, loss là binary cross-entropy. Tính **∂L/∂w₂** (làm tròn 3 chữ số thập phân).",
+      "answer": -0.851,
+      "tolerance": 0.003,
+      "unit": "",
+      "explain": "z = w·x + b = 0.5·1 + (−0.25)·2 + 0.3 = 0.3. p = σ(0.3) = 1/(1+e^−0.3) ≈ 0.5744. Với BCE + sigmoid, chain rule cho ∂L/∂z = (∂L/∂p)·(∂p/∂z) = [−y/p + (1−y)/(1−p)]·p(1−p) = **p − y** (σ' triệt tiêu gọn). Do đó ∂L/∂w₂ = (p − y)·x₂ = (0.5744 − 1)·2 ≈ **−0.851**. Gradient âm nghĩa là gradient descent sẽ tăng w₂ để đẩy p lên gần 1. Cùng công thức p − y cũng xuất hiện ở softmax + cross-entropy cho multi-class – rất hay bị hỏi trong phỏng vấn."
+    },
+    {
+      "id": "mldl-019",
+      "sub": "SVM: C & gamma",
+      "level": 2,
+      "type": "single",
+      "trap": false,
+      "q": "SVM kernel RBF (feature đã chuẩn hoá) cho train accuracy 100%, val accuracy 70%. Điều chỉnh nào hợp lý nhất?",
+      "options": [
+        "Tăng C và tăng gamma để biên quyết định bám sát các support vector khó hơn",
+        "Giảm C và/hoặc giảm gamma để margin rộng hơn và biên quyết định mượt hơn",
+        "Bỏ chuẩn hoá feature vì kernel RBF đã tự chuẩn hoá khoảng cách qua tham số gamma",
+        "Đổi sang kernel đa thức bậc 10 để tăng độ linh hoạt mà vẫn giữ được margin rộng"
+      ],
+      "answer": 1,
+      "explain": "Train 100% / val 70% là overfit. Trong soft-margin SVM, C là hệ số phạt vi phạm margin: C lớn → gần hard-margin, cố phân loại đúng mọi điểm train → overfit; C nhỏ → regularization mạnh hơn. Với RBF K(x,x') = exp(−γ||x−x'||²): γ lớn → kernel rất 'hẹp', mỗi điểm chỉ ảnh hưởng lân cận sát nó → biên ngoằn ngoèo; γ nhỏ → biên mượt. Nên giảm C và/hoặc γ (tune bằng grid log-scale). Tăng C và gamma làm overfit nặng hơn; RBF dùng khoảng cách Euclid nên rất nhạy scale; kernel bậc 10 còn linh hoạt hơn → overfit hơn."
+    },
+    {
+      "id": "mldl-020",
+      "sub": "Information gain tính tay",
+      "level": 2,
+      "type": "numeric",
+      "trap": false,
+      "q": "Node cha có 16 mẫu (8 dương, 8 âm). Split theo feature A: nhánh trái 6 mẫu (5 dương, 1 âm), nhánh phải 10 mẫu (3 dương, 7 âm). Tính **Information Gain** dùng entropy log cơ số 2 (làm tròn 3 chữ số thập phân).",
+      "answer": 0.205,
+      "tolerance": 0.003,
+      "unit": "bit",
+      "explain": "H(cha) = −0.5·log₂0.5 − 0.5·log₂0.5 = 1. H(trái) với p = 5/6: −(5/6)·log₂(5/6) − (1/6)·log₂(1/6) ≈ 0.2192 + 0.4308 = 0.6500. H(phải) với p = 0.3: −0.3·log₂0.3 − 0.7·log₂0.7 ≈ 0.5211 + 0.3602 = 0.8813. Entropy có trọng số sau split = (6/16)·0.6500 + (10/16)·0.8813 ≈ 0.2438 + 0.5508 = 0.7946. IG = 1 − 0.7946 ≈ **0.205**. Lỗi hay gặp: lấy trung bình cộng entropy hai nhánh thay vì trung bình có trọng số theo số mẫu, hoặc dùng ln thay log₂ (đơn vị nat)."
+    },
+    {
+      "id": "mldl-021",
+      "sub": "Gini impurity",
+      "level": 1,
+      "type": "single",
+      "trap": false,
+      "q": "Một node của decision tree có 10 mẫu thuộc 3 lớp với số lượng [6, 3, 1]. **Gini impurity** của node là bao nhiêu?",
+      "options": [
+        "0.54",
+        "0.46",
+        "1.30",
+        "0.70"
+      ],
+      "answer": 0,
+      "explain": "Gini = 1 − Σp_k² với p = [0.6, 0.3, 0.1]: Σp² = 0.36 + 0.09 + 0.01 = 0.46 → Gini = 1 − 0.46 = **0.54**. Các phương án nhiễu: 0.46 là Σp² (quên lấy 1 trừ); 1.30 ≈ entropy log₂ của node này (−Σp·log₂p ≈ 1.295) – nhầm Gini với entropy. Gini = xác suất phân loại sai nếu gán nhãn ngẫu nhiên theo phân phối của node; với K lớp Gini tối đa là 1 − 1/K (0.5 với 2 lớp), còn entropy tối đa là log₂K. Gini mặc định trong sklearn vì không cần tính log, kết quả split thường gần giống entropy."
+    },
+    {
+      "id": "mldl-022",
+      "sub": "Random Forest",
+      "level": 2,
+      "type": "multi",
+      "trap": false,
+      "q": "Chọn các phát biểu ĐÚNG về Random Forest.",
+      "options": [
+        "Mỗi cây train trên bootstrap sample; với n lớn ~36.8% mẫu là out-of-bag, dùng để ước lượng lỗi",
+        "Chọn ngẫu nhiên tập feature ở mỗi split (`max_features`) giảm tương quan giữa các cây → averaging giảm variance tốt hơn",
+        "Random Forest cần StandardScaler vì tiêu chí split dựa trên khoảng cách Euclid giữa các mẫu trong node",
+        "Random Forest regression không ngoại suy được: dự đoán luôn nằm trong khoảng giá trị target đã thấy khi train",
+        "Tăng `n_estimators` quá lớn (vd 5.000 cây) là nguyên nhân chính khiến Random Forest overfit nặng trên val"
+      ],
+      "answer": [
+        0,
+        1,
+        3
+      ],
+      "explain": "Xác suất một mẫu KHÔNG được chọn trong n lần rút có hoàn lại là (1−1/n)ⁿ → e⁻¹ ≈ 0.368, nên mỗi cây có ~36.8% mẫu OOB; `oob_score=True` cho ước lượng gần như CV miễn phí. Feature subsampling là điểm khác biệt chính giữa RF và bagging thuần: nếu có 1 feature rất mạnh, mọi cây bagging đều split nó trước → tương quan cao → averaging giảm variance ít. Split của cây dựa trên ngưỡng một feature, không dùng khoảng cách → không cần scale. Lá của cây hồi quy là trung bình target train → không ngoại suy (bẫy khi forecast có trend tăng). Thêm cây làm sai số hội tụ, không làm overfit nặng hơn – chỉ tốn tài nguyên; overfit đến từ cây quá sâu/min_samples_leaf quá nhỏ."
+    },
+    {
+      "id": "mldl-023",
+      "sub": "Gradient boosting: learning rate",
+      "level": 3,
+      "type": "single",
+      "trap": false,
+      "q": "XGBoost đang tốt với `learning_rate=0.1`, `n_estimators=500` (early stopping cho best_iteration ≈ 480). Bạn giảm `learning_rate` xuống 0.02 nhưng **giữ** `n_estimators=500`. Điều gì nhiều khả năng xảy ra?",
+      "options": [
+        "Overfit mạnh hơn vì learning rate nhỏ khiến mỗi cây fit residual chi tiết và sâu hơn",
+        "Gần như không đổi vì learning rate chỉ ảnh hưởng tốc độ hội tụ, không ảnh hưởng model cuối",
+        "Dễ underfit vì mỗi cây đóng góp ít đi 5 lần; cần tăng n_estimators (~5×) kèm early stopping",
+        "XGBoost tự nhân n_estimators theo tỷ lệ 0.1/0.02 để bù cho learning rate nhỏ hơn"
+      ],
+      "answer": 2,
+      "explain": "Trong boosting, dự đoán = Σ η·f_m(x); learning rate η (shrinkage) nhân vào đóng góp của mỗi cây. Với η = 0.1, model cần ~480 cây mới tối ưu; giảm η 5 lần mà giữ 500 cây thì tổng 'quãng đường' đi được chỉ tương đương ~100 cây ở η cũ → **underfit**. Quy tắc thực chiến: η và số cây gần tỷ lệ nghịch; η nhỏ + nhiều cây + early stopping thường cho kết quả tốt hơn chút nhưng train lâu hơn. η nhỏ không làm từng cây 'chi tiết' hơn (độ sâu cây do max_depth quyết định). XGBoost không tự tăng số cây – `n_estimators` là trần cứng."
+    },
+    {
+      "id": "mldl-024",
+      "sub": "XGBoost / LightGBM / CatBoost",
+      "level": 3,
+      "type": "multi",
+      "trap": true,
+      "q": "Chọn các phát biểu ĐÚNG về XGBoost, LightGBM và CatBoost.",
+      "options": [
+        "LightGBM mặc định mọc leaf-wise: tách lá giảm loss nhiều nhất → dễ overfit data nhỏ, cần giới hạn `num_leaves`, `min_data_in_leaf`",
+        "Với LightGBM nên đặt `num_leaves = 2^max_depth` (vd max_depth=7 → 128) để tương đương cây level-wise, theo khuyến nghị của tài liệu",
+        "XGBoost với `tree_method='hist'` mặc định `grow_policy='depthwise'` (level-wise); có thể chuyển sang `lossguide` để mọc giống leaf-wise",
+        "CatBoost mã hoá categorical bằng ordered target statistics để giảm target leakage và mặc định dùng cây đối xứng (oblivious)",
+        "LightGBM bắt buộc one-hot encode cột categorical trước khi train vì thuật toán histogram chỉ làm việc với feature số"
+      ],
+      "answer": [
+        0,
+        2,
+        3
+      ],
+      "explain": "LightGBM leaf-wise: với cùng số lá, giảm loss nhiều hơn level-wise nhưng tạo cây sâu, lệch → overfit trên data nhỏ. Tài liệu LightGBM khuyến nghị `num_leaves` **nhỏ hơn** 2^max_depth (vd max_depth=7 thì num_leaves ~70–80 chứ không phải 128), vì đặt bằng 2^max_depth dễ overfit hơn cây depth-wise tương ứng – đó là bẫy của ý 'num_leaves = 2^max_depth là khuyến nghị chuẩn'. XGBoost mặc định depthwise, `lossguide` (kèm `max_leaves`) cho hành vi giống LightGBM. CatBoost: ordered TS + ordered boosting chống prediction shift; cây oblivious dùng cùng một điều kiện split trên mỗi tầng → inference rất nhanh, ít overfit. LightGBM hỗ trợ categorical native qua `categorical_feature` (tìm split tối ưu theo nhóm category), thường tốt hơn one-hot với cardinality cao."
+    },
+    {
+      "id": "mldl-025",
+      "sub": "Vì sao ensemble giảm variance",
+      "level": 2,
+      "type": "single",
+      "trap": false,
+      "q": "Lấy trung bình M model, mỗi model có variance σ² và tương quan đôi một ρ. Variance của dự đoán trung bình là **ρσ² + (1−ρ)σ²/M**. Suy ra điều gì?",
+      "options": [
+        "Tăng M lên vô hạn luôn đưa variance của ensemble về 0, bất kể giá trị ρ",
+        "Bagging chủ yếu giảm bias, hầu như không ảnh hưởng tới variance của model",
+        "Trung bình nhiều bản sao của cùng một model (ρ = 1) vẫn giảm variance M lần",
+        "Khi M lớn variance tiến về ρσ², nên cần các model đa dạng (ρ thấp)"
+      ],
+      "answer": 3,
+      "explain": "Khi M → ∞, số hạng (1−ρ)σ²/M → 0 nhưng ρσ² còn nguyên: tương quan đặt 'sàn' cho variance. Ví dụ ρ = 0.3, σ² = 1, M = 10 → 0.3 + 0.07 = 0.37; tăng M lên 1000 cũng chỉ còn ≈ 0.30. Với ρ = 1 (các model giống hệt) công thức cho σ² – không giảm gì (ý 'bản sao vẫn giảm M lần' sai). Bagging chủ yếu giảm **variance** (bias của trung bình ≈ bias của từng model); boosting mới là phương pháp chủ yếu giảm bias. Vì vậy thực tế người ta tạo đa dạng bằng bootstrap, feature subsampling, khác thuật toán, khác seed/feature set."
+    },
+    {
+      "id": "mldl-026",
+      "sub": "Stacking",
+      "level": 3,
+      "type": "single",
+      "trap": false,
+      "q": "Bạn stacking 3 base model (LightGBM, kNN, logistic regression) với meta-model là logistic regression. Cách tạo dữ liệu train cho meta-model nào ĐÚNG?",
+      "options": [
+        "Fit 3 base model trên toàn bộ train, predict lại chính tập train đó và dùng prediction làm feature cho meta-model",
+        "Dùng out-of-fold predictions: mỗi base model chỉ predict fold nó không train, ghép làm feature cho meta-model",
+        "Dùng prediction của base model trên test set làm dữ liệu train cho meta-model vì test là dữ liệu chưa thấy",
+        "Meta-model nên là model phức tạp nhất (vd GBDT rất sâu, nhiều cây) để học được mọi tương tác giữa các base model"
+      ],
+      "answer": 1,
+      "explain": "Nếu dùng in-sample prediction (predict lại chính tập train), base model đã overfit train nên prediction trên train 'đẹp' hơn thực tế – đặc biệt kNN (k=1 thì đúng 100%) – meta-model học tin tưởng nhầm vào model overfit nhất và sụp đổ trên test. OOF prediction mô phỏng đúng tình huống inference (base model dự đoán dữ liệu chưa thấy). `sklearn.ensemble.StackingClassifier` làm đúng điều này qua `cv=`. Dùng test để train meta-model là leakage, mất luôn tập đánh giá. Meta-model nên đơn giản (logistic/ridge) vì số feature ít và dễ overfit; blending là biến thể dùng 1 holdout thay vì K-fold."
+    },
+    {
+      "id": "mldl-027",
+      "sub": "Feature scaling",
+      "level": 1,
+      "type": "multi",
+      "trap": false,
+      "q": "Những thuật toán nào **nhạy với scale** của feature (nên chuẩn hoá trước khi train)? (chọn tất cả)",
+      "options": [
+        "k-Nearest Neighbors",
+        "SVM với kernel RBF",
+        "Random Forest",
+        "PCA",
+        "k-means",
+        "LightGBM"
+      ],
+      "answer": [
+        0,
+        1,
+        3,
+        4
+      ],
+      "explain": "kNN, SVM-RBF và k-means đều dựa trên **khoảng cách** Euclid: feature có đơn vị lớn (thu nhập theo VND) lấn át feature đơn vị nhỏ (tuổi). PCA tìm hướng có variance lớn nhất, nên feature có scale lớn sẽ chiếm PC đầu tiên chỉ vì đơn vị – thường phải standardize trước. Ngoài ra logistic/linear có regularization và neural network (tối ưu bằng gradient) cũng cần scale. Ngược lại, cây quyết định và các ensemble cây (RF, XGBoost, LightGBM, CatBoost) split theo ngưỡng trên từng feature nên bất biến với biến đổi đơn điệu – scale không đổi kết quả. Nhớ fit scaler trên train (trong Pipeline)."
+    },
+    {
+      "id": "mldl-028",
+      "sub": "k-means & đánh giá clustering",
+      "level": 2,
+      "type": "single",
+      "trap": true,
+      "q": "Chọn phát biểu **SAI** về k-means và đánh giá clustering.",
+      "options": [
+        "k-means++ chọn tâm tiếp theo với xác suất tỷ lệ D(x)² nên thường hội tụ nhanh và tốt hơn khởi tạo ngẫu nhiên, nhưng vẫn không đảm bảo tối ưu toàn cục",
+        "Silhouette score nằm trong [−1, 1]; giá trị gần 1 nghĩa là điểm gần cụm của nó và xa cụm lân cận",
+        "Nên chọn k có inertia (WCSS) nhỏ nhất trong khoảng thử, vì inertia nhỏ nhất nghĩa là phân cụm tốt nhất",
+        "k-means ngầm giả định các cụm dạng cầu, kích thước tương đương; với cụm hình vành khuyên nên cân nhắc DBSCAN hoặc spectral clustering"
+      ],
+      "answer": 2,
+      "explain": "Inertia (tổng bình phương khoảng cách tới tâm) **giảm** khi tăng k (về lý thuyết với nghiệm tối ưu, k = n thì inertia = 0), nên chọn k có inertia nhỏ nhất luôn dẫn tới k lớn nhất trong khoảng thử – vô nghĩa. Phương pháp elbow tìm điểm mà inertia ngừng giảm mạnh; nên kết hợp silhouette, gap statistic và ý nghĩa nghiệp vụ. Các phát biểu khác đúng: k-means++ (Arthur & Vassilvitskii) có bảo đảm xấp xỉ O(log k) kỳ vọng nhưng vẫn là local optimum, vì vậy sklearn chạy nhiều `n_init`. Silhouette s = (b − a)/max(a, b). k-means tối ưu khoảng cách tới tâm nên thất bại với cụm không lồi."
+    },
+    {
+      "id": "mldl-029",
+      "sub": "PCA explained variance",
+      "level": 1,
+      "type": "numeric",
+      "trap": false,
+      "q": "Ma trận hiệp phương sai (dữ liệu đã chuẩn hoá) có các eigenvalue: 5.1, 3.0, 1.6, 1.2, 0.7, 0.4. Cần giữ **ít nhất 90%** phương sai. Số principal component **nhỏ nhất** cần giữ là bao nhiêu?",
+      "answer": 4,
+      "tolerance": 0,
+      "unit": "component",
+      "explain": "Tổng eigenvalue = 5.1 + 3.0 + 1.6 + 1.2 + 0.7 + 0.4 = 12.0. Explained variance ratio = λ_i/12: 0.425, 0.250, 0.133, 0.100, 0.058, 0.033. Cộng dồn: 0.425 → 0.675 → 0.808 → **0.908** → 0.967 → 1.0. Lần đầu vượt 0.9 là ở PC thứ 4 → k = **4**. Lỗi hay gặp: dừng ở k = 3 vì 0.808 'gần 90%', hoặc tính ratio theo eigenvalue lớn nhất thay vì theo tổng. Trong sklearn: `PCA(n_components=0.9)` tự chọn k như trên; nhớ fit PCA (và scaler) chỉ trên train."
+    },
+    {
+      "id": "mldl-030",
+      "sub": "Target encoding & leakage",
+      "level": 3,
+      "type": "single",
+      "trap": true,
+      "q": "Cột `merchant_id` có 50.000 giá trị, nhiều merchant chỉ xuất hiện 1–2 lần. Bạn thay mỗi giá trị bằng **tỷ lệ fraud trung bình** của merchant đó tính trên toàn bộ train, rồi train GBDT: train AUC 0.99, val AUC 0.71. Nguyên nhân và cách sửa?",
+      "options": [
+        "Target leakage ở merchant hiếm; sửa bằng out-of-fold target encoding + smoothing về global mean",
+        "GBDT không tách tốt feature liên tục có quá nhiều giá trị khác nhau; cần one-hot encode toàn bộ 50.000 merchant",
+        "Thiếu chuẩn hoá: cột encoding nằm trong [0, 1] khác scale các cột khác nên cần StandardScaler trước GBDT",
+        "Val có nhiều merchant mới chưa thấy khi train; cách sửa duy nhất là bỏ hẳn cột merchant_id"
+      ],
+      "answer": 0,
+      "explain": "Merchant chỉ có 1 giao dịch → encoding = đúng nhãn của giao dịch đó (0 hoặc 1). Model học 'đọc nhãn' qua feature này → train AUC gần 1, val sụp. Cách sửa: (1) **out-of-fold**: encoding cho mẫu ở fold k được tính từ các fold còn lại; (2) **smoothing**: enc = (n·mean_cat + m·global_mean)/(n + m) để category ít mẫu co về trung bình chung; (3) thêm nhiễu, hoặc dùng CatBoost (ordered target statistics) / `sklearn.preprocessing.TargetEncoder` (đã cross-fitting nội bộ). One-hot 50.000 cột vừa tốn vừa kém với cây; GBDT không cần scaling. Merchant mới ở val là vấn đề có thật nhưng xử lý bằng fallback global mean, không cần bỏ feature."
+    },
+    {
+      "id": "mldl-031",
+      "sub": "Missing values",
+      "level": 2,
+      "type": "multi",
+      "trap": false,
+      "q": "Chọn các cách xử lý **missing values** ĐÚNG/hợp lý.",
+      "options": [
+        "Thêm cột chỉ báo `is_missing` khi việc thiếu dữ liệu có thể mang thông tin (missing not at random)",
+        "Impute bằng mean tính trên toàn bộ dataset (gồm cả test) để thống kê ổn định hơn khi train nhỏ",
+        "XGBoost/LightGBM xử lý NaN native: mỗi split học một hướng mặc định (default direction) cho giá trị thiếu",
+        "Imputer phải fit trên train (trong Pipeline/mỗi fold CV) rồi transform val/test bằng thống kê của train",
+        "Xoá mọi hàng có NaN luôn là lựa chọn an toàn nhất vì không đưa thêm giả định nào vào dữ liệu"
+      ],
+      "answer": [
+        0,
+        2,
+        3
+      ],
+      "explain": "Thiếu dữ liệu thường có nghĩa (khách không khai thu nhập có rủi ro khác) → cờ `is_missing` giúp model khai thác, sklearn có `add_indicator=True`. GBDT học default direction: tại mỗi split thử đưa NaN sang trái/phải, chọn hướng giảm loss nhiều hơn. Imputer là một bước fit nên phải theo quy tắc chống leakage như scaler; impute bằng mean tính trên cả test là leakage. Xoá hàng (listwise deletion) giả định dữ liệu thiếu hoàn toàn ngẫu nhiên (MCAR); nếu không thì gây bias, mất nhiều dữ liệu và production vẫn gặp NaN mà model không biết xử lý."
+    },
+    {
+      "id": "mldl-032",
+      "sub": "Stationarity & ADF",
+      "level": 1,
+      "type": "single",
+      "trap": true,
+      "q": "Chạy ADF test (`statsmodels.tsa.stattools.adfuller`) trên chuỗi doanh số theo tháng, được p-value = 0.62. Kết luận đúng?",
+      "options": [
+        "p > 0.05 nên chấp nhận giả thuyết chuỗi dừng (stationary), có thể fit ARMA trực tiếp không cần sai phân",
+        "p-value lớn chứng tỏ chuỗi có trend tuyến tính tất định, cần fit hồi quy theo thời gian rồi lấy residual",
+        "ADF test không áp dụng được cho dữ liệu theo tháng vì có seasonality, phải dùng KPSS thay thế",
+        "H0 của ADF là có unit root; không bác bỏ H0 → coi là không dừng, thử differencing rồi test lại"
+      ],
+      "answer": 3,
+      "explain": "Augmented Dickey–Fuller: **H0 = có unit root (không dừng)**, H1 = dừng. p nhỏ (< 0.05) mới bác bỏ H0 → kết luận dừng. Ở đây p = 0.62 → không đủ bằng chứng chuỗi dừng → lấy sai phân (và/hoặc log, seasonal differencing) rồi test lại. Bẫy: nhiều người nhớ ngược, nghĩ 'p > 0.05 ⇒ dừng' – điều đó đúng với **KPSS** (H0 = dừng), nên thực tế hay chạy cả hai. Không bác bỏ H0 cũng không 'chứng minh' gì về dạng trend; ADF dùng bình thường cho chuỗi theo tháng (có thể bổ sung test seasonal unit root như OCSB/CH); KPSS không 'thay thế' ADF mà bổ sung với H0 ngược lại."
+    },
+    {
+      "id": "mldl-033",
+      "sub": "ARIMA & ACF/PACF",
+      "level": 3,
+      "type": "single",
+      "trap": false,
+      "q": "Chuỗi gốc không dừng; sau khi lấy sai phân bậc 1 thì dừng. Trên chuỗi đã sai phân: **ACF giảm dần** (tắt dần theo hàm mũ/dao động), **PACF có spike có ý nghĩa ở lag 1 và 2 rồi cắt hẳn**. Mô hình khởi đầu hợp lý nhất?",
+      "options": [
+        "ARIMA(0,1,2)",
+        "ARIMA(2,1,0)",
+        "ARIMA(2,0,2)",
+        "ARIMA(1,2,1)"
+      ],
+      "answer": 1,
+      "explain": "Quy tắc Box–Jenkins: AR(p) có ACF tắt dần và **PACF cắt sau lag p**; MA(q) có **ACF cắt sau lag q** và PACF tắt dần. PACF cắt sau lag 2 + ACF tắt dần → AR(2). Đã sai phân 1 lần để dừng → d = 1. Vậy ARIMA(**2,1,0**). ARIMA(0,1,2) là trường hợp ngược (ACF cắt ở lag 2). d = 0 bỏ qua bước sai phân dù chuỗi gốc không dừng; d = 2 là over-differencing (thường làm xuất hiện ACF lag 1 âm mạnh ≈ −0.5). Sau khi fit vẫn cần kiểm tra residual (Ljung–Box), so sánh AIC/BIC và backtest."
+    },
+    {
+      "id": "mldl-034",
+      "sub": "Đánh giá forecasting",
+      "level": 2,
+      "type": "multi",
+      "trap": false,
+      "q": "Chọn các phát biểu ĐÚNG về đánh giá model forecasting.",
+      "options": [
+        "Dùng walk-forward backtest (vd `TimeSeriesSplit`, có `gap`): luôn train trên quá khứ, test trên tương lai",
+        "Luôn so sánh với naive (y_{t−1}) hoặc seasonal naive (y_{t−m}); thua seasonal naive là chuyện không hiếm",
+        "`KFold(shuffle=True)` vẫn ổn cho time series miễn là mọi feature đều là lag của quá khứ, vì khi đó không còn leakage",
+        "MASE < 1 nghĩa là MAE của model nhỏ hơn MAE của naive forecast một bước tính in-sample trên train (mẫu số của MASE)",
+        "Prophet tự mô hình hoá trend, seasonality và holiday bằng Fourier nên không cần backtest, chỉ cần xem đồ thị fit"
+      ],
+      "answer": [
+        0,
+        1,
+        3
+      ],
+      "explain": "Backtest kiểu walk-forward mô phỏng đúng cách model được dùng: tại mỗi mốc cắt, chỉ biết quá khứ. `gap` loại bỏ vài điểm giữa train và test để feature/target không chồng lấn (quan trọng khi horizon > 1). Naive và seasonal naive là baseline bắt buộc – rất mạnh với chuỗi mùa vụ. MASE (Hyndman & Koehler) = MAE_model / MAE_naive_in-sample, không phụ thuộc scale, không nổ khi y = 0; < 1 là tốt hơn naive. Shuffle KFold để model 'nhìn thấy tương lai' (nội suy thay vì ngoại suy) → điểm lạc quan. Prophet cũng chỉ là một model, có `prophet.diagnostics.cross_validation` chính vì cần backtest."
+    },
+    {
+      "id": "mldl-035",
+      "sub": "Grid vs Random vs Bayesian",
+      "level": 2,
+      "type": "single",
+      "trap": false,
+      "q": "Có 10 hyperparameter nhưng thực tế chỉ 2 cái ảnh hưởng mạnh tới kết quả; ngân sách là 60 lần train. Vì sao **random search** thường tốt hơn grid search trong tình huống này (Bergstra & Bengio, 2012)?",
+      "options": [
+        "Với cùng 60 lần thử, random search luôn tìm được global optimum còn grid search thì không",
+        "Random search dùng kết quả của các lần thử trước để chọn điểm tiếp theo, giống Bayesian optimization",
+        "Grid chỉ thử vài giá trị lặp lại trên mỗi chiều; random cho ~60 giá trị khác nhau trên chiều quan trọng",
+        "Grid search không thể chạy song song vì các điểm phụ thuộc thứ tự, còn random search thì có"
+      ],
+      "answer": 2,
+      "explain": "Với 10 chiều và 60 lần thử, grid chỉ cho mỗi chiều khoảng 1–2 giá trị (60^(1/10) ≈ 1.5); ngay cả grid nhỏ trên 2 chiều thì phần lớn các lần thử chỉ lặp lại cùng giá trị ở chiều quan trọng. Random search lấy mẫu độc lập nên mỗi lần thử là một giá trị mới trên MỌI chiều – 'hiệu dụng' cao khi chỉ vài chiều quan trọng (low effective dimensionality). Random search không có bảo đảm global optimum và **không** dùng lịch sử – đó là đặc điểm của Bayesian optimization (GP, TPE trong Optuna/Hyperopt). Cả grid và random đều song song hoá dễ dàng (embarrassingly parallel)."
+    },
+    {
+      "id": "mldl-036",
+      "sub": "Nested CV",
+      "level": 3,
+      "type": "numeric",
+      "trap": false,
+      "q": "Nested CV: outer 5-fold, inner 3-fold, grid search 4 giá trị `max_depth` × 5 giá trị `learning_rate`. Trong mỗi outer fold, sau inner CV chọn được cấu hình tốt nhất thì **refit 1 lần** trên toàn bộ outer-train để đánh giá trên outer-test. Tổng cộng phải **fit model bao nhiêu lần**? (không tính lần fit cuối cùng trên toàn bộ dữ liệu)",
+      "answer": 305,
+      "tolerance": 0,
+      "unit": "lần fit",
+      "explain": "Số cấu hình = 4 × 5 = 20. Mỗi outer fold: inner CV = 20 cấu hình × 3 fold = 60 lần fit, cộng 1 lần refit cấu hình tốt nhất = 61. Năm outer fold: 5 × 61 = **305**. Đây là cách `cross_val_score(GridSearchCV(..., cv=3, refit=True), X, y, cv=5)` hoạt động. Mục đích nested CV: điểm của cấu hình tốt nhất trong inner CV bị **lạc quan** (vì đã được chọn là max trong 20 lựa chọn), outer loop cho ước lượng không lệch của toàn bộ quy trình 'tune + train'. Lỗi hay gặp: quên lần refit (ra 300) hoặc nhân nhầm 5 × 3 × 20 × 2."
+    },
+    {
+      "id": "mldl-037",
+      "sub": "Activation & softmax",
+      "level": 1,
+      "type": "single",
+      "trap": false,
+      "q": "Chọn phát biểu **SAI** về activation function.",
+      "options": [
+        "Trừ max(x) khỏi logits trước khi tính softmax làm thay đổi phân phối xác suất đầu ra, nên chỉ dùng khi logits rất lớn",
+        "Đạo hàm sigmoid σ'(z) = σ(z)(1−σ(z)) lớn nhất bằng 0.25 và tiến về 0 khi |z| lớn (saturation), góp phần gây vanishing gradient ở mạng sâu",
+        "Dying ReLU: neuron có pre-activation luôn âm thì gradient bằng 0 và trọng số không được cập nhật nữa; Leaky ReLU/GELU giảm hiện tượng này",
+        "GELU(x) = x·Φ(x) với Φ là CDF của phân phối chuẩn, là hàm trơn và được dùng trong BERT/GPT"
+      ],
+      "answer": 0,
+      "explain": "softmax(x − k)_i = e^(x_i − k)/Σe^(x_j − k) = e^(x_i)·e^(−k)/(e^(−k)·Σe^(x_j)) = softmax(x)_i – hằng số triệt tiêu, nên trừ max **không đổi** kết quả mà chỉ tránh overflow (e^1000 = inf). Thư viện luôn làm vậy (log-sum-exp trick), nên nên áp dụng mọi lúc. Các phát biểu còn lại đúng: σ' cực đại 0.25 tại z = 0, nhân qua nhiều tầng → gradient co theo cấp số nhân; dying ReLU hay xảy ra khi LR quá lớn đẩy bias về rất âm; GELU (thường xấp xỉ bằng tanh) là activation mặc định trong BERT/GPT-2."
+    },
+    {
+      "id": "mldl-038",
+      "sub": "Initialization & normalization",
+      "level": 3,
+      "type": "multi",
+      "trap": false,
+      "q": "Chọn các phát biểu ĐÚNG về khởi tạo trọng số và normalization.",
+      "options": [
+        "He (Kaiming) init dùng Var(w) = 2/fan_in cho ReLU; Xavier/Glorot dùng Var(w) = 2/(fan_in + fan_out), hợp với tanh/sigmoid",
+        "LayerNorm khi eval dùng running mean/var tích luỹ trong lúc train giống BatchNorm, nên cũng phụ thuộc `model.eval()`",
+        "BatchNorm: train dùng thống kê của batch (và cập nhật running stats), eval dùng running stats",
+        "Batch rất nhỏ (vd 2 ảnh/GPU) làm thống kê BatchNorm nhiễu; GroupNorm/LayerNorm không phụ thuộc batch nên là lựa chọn thay thế",
+        "Khởi tạo toàn bộ trọng số bằng 0 là an toàn cho MLP có BatchNorm vì BN sẽ tự chuẩn hoá và phá vỡ tính đối xứng"
+      ],
+      "answer": [
+        0,
+        2,
+        3
+      ],
+      "explain": "He init bù cho việc ReLU loại bỏ một nửa tín hiệu (nên hệ số 2/fan_in), giữ variance activation ổn định qua các tầng; Xavier cân bằng forward/backward cho activation đối xứng quanh 0. BatchNorm có 2 chế độ: train (batch stats + cập nhật running_mean/var với momentum) và eval (running stats) – quên `eval()` thì predict một ảnh đơn lẻ cho kết quả khác khi predict theo batch. Batch nhỏ → ước lượng mean/var rất nhiễu → GroupNorm (Wu & He), LayerNorm, hoặc SyncBatchNorm. LayerNorm chuẩn hoá theo chiều feature của TỪNG mẫu nên train và eval giống nhau, không có running stats. Init toàn 0 khiến mọi neuron trong một tầng nhận cùng gradient → mãi đối xứng; BatchNorm không cứu được vì đầu vào của nó đã giống hệt nhau."
+    },
+    {
+      "id": "mldl-039",
+      "sub": "Inverted dropout",
+      "level": 1,
+      "type": "numeric",
+      "trap": true,
+      "q": "Trong PyTorch, `nn.Dropout(p=0.25)` ở **train mode**. Một phần tử đầu vào có giá trị 2.4 và **không bị drop**. Giá trị đầu ra của phần tử đó là bao nhiêu? (làm tròn 2 chữ số thập phân)",
+      "answer": 3.2,
+      "tolerance": 0.01,
+      "unit": "",
+      "explain": "PyTorch dùng **inverted dropout**: ở train, mỗi phần tử bị đặt về 0 với xác suất p, phần tử được giữ lại được **chia cho (1 − p)** để kỳ vọng đầu ra bằng đầu vào: 2.4 / (1 − 0.25) = 2.4 / 0.75 = **3.2**. Ở eval mode, dropout là identity (không nhân, không chia), nhờ đó inference không cần chỉnh gì. Các bẫy: hiểu p là xác suất GIỮ → chia 0.25 ra 9.6; nhân (1−p) như dropout 'cổ điển' (scale ở lúc test) → 1.8; hoặc nghĩ rằng phần tử giữ lại không đổi → 2.4. Trong Keras, `Dropout(rate)` cũng là tỷ lệ drop."
+    },
+    {
+      "id": "mldl-040",
+      "sub": "Adam: một bước tính tay",
+      "level": 3,
+      "type": "numeric",
+      "trap": true,
+      "q": "Adam với lr = 0.01, β1 = 0.9, β2 = 0.999, ε = 1e-8 (bỏ qua được), m₀ = v₀ = 0, có bias correction. Tham số θ₀ = 2.0, gradient ở bước đầu tiên g₁ = −3.0. Tính **θ₁** (làm tròn 4 chữ số thập phân).",
+      "answer": 2.01,
+      "tolerance": 0.0005,
+      "unit": "",
+      "explain": "m₁ = 0.9·0 + 0.1·(−3) = −0.3; v₁ = 0.999·0 + 0.001·9 = 0.009. Bias correction (t = 1): m̂ = −0.3/(1 − 0.9) = −3; v̂ = 0.009/(1 − 0.999) = 9. Cập nhật: θ₁ = θ₀ − lr·m̂/(√v̂ + ε) = 2.0 − 0.01·(−3/3) = **2.01**. Nhận xét quan trọng: ở bước đầu, m̂/√v̂ = g/|g| = ±1, nên độ lớn bước ≈ lr bất kể |g| lớn hay nhỏ – Adam bất biến với scale của gradient. Bẫy: dùng công thức SGD θ − lr·g = 2.03; hoặc quên bias correction: −0.3/√0.009 ≈ −3.16 → θ ≈ 2.0316. Không có bias correction, m và v bị lệch về 0 ở các bước đầu – đó là lý do Adam đưa vào hệ số 1/(1−βᵗ)."
+    },
+    {
+      "id": "mldl-041",
+      "sub": "Đếm tham số CNN",
+      "level": 3,
+      "type": "numeric",
+      "trap": true,
+      "q": "Đếm số tham số **trainable** (`requires_grad=True`) của model nhận ảnh RGB 64×64:\n\n```python\nnn.Sequential(\n    nn.Conv2d(3, 16, kernel_size=3, padding=1),\n    nn.BatchNorm2d(16), nn.ReLU(),\n    nn.Conv2d(16, 32, kernel_size=3, bias=False),\n    nn.BatchNorm2d(32), nn.ReLU(),\n    nn.AdaptiveAvgPool2d(1), nn.Flatten(),\n    nn.Linear(32, 10),\n)\n```",
+      "answer": 5482,
+      "tolerance": 0,
+      "unit": "tham số",
+      "explain": "Conv2d(3→16, 3×3, bias): 3·16·3·3 + 16 = 432 + 16 = 448. BatchNorm2d(16): weight γ + bias β = 2·16 = 32. Conv2d(16→32, 3×3, **bias=False**): 16·32·9 = 4.608. BatchNorm2d(32): 64. ReLU, AdaptiveAvgPool2d, Flatten: 0. Linear(32→10): 32·10 + 10 = 330. Tổng = 448 + 32 + 4.608 + 64 + 330 = **5.482**. Các bẫy: (1) running_mean, running_var, num_batches_tracked của BatchNorm là **buffer**, không phải parameter; (2) bias=False ở conv thứ hai (thường gặp vì BN phía sau đã có β); (3) kích thước ảnh 64×64 và padding KHÔNG ảnh hưởng số tham số conv – nhờ AdaptiveAvgPool nên Linear chỉ nhận 32 chiều. Kiểm tra: `sum(p.numel() for p in model.parameters() if p.requires_grad)`."
+    },
+    {
+      "id": "mldl-042",
+      "sub": "model.eval() vs torch.no_grad()",
+      "level": 1,
+      "type": "single",
+      "trap": true,
+      "q": "Khi chạy inference trong PyTorch, phát biểu nào ĐÚNG về `model.eval()` và `torch.no_grad()`?",
+      "options": [
+        "`model.eval()` tắt autograd cho mọi parameter nên khi đã gọi nó thì không cần `torch.no_grad()` nữa",
+        "`torch.no_grad()` tự động chuyển Dropout và BatchNorm sang chế độ eval nên không cần `model.eval()`",
+        "Hai lệnh tương đương về hiệu ứng, chỉ khác cú pháp (method vs context manager), dùng một là đủ",
+        "`eval()` đổi hành vi Dropout/BatchNorm nhưng không tắt autograd; `no_grad()` thì ngược lại → dùng cả hai"
+      ],
+      "answer": 3,
+      "explain": "Đây là hai cơ chế độc lập. `model.eval()` chỉ đặt cờ `self.training = False` cho mọi submodule – ảnh hưởng tới các layer có hành vi khác nhau giữa train/eval (Dropout, BatchNorm). Nó không đụng tới autograd: tensor đầu ra vẫn có `grad_fn`, vẫn tốn bộ nhớ lưu activation. `torch.no_grad()` (hoặc `torch.inference_mode()` nhanh hơn) tắt việc xây computation graph nhưng Dropout vẫn drop ngẫu nhiên nếu model đang ở train mode. Quên `eval()` → kết quả inference ngẫu nhiên/phụ thuộc batch; quên `no_grad()` → tốn VRAM, có thể OOM. Nhớ gọi lại `model.train()` sau khi validate trong vòng lặp train."
+    },
+    {
+      "id": "mldl-043",
+      "sub": "Debug vòng lặp train PyTorch",
+      "level": 3,
+      "type": "multi",
+      "trap": false,
+      "q": "Vòng lặp train multi-class sau có những lỗi nào? (chọn tất cả)\n\n```python\ncriterion = nn.CrossEntropyLoss()\ntotal = 0\nmodel.train()\nfor x, y in loader:                       # y: LongTensor chỉ số lớp\n    logits = model(x)\n    probs = torch.softmax(logits, dim=1)\n    loss = criterion(probs, y)\n    loss.backward()\n    optimizer.step()\n    total += loss\n```",
+      "options": [
+        "Đưa `probs` (đã softmax) vào `CrossEntropyLoss` là sai: loss này nhận logits thô vì bên trong đã có log_softmax",
+        "Thiếu `optimizer.zero_grad()` trong mỗi vòng lặp nên gradient bị cộng dồn qua các batch",
+        "`total += loss` giữ tham chiếu tới computation graph của mọi batch → bộ nhớ tăng dần; nên dùng `loss.item()`",
+        "`y` phải được one-hot encode trước khi đưa vào `CrossEntropyLoss`, không được là chỉ số lớp",
+        "Phải gọi `optimizer.step()` trước `loss.backward()` thì trọng số mới được cập nhật đúng"
+      ],
+      "answer": [
+        0,
+        1,
+        2
+      ],
+      "explain": "Lỗi softmax: `CrossEntropyLoss` = `LogSoftmax` + `NLLLoss`, nên softmax thêm lần nữa làm loss bị 'nén' (logit đầu vào nằm trong [0, 1]), gradient rất nhỏ, train chậm/kẹt – lỗi im lặng không báo exception. Thiếu zero_grad: PyTorch **cộng dồn** `.grad` qua các lần backward (tính năng dùng cho gradient accumulation), nên phải `zero_grad()` mỗi step. Cộng dồn tensor: `loss` là tensor gắn graph; cộng vào `total` khiến graph của mọi batch không được giải phóng → memory leak; dùng `loss.item()` hoặc `loss.detach()`. Ý 'phải one-hot' sai: CrossEntropyLoss nhận class index (LongTensor) – từ PyTorch 1.10 cũng nhận xác suất lớp (soft labels), nhưng không bắt buộc one-hot. Ý 'step trước backward' sai: thứ tự đúng là backward (tính grad) rồi step (dùng grad)."
+    },
+    {
+      "id": "mldl-044",
+      "sub": "Mixed precision & clipping",
+      "level": 3,
+      "type": "single",
+      "trap": false,
+      "q": "Train mixed precision fp16 với `torch.autocast` + `GradScaler`, và muốn gradient clipping `max_norm=1.0`. Thứ tự đúng trong mỗi step là?",
+      "options": [
+        "`scaler.scale(loss).backward()` → `clip_grad_norm_(params, 1.0)` → `scaler.unscale_(opt)` → `scaler.step(opt)` → `scaler.update()`",
+        "`scaler.scale(loss).backward()` → `scaler.unscale_(opt)` → `clip_grad_norm_(params, 1.0)` → `scaler.step(opt)` → `scaler.update()`",
+        "`loss.backward()` → `scaler.unscale_(opt)` → `clip_grad_norm_(params, 1.0)` → `scaler.step(opt)` → `scaler.update()`",
+        "`scaler.scale(loss).backward()` → `scaler.step(opt)` → `scaler.unscale_(opt)` → `clip_grad_norm_(params, 1.0)` → `scaler.update()`"
+      ],
+      "answer": 1,
+      "explain": "GradScaler nhân loss với hệ số S lớn (vd 65536) để gradient fp16 không bị underflow, nên gradient sau backward cũng đã nhân S. Nếu clip trước khi unscale, ngưỡng 1.0 áp lên gradient đã phóng đại S lần → clip gần như mọi lúc, sai ý nghĩa. Phải `scaler.unscale_(optimizer)` để đưa grad về thang thật, rồi clip; `scaler.step()` biết grad đã unscale nên không chia lần nữa, và tự bỏ qua step nếu có inf/NaN; cuối cùng `update()` điều chỉnh S. Gọi `loss.backward()` không qua `scaler.scale` thì gradient chưa nhân S nhưng `unscale_` vẫn chia cho S → gradient bị thu nhỏ sai và mất tác dụng chống underflow; còn unscale/clip sau `scaler.step()` là clip khi trọng số đã cập nhật xong – vô nghĩa. Với bf16 thường không cần GradScaler vì dải số mũ giống fp32."
+    },
+    {
+      "id": "mldl-045",
+      "sub": "Transfer learning & augmentation",
+      "level": 2,
+      "type": "multi",
+      "trap": false,
+      "q": "Fine-tune một CNN pretrained ImageNet cho bài toán phân loại 2.000 ảnh sản phẩm. Chọn các thực hành ĐÚNG.",
+      "options": [
+        "Freeze backbone, train head trước; sau đó unfreeze dần các block trên với learning rate nhỏ hơn head (discriminative learning rate)",
+        "Augmentation ngẫu nhiên chỉ áp dụng cho train; val/test chỉ resize/normalize (trừ khi chủ động dùng TTA)",
+        "Flip ngang luôn là augmentation an toàn cho mọi bài toán ảnh, kể cả nhận diện chữ số hay biển báo rẽ trái/phải",
+        "Khi fine-tune nên dùng learning rate lớn hơn lúc train from scratch để nhanh chóng thoát khỏi trọng số pretrained",
+        "Normalize input bằng đúng mean/std mà model pretrained đã dùng (vd mean/std của ImageNet)",
+        "Label noise không ảnh hưởng tới deep learning vì mạng đủ lớn sẽ tự bỏ qua các nhãn sai"
+      ],
+      "answer": [
+        0,
+        1,
+        4
+      ],
+      "explain": "Data ít + domain gần → feature pretrained đã tốt; train head trước tránh gradient lớn từ head khởi tạo ngẫu nhiên phá hỏng backbone, rồi unfreeze dần với LR nhỏ cho tầng sớm (feature chung: cạnh, texture) và lớn hơn cho tầng sau/head. Augmentation là regularization cho train; áp lên val/test làm metric nhiễu và không phản ánh production. Augmentation phải **giữ nguyên nhãn**: flip biển 'rẽ trái' thành 'rẽ phải' là sai nhãn. LR fine-tune thường NHỎ hơn (vd 1e-4 thay vì 1e-3) để không phá trọng số tốt. Input phải cùng phân phối với lúc pretrain. Mạng sâu có thể **học thuộc** cả nhãn sai (Zhang et al., 2017) → cần label smoothing, loss bền nhiễu, làm sạch nhãn (confident learning), xem lại các mẫu loss cao."
+    }
+  ]
+}

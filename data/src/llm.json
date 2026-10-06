@@ -1,0 +1,786 @@
+{
+  "id": "llm",
+  "name": "LLM: Kiến trúc, Training & Alignment",
+  "icon": "🧠",
+  "order": 2,
+  "notes": [
+    {
+      "title": "Pretraining objective & dữ liệu",
+      "md": "**Causal LM (next-token):** `L = −(1/T)·Σ_t log p_θ(x_{t+1} | x_≤t)` — teacher forcing + causal mask → 1 forward cho T dự đoán song song.\n\n- **Perplexity** = `exp(loss nats)` (= `2^loss` nếu loss tính bằng bit). Chỉ so sánh được khi **cùng tokenizer**; khác tokenizer → dùng **bits-per-byte** = tổng NLL / (ln2 · số byte).\n- **Pipeline dữ liệu:** extract text → lọc ngôn ngữ → heuristic/quality classifier (FineWeb-Edu, perplexity filter) → **dedup exact + fuzzy (MinHash-LSH)** → lọc PII/toxic → **decontamination** (n-gram overlap với test set) → **data mixture** (web, code, math, sách, đa ngữ; tăng tỷ trọng dữ liệu chất lượng cao ở cuối — annealing).\n- **Lặp dữ liệu:** tới ~4 epoch gần như ngang dữ liệu mới (Muennighoff 2023), nhiều hơn → lợi ích giảm, tăng memorization.\n- **Dấu hiệu contamination:** điểm cao bất thường nhưng tụt mạnh trên bản rephrase; model hoàn thành nguyên văn câu hỏi benchmark.\n- **Tokenizer:** byte-level BPE (không OOV). Vocab lớn → chuỗi ngắn hơn (tốt cho tiếng Việt/đa ngữ) nhưng embedding + LM head tăng `V·d` tham số. Llama 2: 32K, Llama 3: ~128K."
+    },
+    {
+      "title": "Scaling laws & ước lượng compute",
+      "md": "| | Kaplan 2020 | Chinchilla 2022 |\n|---|---|---|\n| N_opt | ∝ C^0.73 | ∝ C^0.5 |\n| D_opt | ∝ C^0.27 | ∝ C^0.5 |\n| Kết luận | ưu tiên model to | **~20 token / tham số** |\n\n- **Compute training:** `C ≈ 6·N·D` FLOPs (2 forward + 4 backward). Inference ≈ `2·N` FLOPs/token. Activation checkpointing → phần cứng chạy ~`8·N·D`.\n- **Compute-optimal:** `C = 6·N·20N = 120·N²` → `N = √(C/120)`. Ví dụ C = 1e23 → N ≈ 28.9B, D ≈ 577B.\n- **Thời gian:** `T = 6ND / (#GPU × peak × MFU)`. 70B × 1.4T trên 1024 A100 (312 TFLOPS), MFU 40% → ~53 ngày.\n- **MFU** = FLOPs hữu ích (6ND/s) / peak; **HFU** tính cả recompute. Thực tế 35–55% (PaLM 46%, Llama 3 405B 38–43%).\n- **Mốc:** Chinchilla 70B/1.4T vs Gopher 280B/300B (cùng compute). GPT-3: 175B/300B ≈ 3.15e23 FLOPs. Llama 3 405B/15.6T ≈ 3.8e25.\n- **Overtraining có chủ đích** (Llama 3 8B: 15T token ≈ 1875 token/tham số): Chinchilla không tính chi phí inference; model nhỏ train lâu rẻ hơn khi serve."
+    },
+    {
+      "title": "Kiến trúc LLM hiện đại (Llama-style)",
+      "md": "Decoder-only + **pre-norm RMSNorm** + **RoPE** + **SwiGLU** + **GQA** + linear không bias.\n\n- **RMSNorm:** `y = x/√(mean(x²)+ε)·γ` — không trừ mean, không β.\n- **RoPE:** xoay cặp chiều của Q, K góc `m·θ_i`, `θ_i = base^(−2i/d)` → `q_m·k_n` chỉ phụ thuộc `m−n`. Áp ở mọi layer, KHÔNG lên V. Base 10K (Llama 2), 500K (Llama 3).\n- **SwiGLU:** `W_down(SiLU(W_gate x) ⊙ W_up x)` — 3 ma trận nên hidden ≈ `8d/3` (Llama-2 7B: 11008 thay vì 16384).\n\n| Attention | KV head | KV cache | Ghi chú |\n|---|---|---|---|\n| MHA | = H | 1× | chất lượng chuẩn |\n| GQA | G (vd 8) | H/G nhỏ hơn | cân bằng, Llama 2 70B / Llama 3 |\n| MQA | 1 | H nhỏ hơn | nhanh nhất, dễ giảm chất lượng |\n\n- GQA giảm **KV cache & băng thông**, không giảm FLOPs QKᵀ (vẫn H query head).\n- **Sliding window (Mistral, W=4096):** O(n·W)/layer, rolling buffer KV cố định W, receptive field ≈ n_layer·W ≈ 131K."
+    },
+    {
+      "title": "Mixture of Experts",
+      "md": "- Router (linear + softmax) chọn **top-k** expert FFN cho mỗi token; output = tổng có trọng số. Attention/embedding **dùng chung**.\n- **Mixtral 8x7B:** ~46.7B total, ~12.9B active (top-2) — KHÔNG phải 56B.\n- **Compute/token ∝ active params; VRAM ∝ total params** → MoE tiết kiệm FLOPs, không tiết kiệm bộ nhớ.\n- **Cách tính:** active = n_layer·(k·expert + attention + router) + embedding + LM head. Expert SwiGLU = `3·d·d_ff`.\n- **Load-balancing loss (Switch):** `L_aux = α·N_e·Σ f_i·P_i` — f_i (tỷ lệ token, không khả vi) × P_i (xác suất router trung bình, khả vi). Tránh router collapse.\n- Biến thể: expert capacity + token dropping (Switch), shared expert + fine-grained experts, aux-loss-free balancing bằng bias (DeepSeek-V3).\n- Khó khăn: all-to-all communication (expert parallel), mất cân bằng tải, fine-tune dễ overfit, serving cần nhiều VRAM."
+    },
+    {
+      "title": "Long context & mở rộng context",
+      "md": "| Kỹ thuật | Ý chính | Cần fine-tune? |\n|---|---|---|\n| Ngoại suy thẳng | dùng vị trí > L_train | vỡ (góc quay lạ) |\n| **Position Interpolation** | `m' = m·L/L'`, nén đều | ngắn (~1K step) |\n| **NTK-aware** | tăng base: `b' = b·s^(d/(d−2))` | có thể không (dynamic NTK) |\n| **YaRN** | NTK-by-parts theo dải tần số + scale nhiệt độ logits | rất ít token |\n\n- PI nén cả tần số cao → mất độ phân giải cục bộ; NTK/YaRN giữ tần số cao, nội suy tần số thấp.\n- RoPE scaling **không** giảm KV cache; context dài vẫn tốn bộ nhớ tuyến tính, attention O(n²).\n- **Lost in the middle:** chữ U — đầu/cuối tốt, giữa kém. RAG: ít chunk tốt (rerank), đặt chunk quan trọng ở đầu/cuối.\n- Pass needle-in-a-haystack ≠ suy luận tốt trên context dài (RULER)."
+    },
+    {
+      "title": "Ổn định training: precision, optimizer, LR",
+      "md": "| Format | Exponent | Mantissa | Max | Loss scaling |\n|---|---|---|---|---|\n| fp32 | 8 | 23 | 3.4e38 | không |\n| fp16 | 5 | 10 | 65504 | **cần** |\n| bf16 | 8 | 7 | 3.4e38 | thường không |\n\n- **Loss scaling:** nhân loss × S → backward → unscale → skip step nếu inf/NaN.\n- bf16 kém chính xác hơn fp16 → vẫn giữ **master weights fp32**.\n- **AdamW:** decay tách khỏi adaptive scaling (`w −= lr·λ·w`); Adam+L2 bị chia √v̂. WD ~0.1, không decay bias/norm.\n- **LR schedule:** linear warmup (vài trăm–vài nghìn step; Adam's v chưa ổn định lúc đầu) → cosine decay về ~10% max LR (hoặc WSD: warmup-stable-decay).\n- **Gradient clipping** global norm 1.0. Loss spike → rollback checkpoint, skip batch, giảm LR; QK-norm, z-loss giúp ổn định logits.\n- Adam β₂ = 0.95 cho LLM (phản ứng nhanh hơn với gradient lớn)."
+    },
+    {
+      "title": "Bộ nhớ training & parallelism",
+      "md": "**Model states Adam mixed precision = 16 byte/tham số:** 2 (bf16 W) + 2 (bf16 grad) + 4 (fp32 master) + 4 (m) + 4 (v). 7B → 112 GB (+ activation).\n\n| Chiến lược | Shard | Bộ nhớ/GPU (Ψ tham số, N_d GPU) | Comm |\n|---|---|---|---|\n| DDP | không | 16Ψ | 2Ψ |\n| ZeRO-1 | optimizer | 4Ψ + 12Ψ/N_d | 2Ψ |\n| ZeRO-2 | + grad | 2Ψ + 14Ψ/N_d | 2Ψ |\n| ZeRO-3 / FSDP | + params | 16Ψ/N_d | 3Ψ (1.5×) |\n\n- Ví dụ 7B, 8 GPU: ZeRO-1 38.5 GB, ZeRO-2 26.25 GB, ZeRO-3 14 GB.\n- **Tensor parallel:** chia matmul trong layer, all-reduce mỗi layer → trong node (NVLink). **Pipeline parallel:** chia layer theo stage, p2p → giữa node; bubble ≈ `(p−1)/(m+p−1)`.\n- **Gradient accumulation:** global batch = #GPU × micro-batch × accum. Loss phải chuẩn hoá theo **tổng token hợp lệ của cả global batch** (bug HF 10/2024).\n- **Activation checkpointing:** tăng ~33% compute, giảm mạnh activation memory; MFU không tăng (HFU tăng)."
+    },
+    {
+      "title": "SFT, chat template & PEFT",
+      "md": "- **SFT:** dữ liệu (instruction, response) theo **chat template** (ChatML, Llama 3...). **Loss masking**: label −100 cho system/user, chỉ tính loss trên assistant **kể cả token EOS/end-of-turn** (thiếu → model không dừng).\n- Dùng `apply_chat_template` giống nhau ở train và inference; cẩn thận `pad = eos` rồi mask nhầm EOS.\n- **Catastrophic forgetting:** replay dữ liệu chung, LoRA/LR nhỏ/ít epoch, eval regression (MMLU, IFEval).\n\n**LoRA:** `W' = W + (α/r)·B·A`; A random, **B = 0**; params = `r·(d_in + d_out)` mỗi ma trận (chú ý k/v nhỏ hơn ở GQA). Merge được → 0 latency. α/r ≈ hệ số LR; rsLoRA dùng α/√r.\n\n**QLoRA:** base **NF4** (quantile của N(0,1), block 64) frozen + dequantize bf16 khi tính; **double quantization** 0.5 → 0.127 bit/tham số (tiết kiệm 0.373 bit); **paged optimizers** (unified memory). 65B trên 1 GPU 48GB.\n\n| PEFT | Merge được | Chi phí inference |\n|---|---|---|\n| LoRA | có | 0 |\n| Adapter (Houlsby) | không | + latency |\n| Prompt tuning | không | + token input |\n| Prefix tuning | không | + KV mỗi layer |"
+    },
+    {
+      "title": "Alignment: RLHF, DPO & biến thể",
+      "md": "**RLHF:** SFT → Reward model (Bradley–Terry: `L = −log σ(r(x,y_w) − r(x,y_l))`) → PPO tối đa `r − β·KL(π‖π_ref)`. Cần 4 model: policy, ref, RM, critic.\n\n**DPO:** `L = −log σ(β[log(π/π_ref)(y_w) − log(π/π_ref)(y_l)])`. Implicit reward `β·log(π/π_ref)`. Không RM, không sampling online, vẫn cần ref. Ban đầu loss = ln2 ≈ 0.693. β lớn → bám ref chặt hơn.\n\n| Phương pháp | Dữ liệu | Ref model? | Ý chính |\n|---|---|---|---|\n| DPO | cặp | có | logistic trên log-ratio |\n| IPO | cặp | có | loss bình phương, chống overfit |\n| KTO | **nhãn đơn tốt/xấu** | có | prospect theory |\n| ORPO | cặp | **không** | SFT + odds-ratio, 1 giai đoạn |\n| SimPO | cặp | **không** | reward = log-prob trung bình theo độ dài + margin γ |\n\n- **Reward hacking:** dài dòng, sycophancy; chống bằng KL, ensemble RM, length normalization, verifiable rewards. β → 0 làm tệ hơn.\n- **RLAIF / Constitutional AI:** self-critique & revision theo nguyên tắc (SL) → preference do AI gán nhãn (RL)."
+    },
+    {
+      "title": "GRPO, reasoning models & test-time compute",
+      "md": "- **GRPO** (DeepSeekMath): mỗi prompt sample G output, `Â_i = (r_i − mean)/std` trong nhóm; **không critic**; clip kiểu PPO + KL vào loss. Nhóm toàn đúng/toàn sai → advantage 0 (lãng phí; DAPO dùng dynamic sampling).\n- **RLVR** (RL with verifiable rewards): đáp án toán, unit test, format — ít bị hack hơn neural RM.\n- **DeepSeek-R1-Zero:** RL thuần từ V3-Base, reward theo luật (accuracy + format) → CoT dài tự phát ('aha moment'), nhưng khó đọc. **R1:** cold-start SFT → RL → rejection sampling SFT → RL; distill sang Qwen/Llama bằng SFT.\n- **Test-time compute:** CoT, **self-consistency** (sample T>0, majority vote đáp án cuối), best-of-N + verifier/PRM, tree search, long CoT. Greedy N lần = 1 lần.\n- ORM (outcome reward) vs PRM (process reward, chấm từng bước)."
+    },
+    {
+      "title": "Distillation, hallucination, emergent & ICL",
+      "md": "**Distillation:**\n- Logit KD (Hinton): `softmax(z/T)` cho cả teacher & student, loss mềm × **T²**; cần **cùng tokenizer**. T > 1 → mềm hơn.\n- Forward KL(p‖q): mean-seeking/mode-covering; Reverse KL(q‖p): mode-seeking (MiniLLM).\n- Sequence-level KD (Kim & Rush): SFT trên output teacher → dùng được với API, khác tokenizer (synthetic data, R1-distill).\n\n**Hallucination:** objective likelihood ≠ factuality; long-tail/knowledge cutoff; SFT trên kiến thức mới làm tăng bịa (Gekhman 2024); eval nhị phân thưởng đoán; snowballing. Temperature 0 và RAG **không** loại bỏ hoàn toàn.\n\n**Emergent abilities:** Wei 2022 (xuất hiện đột ngột) vs Schaeffer 2023 (mirage do metric không liên tục như exact match ≈ p^L).\n\n**ICL:** không cập nhật trọng số; nhạy định dạng/thứ tự; nhãn random chỉ giảm nhẹ ở nhiều task (Min 2022) nhưng model rất lớn có thể theo nhãn lật (Wei 2023); base GPT-3 đã few-shot được."
+    },
+    {
+      "title": "Câu hỏi phỏng vấn hay gặp & lỗi thường gặp",
+      "md": "**Hay hỏi:**\n- Tính nhanh: FLOPs (6ND), thời gian train với MFU, VRAM full FT (16 byte/param), LoRA params, MoE active params, KV cache của GQA.\n- Vì sao Llama dùng RMSNorm/RoPE/SwiGLU/GQA? Vì sao pre-norm?\n- Chinchilla vs overtraining; khi nào chọn model nhỏ train lâu?\n- ZeRO 1/2/3 khác gì FSDP, TP, PP? Chọn layout cho N GPU, M node.\n- LoRA vs QLoRA vs full FT; chọn r, α, target modules.\n- RLHF vs DPO vs GRPO: cần model nào, dữ liệu gì, ưu/nhược.\n\n**Lỗi thường gặp:**\n- So sánh perplexity giữa tokenizer khác nhau.\n- Dùng 2ND thay 6ND; quên MFU; nhầm GB/GiB, bit/byte.\n- Coi MoE tiết kiệm VRAM; tính Mixtral = 56B.\n- Mask mất EOS khi SFT; template train ≠ inference.\n- Gradient accumulation chuẩn hoá loss theo micro-batch.\n- Khởi tạo cả A, B của LoRA bằng 0; đổi r mà giữ α và LR.\n- Giảm β KL tưởng giảm reward hacking."
+    }
+  ],
+  "questions": [
+    {
+      "id": "llm-001",
+      "sub": "Pretraining objective",
+      "level": 1,
+      "type": "single",
+      "trap": false,
+      "q": "Khi pretrain một LLM decoder-only với causal language modeling (teacher forcing), loss được tính như thế nào?",
+      "options": [
+        "Mỗi vị trí t dự đoán token t+1 từ prefix thật (có causal mask); loss = trung bình −log p(token đúng) trên mọi vị trí",
+        "Causal mask chỉ bật khi inference; lúc training vị trí t được nhìn token t+1 để gradient ổn định và hội tụ nhanh hơn",
+        "Mô hình tự sinh cả chuỗi rồi so với ground truth; loss chỉ tính ở token cuối cùng để tránh rò rỉ thông tin từ các token trước",
+        "Loss là MSE giữa embedding dự đoán và embedding của token thật ở mỗi vị trí; perplexity bằng căn bậc hai của loss"
+      ],
+      "answer": 0,
+      "explain": "CLM tối ưu cross-entropy next-token: L = −(1/T)·Σ_t log p_θ(x_{t+1} | x_≤t). Nhờ teacher forcing + causal mask, MỘT lần forward cho T dự đoán song song (mỗi vị trí là một ví dụ huấn luyện) — đây là lý do pretraining rất hiệu quả về dữ liệu. Perplexity = exp(loss trung bình theo nats); nếu loss tính bằng bit (log₂) thì PPL = 2^loss. Phương án ‘chỉ tính ở token cuối’ lãng phí T−1 tín hiệu; ‘MSE trên embedding’ (kèm perplexity = căn của loss) không phải objective của LLM (đầu ra là phân phối softmax trên vocab). Phương án bỏ causal mask khi training là bẫy: nếu vị trí t nhìn thấy t+1, mô hình chỉ việc copy và loss về ~0 nhưng không sinh được gì lúc inference (train/inference mismatch)."
+    },
+    {
+      "id": "llm-002",
+      "sub": "Perplexity & tokenizer",
+      "level": 2,
+      "type": "single",
+      "trap": true,
+      "q": "Trên CÙNG một tập văn bản validation, model A (tokenizer vocab 32K) đạt perplexity 8.0, model B (tokenizer vocab 128K) đạt perplexity 10.0. Kết luận nào đúng?",
+      "options": [
+        "Model B tốt hơn: vocab gấp 4 nên phải chia perplexity cho 4, tức 10/4 = 2.5, thấp hơn hẳn 8.0 của model A",
+        "So sánh trực tiếp được nếu hai model có cùng số tham số, cùng dữ liệu train và cùng số token đã thấy",
+        "Model A tốt hơn: cùng tập validation nên perplexity thấp hơn luôn nghĩa là dự đoán văn bản đó tốt hơn",
+        "Chưa so sánh được: PPL theo token phụ thuộc tokenizer; phải quy về đơn vị chung như bits-per-byte"
+      ],
+      "answer": 3,
+      "explain": "Per-token PPL = exp(NLL trung bình mỗi token). Vocab lớn hơn → mỗi token chứa nhiều ký tự/thông tin hơn → cùng văn bản ít token hơn, nên NLL mỗi token tự nhiên cao hơn. Ví dụ: văn bản có n token với tokenizer A, chỉ 0.75n token với tokenizer B. Tổng NLL của A = n·ln 8 ≈ 2.079n nats; của B = 0.75n·ln 10 ≈ 1.727n nats → B thực ra nén văn bản TỐT hơn dù PPL per-token cao hơn. Vì vậy so sánh giữa các tokenizer phải dùng bits-per-byte/bits-per-character hoặc PPL per-word. Phép chia ‘10/4’ là bịa, không có cơ sở; cùng số tham số/cùng data không giải quyết vấn đề đơn vị. Bên lề về vocab size: vocab lớn → chuỗi ngắn hơn (rẻ attention, context hiệu dụng dài hơn, tốt cho tiếng Việt/đa ngữ), nhưng embedding + LM head tăng V×d tham số, softmax đắt hơn và token hiếm được train ít (Llama 2: 32K, Llama 3: ~128K)."
+    },
+    {
+      "id": "llm-003",
+      "sub": "Data pipeline pretraining",
+      "level": 2,
+      "type": "multi",
+      "trap": false,
+      "q": "Chọn TẤT CẢ các thực hành ĐÚNG/hợp lý trong pipeline dữ liệu pretraining LLM.",
+      "options": [
+        "Lặp lại domain chất lượng cao (sách, Wikipedia) hàng chục epoch luôn có lợi, vì dữ liệu sạch không gây overfit",
+        "Decontamination: loại tài liệu có n-gram trùng với test set benchmark trước khi train",
+        "Near-dedup (vd MinHash-LSH) ngoài exact dedup, vì trùng lặp tăng memorization và lãng phí compute",
+        "Chỉ cần dedup theo URL là đủ, vì nội dung trùng lặp trên web gần như luôn được đăng lại dưới cùng một URL",
+        "Lọc chất lượng bằng heuristic (độ dài, tỷ lệ ký tự, ngôn ngữ) và/hoặc classifier/perplexity filter"
+      ],
+      "answer": [
+        1,
+        2,
+        4
+      ],
+      "explain": "Pipeline điển hình (RefinedWeb, FineWeb, Dolma, Llama 3): trích text → lọc ngôn ngữ → heuristic/quality filter (có thể dùng classifier ‘giống Wikipedia/sách giáo khoa’ như FineWeb-Edu) → dedup (exact + fuzzy MinHash-LSH) → lọc PII/toxic → decontamination → trộn theo data mixture. Dedup theo URL bỏ sót rất nhiều bản sao (bài báo đăng lại, template, boilerplate) nên phải dedup nội dung. Lặp dữ liệu: Muennighoff et al. (2023) cho thấy lặp tới ~4 epoch gần như ngang dữ liệu mới, nhưng lặp nhiều hơn thì lợi ích giảm mạnh và có thể overfit/memorize — ‘luôn có lợi’ là sai. Contamination làm benchmark ảo cao; dấu hiệu: điểm giảm mạnh trên bản viết lại (rephrased) của cùng câu hỏi, hoặc model hoàn thành nguyên văn câu hỏi benchmark."
+    },
+    {
+      "id": "llm-004",
+      "sub": "Scaling laws",
+      "level": 2,
+      "type": "single",
+      "trap": true,
+      "q": "Phát biểu nào ĐÚNG về khác biệt giữa scaling law của Kaplan et al. (2020) và Chinchilla (Hoffmann et al., 2022)?",
+      "options": [
+        "Hai nghiên cứu cùng kết luận N_opt ∝ C^0.73; Chinchilla chỉ hiệu chỉnh lại hằng số loss nhờ fit nhiều model hơn",
+        "Kaplan: N_opt ∝ C^0.73 (ưu tiên model to); Chinchilla: N và D cùng ∝ C^0.5, tức ~20 token mỗi tham số",
+        "Chinchilla 70B thắng Gopher 280B chủ yếu vì được cấp compute gấp khoảng 4 lần, chứ không phải nhờ tỷ lệ N/D",
+        "Chinchilla khuyến nghị ~20 tham số cho mỗi token huấn luyện, nên model 70B tối ưu chỉ cần khoảng 3.5B token"
+      ],
+      "answer": 1,
+      "explain": "Chinchilla (70B tham số, 1.4T token) dùng CÙNG compute với Gopher (280B, 300B token) nhưng thắng trên hầu hết benchmark → các model thời đó (GPT-3 175B/300B token ≈ 1.7 token/tham số) bị undertrained. Kaplan đánh giá thấp vai trò của data một phần do dùng LR schedule cố định không khớp độ dài run và model nhỏ, nên kết luận N_opt ∝ C^0.73, D_opt ∝ C^0.27. Chinchilla dùng 3 cách tiếp cận đều cho a ≈ b ≈ 0.5. Bẫy 1: đảo ngược tỷ lệ — là ~20 TOKEN/tham số (70B × 20 = 1.4T), không phải 20 tham số/token. Bẫy 2: Chinchilla không dùng nhiều compute hơn Gopher; điểm mấu chốt là phân bổ compute khác. Lưu ý: ‘20 token/tham số’ là xấp xỉ compute-optimal cho training, không phải tối ưu cho deployment."
+    },
+    {
+      "id": "llm-005",
+      "sub": "Compute FLOPs",
+      "level": 1,
+      "type": "numeric",
+      "trap": false,
+      "q": "Ước lượng compute huấn luyện (pretraining) một mô hình dense **7B** tham số trên **2T** token theo quy tắc `C ≈ 6·N·D`. Nhập kết quả theo đơn vị **10^22 FLOPs** (vd nhập 1.5 nghĩa là 1.5×10^22), làm tròn 1 chữ số thập phân.",
+      "answer": 8.4,
+      "tolerance": 0.05,
+      "unit": "×10^22 FLOPs",
+      "explain": "C ≈ 6·N·D = 6 × 7×10⁹ × 2×10¹² = 84×10²¹ = 8.4×10²² FLOPs. Hệ số 6 = 2 (forward: mỗi tham số 1 multiply-add = 2 FLOPs/token) + 4 (backward ≈ 2× forward: gradient theo activation và theo weight). Bẫy: 2·N·D là compute của forward/inference, không phải training. Công thức bỏ qua FLOPs của attention score (≈ 6·n_layer·seq·d_model mỗi token), nhỏ khi seq ≪ 12·d_model; nếu dùng activation checkpointing thì phần cứng thực tế tính ~8·N·D. Mốc để nhớ: GPT-3 175B × 300B token ≈ 3.15×10²³; Llama 3 405B × 15.6T token ≈ 3.8×10²⁵ FLOPs."
+    },
+    {
+      "id": "llm-006",
+      "sub": "Chinchilla compute-optimal",
+      "level": 3,
+      "type": "numeric",
+      "trap": false,
+      "q": "Với ngân sách compute **C = 10^23 FLOPs**, dùng `C ≈ 6·N·D` và quy tắc Chinchilla `D ≈ 20·N`, số tham số compute-optimal N là bao nhiêu **tỷ (B, 10^9)**? Làm tròn 1 chữ số thập phân.",
+      "answer": 28.9,
+      "tolerance": 0.2,
+      "unit": "B tham số",
+      "explain": "Thay D = 20N: C = 6·N·20N = 120·N² → N = √(C/120) = √(10²³/120) = √(8.333×10²⁰) ≈ 2.887×10¹⁰ ≈ 28.9B tham số. Khi đó D = 20N ≈ 577B token (kiểm tra: 6 × 2.887e10 × 5.77e11 ≈ 1e23). Hệ quả: vì N ∝ √C, tăng compute 10× thì N và D chỉ tăng mỗi cái √10 ≈ 3.16×. Bẫy thường gặp: quên rằng D cũng phụ thuộc N và giải N = C/(6·20) (sai đơn vị), hoặc dùng 2·N·D. Nhớ rằng compute-optimal chỉ tối ưu chi phí TRAINING; model dùng để serve nhiều thường được ‘overtrain’ (nhiều token/tham số hơn)."
+    },
+    {
+      "id": "llm-007",
+      "sub": "Thời gian training & MFU",
+      "level": 2,
+      "type": "numeric",
+      "trap": false,
+      "q": "Huấn luyện mô hình dense **70B** trên **1.4T** token bằng **1024 GPU A100** (peak bf16 dense = **312 TFLOPS**/GPU) với **MFU = 40%**. Dùng `C ≈ 6·N·D`, ước lượng thời gian huấn luyện theo **ngày** (1 ngày = 86 400 s), làm tròn 1 chữ số thập phân.",
+      "answer": 53.3,
+      "tolerance": 0.5,
+      "unit": "ngày",
+      "explain": "Bước 1 — compute: C = 6 × 70×10⁹ × 1.4×10¹² = 5.88×10²³ FLOPs. Bước 2 — throughput thực: 1024 × 312×10¹² × 0.40 ≈ 1.278×10¹⁷ FLOP/s. Bước 3 — thời gian: 5.88×10²³ / 1.278×10¹⁷ ≈ 4.60×10⁶ s ≈ 53.3 ngày. Bẫy: dùng peak FLOPS mà quên MFU (ra ~21 ngày, quá lạc quan) hoặc dùng peak sparse (624 TFLOPS) của A100. MFU thực tế cho LLM lớn thường 35–55% (PaLM ~46%, Llama 3 405B ~38–43%). Công thức tổng quát: T ≈ 6·N·D / (số GPU × peak × MFU) — rất hay được hỏi để kiểm tra ‘cảm giác số’ của ứng viên."
+    },
+    {
+      "id": "llm-008",
+      "sub": "Scaling laws",
+      "level": 3,
+      "type": "single",
+      "trap": true,
+      "q": "Llama 3 8B được huấn luyện trên hơn 15T token, gấp khoảng 75 lần mức Chinchilla-optimal (~200B token cho 8B). Lý do hợp lý nhất cho lựa chọn này?",
+      "options": [
+        "Chinchilla chỉ tối ưu compute TRAINING; model serve rất nhiều lần thì nhỏ mà train lâu rẻ hơn, và loss vẫn giảm khi thêm data",
+        "Chinchilla law chỉ được fit cho model trên 70B; với model 8B, số token tối ưu theo định nghĩa phải lớn hơn khoảng 75 lần",
+        "Train vượt Chinchilla-optimal gây overfit nặng, nên Meta phải tăng dropout lên 0.1 và weight decay để bù lại sau mốc 2T token",
+        "Công thức 6·N·D không áp dụng cho model dùng GQA, nên compute thực tế nhỏ hơn ~75 lần và vẫn nằm trong mức Chinchilla"
+      ],
+      "answer": 0,
+      "explain": "Chinchilla trả lời câu hỏi: với C FLOPs training, chọn N, D nào để loss thấp nhất. Nó KHÔNG tính chi phí inference. Khi model được dùng cho hàng tỷ request, tổng chi phí vòng đời = training + inference ∝ N × số token phục vụ; một model nhỏ được ‘overtrain’ đạt chất lượng tương đương model lớn hơn mà serve rẻ hơn (Sardana et al. 2023 ‘Beyond Chinchilla-Optimal’). Meta báo cáo hiệu năng 8B/70B vẫn tăng log-linear tới 15T token. Các phương án còn lại sai: Chinchilla fit trên dải 70M–16B, không có ngưỡng ‘trên 70B’; pretraining ~1 epoch trên dữ liệu khổng lồ hiếm khi overfit (Llama không dùng dropout); GQA chỉ làm thay đổi nhỏ số tham số attention, 6·N·D vẫn đúng. Bẫy: nhầm ‘compute-optimal’ với ‘tối ưu nói chung’."
+    },
+    {
+      "id": "llm-009",
+      "sub": "MFU & hiệu năng training",
+      "level": 3,
+      "type": "multi",
+      "trap": true,
+      "q": "Về Model FLOPs Utilization (MFU) khi huấn luyện LLM, chọn TẤT CẢ phát biểu ĐÚNG.",
+      "options": [
+        "FLOPs tính lại do activation checkpointing không được tính vào MFU, chỉ tính vào HFU",
+        "Pipeline bubble và giao tiếp all-reduce/all-gather không overlap được với compute làm MFU giảm",
+        "Bật activation checkpointing làm MFU tăng khoảng 33%, vì GPU phải thực hiện thêm một lượt forward mỗi step",
+        "MFU 40–55% là dấu hiệu cấu hình lỗi; với FlashAttention và bf16, training LLM tốt thường đạt MFU trên 90%",
+        "MFU = FLOPs lý thuyết của mô hình mỗi giây (≈ 6·N·token/s) ÷ peak FLOPs của phần cứng"
+      ],
+      "answer": [
+        0,
+        1,
+        4
+      ],
+      "explain": "MFU (giới thiệu trong PaLM) đo throughput ‘có ích’: chỉ tính FLOPs cần thiết của mô hình (≈6ND), độc lập với cách cài đặt. HFU tính cả FLOPs thực sự chạy trên phần cứng, gồm forward lặp lại do activation checkpointing. Bẫy chính: checkpointing làm HFU tăng nhưng MFU KHÔNG tăng — thậm chí giảm vì thời gian mỗi step dài hơn (~+33% compute) trong khi FLOPs ‘có ích’ không đổi. Nguồn làm giảm MFU: bubble của pipeline parallel, giao tiếp không overlap, micro-batch nhỏ (matmul kém hiệu quả), kernel attention chưa tối ưu, data loader chậm. Con số thực tế: PaLM 540B ~46%, Llama 3 405B ~38–43% (bf16) — 90% là phi thực tế với LLM phân tán quy mô lớn."
+    },
+    {
+      "id": "llm-010",
+      "sub": "Kiến trúc LLM hiện đại",
+      "level": 1,
+      "type": "multi",
+      "trap": false,
+      "q": "Thành phần nào có trong kiến trúc kiểu Llama (Llama 2/3, Mistral) so với Transformer gốc (Vaswani 2017)? Chọn TẤT CẢ đáp án đúng.",
+      "options": [
+        "FFN dùng SwiGLU thay cho ReLU",
+        "RoPE áp lên Q và K trong mỗi layer attention",
+        "Post-LayerNorm (norm đặt sau residual) như bản gốc",
+        "Pre-normalization bằng RMSNorm (chuẩn hoá theo RMS, không trừ mean, không có bias β)",
+        "Learned absolute position embedding cộng vào embedding đầu vào",
+        "Decoder-only với causal mask, không có encoder và cross-attention"
+      ],
+      "answer": [
+        0,
+        1,
+        3,
+        5
+      ],
+      "explain": "Công thức ‘Llama’: decoder-only + pre-norm RMSNorm + RoPE + SwiGLU + (GQA ở các bản lớn/mới) + linear không bias. RMSNorm: y = x / √(mean(x²) + ε) · γ — bỏ bước trừ mean và β của LayerNorm, rẻ hơn mà chất lượng tương đương. Pre-norm (norm trước sublayer, residual đi thẳng) giúp gradient ổn định khi rất sâu; post-LN của bản gốc cần warmup cẩn thận và dễ phân kỳ. Learned absolute PE (GPT-2, BERT) không ngoại suy được ngoài độ dài đã train; Llama dùng RoPE (vị trí tương đối, áp ở mỗi layer lên Q, K)."
+    },
+    {
+      "id": "llm-011",
+      "sub": "RoPE",
+      "level": 2,
+      "type": "single",
+      "trap": false,
+      "q": "Phát biểu nào ĐÚNG về Rotary Position Embedding (RoPE)?",
+      "options": [
+        "Học một bias vô hướng cho mỗi khoảng cách m − n rồi cộng vào attention logits trước softmax ở mỗi head",
+        "Xoay từng cặp chiều của Q và K một góc m·θ_i, nên q_m·k_n chỉ phụ thuộc khoảng cách m − n",
+        "Xoay cả Q, K và V theo vị trí, để output của attention cũng mang thông tin vị trí tuyệt đối sang layer sau",
+        "Cộng vector sin/cos vào embedding đầu vào một lần ở layer đầu, giống Transformer gốc nhưng với base 10 000"
+      ],
+      "answer": 1,
+      "explain": "RoPE nhân Q, K ở vị trí m với ma trận xoay R(m·θ). Vì R(mθ)ᵀR(nθ) = R((n−m)θ), score q_mᵀk_n chỉ phụ thuộc vị trí tương đối — mã hoá vị trí tuyệt đối nhưng attention cảm nhận tương đối. RoPE áp ở MỖI layer và chỉ lên Q, K (không lên V). Các chiều i nhỏ quay nhanh (tần số cao, nắm thông tin cục bộ), chiều i lớn quay chậm (tần số thấp, khoảng cách xa). Base: Llama 2 dùng 10 000, Llama 3 dùng 500 000 để hỗ trợ context dài hơn. Phương án ‘bias theo khoảng cách cộng vào logits’ mô tả T5 relative bias (học) / ALiBi (cố định, tuyến tính) — gần nghĩa nhưng là cơ chế khác."
+    },
+    {
+      "id": "llm-012",
+      "sub": "SwiGLU FFN",
+      "level": 3,
+      "type": "single",
+      "trap": false,
+      "q": "Llama-2 7B có d_model = 4096 nhưng intermediate size của FFN là 11008 thay vì 4 × 4096 = 16384. Vì sao?",
+      "options": [
+        "Vì SiLU dễ bão hoà khi hidden lớn, nên hidden phải giảm còn khoảng 2/3 mức chuẩn để gradient không bị triệt tiêu",
+        "SwiGLU có 3 ma trận thay vì 2, nên hidden giảm còn ≈ (2/3)·4d để giữ số tham số, rồi làm tròn lên bội 256",
+        "Để giảm số tham số FFN khoảng 1/3 so với FFN ReLU chuẩn, bù cho phần tham số attention tăng thêm khi dùng GQA",
+        "Vì 11008 = 32 head × 128 × 2.6875 là kích thước chia hết tối ưu cho tensor parallel đúng 8 GPU trong một node"
+      ],
+      "answer": 1,
+      "explain": "SwiGLU: FFN(x) = W_down · (SiLU(W_gate·x) ⊙ W_up·x) → 3 ma trận d×h. FFN chuẩn có 2 ma trận d×4d = 8d² tham số; để giữ 3·d·h ≈ 8d² thì h ≈ 8d/3 ≈ 10923 (d = 4096). Làm tròn lên bội số 256 (thân thiện với kernel/TP): ⌈10922.67/256⌉ × 256 = 43 × 256 = 11008. Kiểm tra: 3 × 4096 × 11008 ≈ 135.3M ≈ 2 × 4096 × 16384 ≈ 134.2M tham số mỗi layer. Phương án ‘giảm 1/3 tham số’ sai: tổng tham số FFN gần như KHÔNG đổi, chỉ hidden giảm. Thêm nữa, Llama-2 7B dùng MHA (GQA chỉ có ở 34B/70B). SwiGLU được chọn vì cho perplexity tốt hơn ReLU/GELU ở cùng compute (Shazeer 2020, ‘GLU Variants Improve Transformer’)."
+    },
+    {
+      "id": "llm-013",
+      "sub": "GQA / MQA",
+      "level": 2,
+      "type": "single",
+      "trap": true,
+      "q": "Llama-2 70B dùng attention với 64 query head và 8 KV head (head_dim 128). So với MHA 64 head cùng cấu hình, phát biểu nào ĐÚNG?",
+      "options": [
+        "GQA chia sẻ Q giữa các nhóm 8 head, còn K và V được giữ riêng cho từng head như MHA thông thường",
+        "KV cache nhỏ hơn 8 lần, còn FLOPs tính QKᵀ gần như không đổi vì vẫn có đủ 64 query head",
+        "KV cache giảm 64 lần, ngang bằng MQA, vì mỗi KV head phục vụ toàn bộ 64 query head trong cùng một layer",
+        "FLOPs attention giảm 8 lần vì chỉ còn 8 head tính attention score, còn kích thước KV cache giữ nguyên như MHA"
+      ],
+      "answer": 1,
+      "explain": "GQA: các query head được chia nhóm, mỗi nhóm (ở đây 64/8 = 8 query head) dùng chung một cặp K, V. KV cache mỗi token mỗi layer = 2 · n_kv_heads · head_dim · bytes → giảm từ 64 xuống 8 head = 8×. Số query head giữ nguyên nên số phép QKᵀ vẫn tương đương MHA; lợi ích chính là giảm bộ nhớ và băng thông đọc KV cache — mà decode là memory-bandwidth-bound nên tốc độ decode tăng rõ. MQA (1 KV head) mới giảm 64×, nhưng dễ giảm chất lượng và kém thân thiện tensor parallel; GQA là điểm cân bằng. Bẫy: nhầm chiều chia sẻ — GQA chia sẻ K/V chứ không chia sẻ Q. Ainslie et al. (2023) còn cho thấy có thể ‘uptrain’ checkpoint MHA sang GQA bằng mean-pool các head K/V với ~5% compute pretraining."
+    },
+    {
+      "id": "llm-014",
+      "sub": "Sliding window attention",
+      "level": 3,
+      "type": "single",
+      "trap": false,
+      "q": "Mistral 7B dùng sliding window attention với W = 4096 và có 32 layer. Phát biểu nào ĐÚNG?",
+      "options": [
+        "Sliding window giảm độ phức tạp attention mỗi layer từ O(n²) xuống O(log n) nhờ chia chuỗi thành các cửa sổ lồng nhau",
+        "KV cache vẫn tăng tuyến tính theo độ dài chuỗi như full attention; sliding window chỉ giảm FLOPs của phép QKᵀ",
+        "Mỗi layer chỉ nhìn W token gần nhất, nhưng xếp 32 layer cho tầm nhìn lý thuyết ≈ 131K token; KV cache chặn ở W",
+        "Token cách xa hơn 4096 vị trí hoàn toàn không ảnh hưởng tới dự đoán hiện tại, vì mask cắt bỏ chúng ở mọi layer"
+      ],
+      "answer": 2,
+      "explain": "Ở layer k, hidden state tại vị trí i đã tổng hợp thông tin từ [i−W, i] của layer k−1, mà mỗi vị trí đó lại tổng hợp W token trước nó… → receptive field tăng ~W mỗi layer, tối đa ≈ n_layers × W ≈ 131K token (giống receptive field của CNN). Độ phức tạp mỗi layer là O(n·W) (tuyến tính theo n khi W cố định), không phải O(log n). Vì không bao giờ cần K, V cũ hơn W vị trí, Mistral dùng rolling buffer cache: vị trí i ghi vào slot i mod W → KV cache bị chặn ở W token, không tăng theo n. Lưu ý thực tế: receptive field lý thuyết ≠ khả năng dùng thông tin xa hiệu quả; nhiều model mới (Gemma 2/3) xen kẽ layer local (sliding) và global để cân bằng."
+    },
+    {
+      "id": "llm-015",
+      "sub": "Mixture of Experts",
+      "level": 2,
+      "type": "multi",
+      "trap": true,
+      "q": "Về kiến trúc Mixture-of-Experts (MoE) như Mixtral 8x7B, chọn TẤT CẢ phát biểu ĐÚNG.",
+      "options": [
+        "Mixtral 8x7B có khoảng 56B tham số vì gồm 8 mô hình 7B độc lập, mỗi expert có attention riêng của nó",
+        "Auxiliary load-balancing loss phạt khi token dồn vào vài expert, tránh router collapse",
+        "Router (linear + softmax) chọn top-k expert FFN cho mỗi token; output là tổng có trọng số của các expert",
+        "So với dense có cùng số tham số active, MoE cần ít VRAM hơn khi serve vì chỉ nạp các expert được chọn",
+        "FLOPs mỗi token tỷ lệ với số tham số active, không phải tổng số tham số"
+      ],
+      "answer": [
+        1,
+        2,
+        4
+      ],
+      "explain": "Trong Mixtral, chỉ FFN được nhân bản thành 8 expert; attention, norm, embedding dùng CHUNG → tổng ≈ 46.7B (không phải 8 × 7 = 56B), active ≈ 12.9B/token với top-2. FLOPs/token ∝ tham số active (~13B) nên tốc độ gần model dense 13B, nhưng TOÀN BỘ 46.7B phải nằm trong bộ nhớ → VRAM như model dense ~47B (bẫy: MoE tiết kiệm compute, không tiết kiệm bộ nhớ). Load-balancing loss kiểu Switch: L_aux = α·N_e·Σ f_i·P_i (f_i: tỷ lệ token gán cho expert i — không khả vi; P_i: xác suất router trung bình — khả vi), nhỏ nhất khi phân phối đều. Không có nó, router dễ ‘collapse’ chỉ dùng vài expert. Biến thể: expert capacity + token dropping (Switch), shared expert + fine-grained expert và cân bằng không cần aux loss bằng bias (DeepSeek-V3)."
+    },
+    {
+      "id": "llm-016",
+      "sub": "MoE active params",
+      "level": 3,
+      "type": "numeric",
+      "trap": true,
+      "q": "Một MoE kiểu Mixtral có 32 layer, d_model = 4096. Mỗi layer: 8 expert FFN SwiGLU (mỗi expert gồm 3 ma trận kích thước 4096×14336), router top-2 (ma trận 4096×8); attention GQA với W_q, W_o kích thước 4096×4096 và W_k, W_v kích thước 4096×1024. Embedding và LM head không tied, vocab 32 000. Bỏ qua norm/bias. Tính số tham số **ACTIVE** mỗi token (tính cả embedding và LM head), đơn vị **tỷ (B, 10^9)**, làm tròn 2 chữ số thập phân.",
+      "answer": 12.88,
+      "tolerance": 0.05,
+      "unit": "B tham số",
+      "explain": "Mỗi expert: 3 × 4096 × 14336 = 176 160 768. Attention mỗi layer: 2 × 4096² + 2 × 4096 × 1024 = 41 943 040. Router: 4096 × 8 = 32 768. Active mỗi layer (top-2): 2 × 176 160 768 + 41 943 040 + 32 768 = 394 297 344 → × 32 = 12 617 515 008. Cộng embedding + LM head: 2 × 32 000 × 4096 = 262 144 000 → ≈ 12.88B. Tổng (8 expert): 32 × (8 × 176 160 768 + 41 943 040 + 32 768) + 262 144 000 ≈ 46.70B — khớp con số công bố 46.7B total / 12.9B active của Mixtral 8x7B. Bẫy: lấy 46.7 × 2/8 ≈ 11.7B (quên attention/embedding luôn active) hoặc 2 × 7B = 14B (quên phần dùng chung chỉ tính một lần)."
+    },
+    {
+      "id": "llm-017",
+      "sub": "Context length extension",
+      "level": 3,
+      "type": "multi",
+      "trap": false,
+      "q": "Về các kỹ thuật mở rộng context cho model dùng RoPE, chọn TẤT CẢ phát biểu ĐÚNG.",
+      "options": [
+        "RoPE scaling nén vị trí nên KV cache mỗi token nhỏ đi tương ứng, giúp context dài rẻ hơn về bộ nhớ",
+        "YaRN = nội suy ‘NTK-by-parts’ theo dải tần số + scale nhiệt độ attention logits",
+        "Chỉ cần sửa max_position_embeddings trong config, vì RoPE là vị trí tương đối nên tự ngoại suy tốt ra context dài hơn",
+        "PI nhân chỉ số vị trí với L_train/L_new; ổn định nhưng nén đều cả chiều tần số cao, mất độ phân giải cục bộ",
+        "NTK-aware tăng base RoPE: chiều tần số cao gần như giữ nguyên, chiều tần số thấp được nội suy nhiều hơn"
+      ],
+      "answer": [
+        1,
+        3,
+        4
+      ],
+      "explain": "Ngoại suy trực tiếp (vị trí > L_train) tạo ra góc quay chưa từng thấy ở các chiều tần số thấp → attention vỡ, perplexity tăng vọt; đổi config thôi là không đủ. PI (Chen et al. 2023): m' = m·L/L' — ổn định, cần fine-tune ngắn (~1000 step), nhưng nén cả chiều tần số cao làm các token gần nhau khó phân biệt. NTK-aware: base' = base·s^(d/(d−2)) — thay đổi phân bổ, tần số cao gần như không đổi, tần số thấp bị nội suy; dùng được cả không fine-tune (dynamic NTK). YaRN: chia theo dải bước sóng (không nội suy / nội suy một phần / nội suy hoàn toàn) + nhân attention logits với hệ số nhiệt độ, đạt context 64K–128K với rất ít token fine-tune. RoPE scaling không đổi kích thước KV cache mỗi token; context dài vẫn tốn bộ nhớ tuyến tính theo độ dài (và attention bậc hai về compute)."
+    },
+    {
+      "id": "llm-018",
+      "sub": "Long context",
+      "level": 1,
+      "type": "single",
+      "trap": false,
+      "q": "Nghiên cứu ‘Lost in the Middle’ (Liu et al., 2023) cho thấy điều gì khi thay đổi vị trí của thông tin cần thiết trong context dài?",
+      "options": [
+        "Độ chính xác giảm đều theo vị trí: thông tin càng nằm gần cuối context càng dễ bị bỏ qua do recency decay",
+        "Độ chính xác hình chữ U: tốt khi thông tin ở đầu hoặc cuối context, kém nhất khi nằm ở giữa",
+        "Hiện tượng biến mất hoàn toàn khi model dùng RoPE thay cho absolute position embedding đã học",
+        "Hiện tượng chỉ xảy ra ở model nhỏ; model có context window từ 100K token trở lên dùng đều mọi vị trí"
+      ],
+      "answer": 1,
+      "explain": "Liu et al. thử multi-document QA và key-value retrieval: hiệu năng cao nhất khi tài liệu liên quan ở đầu (primacy) hoặc cuối (recency), giảm rõ ở giữa — kể cả với model ‘long-context’. Hệ quả cho RAG: đừng nhồi quá nhiều chunk; dùng reranker để giữ ít chunk chất lượng; đặt chunk quan trọng nhất ở đầu/cuối; có thể nhắc lại câu hỏi ở cuối prompt. Context window lớn ≠ dùng hiệu quả mọi vị trí; vượt qua needle-in-a-haystack đơn giản không đảm bảo suy luận nhiều bước trên context dài (xem benchmark RULER). Các model hiện đại đều dùng RoPE mà vẫn có hiện tượng này, nên phương án ‘RoPE làm biến mất’ là sai."
+    },
+    {
+      "id": "llm-019",
+      "sub": "Mixed precision",
+      "level": 2,
+      "type": "single",
+      "trap": true,
+      "q": "Phát biểu nào ĐÚNG về fp16 và bf16 khi huấn luyện LLM?",
+      "options": [
+        "bf16 có dải giá trị như fp32 (8 bit exponent) nên thường không cần loss scaling; fp16 chỉ 5 bit exponent nên cần",
+        "fp16 có dải giá trị rộng hơn bf16 nên ổn định hơn khi train model lớn; bf16 chủ yếu chỉ dùng cho inference",
+        "Loss scaling nhân loss với hệ số S để tăng learning rate hiệu dụng lên S lần, giúp model hội tụ nhanh hơn",
+        "bf16 chính xác hơn fp16 vì có nhiều bit mantissa hơn, nên có thể bỏ hẳn fp32 master weights khi train LLM"
+      ],
+      "answer": 0,
+      "explain": "fp16: 1 sign + 5 exponent + 10 mantissa, max ≈ 65 504, gradient nhỏ (< ~6e-8) bị underflow về 0 → cần loss scaling: nhân loss với S trước backward để ‘đẩy’ gradient vào vùng biểu diễn được, chia lại S trước optimizer step, bỏ qua step nếu gặp inf/NaN và giảm S. bf16: 1 + 8 + 7 — cùng dải với fp32 (max ~3.4e38) nhưng độ chính xác thấp hơn fp16 (bẫy: ‘bf16 chính xác hơn’ là sai). Vì mantissa chỉ 7 bit, cập nhật nhỏ so với trọng số có thể bị làm tròn mất → vẫn nên giữ master weights + optimizer states ở fp32 (đó là lý do có con số 16 byte/tham số). Loss scaling không thay đổi LR hiệu dụng vì gradient được unscale trước khi cập nhật. Thực tế: A100/H100 train LLM gần như mặc định bf16; V100/T4 không hỗ trợ bf16 nên phải fp16 + loss scaling."
+    },
+    {
+      "id": "llm-020",
+      "sub": "Bộ nhớ training",
+      "level": 1,
+      "type": "numeric",
+      "trap": false,
+      "q": "Full fine-tune mô hình **7B** bằng AdamW mixed precision: weights bf16, gradients bf16, master weights fp32, Adam m và v fp32. Bỏ qua activation và buffer tạm. Bộ nhớ cho model states là bao nhiêu **GB** (1 GB = 10^9 byte)?",
+      "answer": 112,
+      "tolerance": 1,
+      "unit": "GB",
+      "explain": "Mỗi tham số: 2 byte (weight bf16) + 2 byte (grad bf16) + 4 (master fp32) + 4 (m) + 4 (v) = 16 byte. 7×10⁹ × 16 = 112×10⁹ byte = 112 GB — chưa tính activation (phụ thuộc batch × seq, có thể còn lớn hơn), nên không vừa 1 GPU 80GB nếu không dùng ZeRO/FSDP, offload hoặc PEFT. Bẫy: 14 GB chỉ là trọng số bf16 để inference; nếu đổi sang GiB thì 112e9/2³⁰ ≈ 104.3 GiB. Quy tắc nhớ: inference ~2 byte/tham số (bf16), full fine-tune Adam ~16 byte/tham số (+ activation), LoRA trên base bf16 ~2 byte/tham số + phần nhỏ cho adapter, QLoRA ~0.5–0.55 byte/tham số cho base."
+    },
+    {
+      "id": "llm-021",
+      "sub": "Optimizer",
+      "level": 3,
+      "type": "single",
+      "trap": true,
+      "q": "Khác biệt thực chất giữa Adam + L2 regularization và AdamW (decoupled weight decay) là gì?",
+      "options": [
+        "Adam + L2: số hạng λw bị chia cho √v̂ nên decay không đều giữa các tham số; AdamW trừ thẳng lr·λ·w khỏi trọng số",
+        "Hai cách hoàn toàn tương đương về toán học; AdamW chỉ là cách cài đặt gộp phép tính nên chạy nhanh hơn trong PyTorch",
+        "AdamW cộng λw vào gradient trước khi cập nhật moment m, còn Adam + L2 cộng λw sau khi đã tính xong m",
+        "AdamW không cần lưu moment bậc hai v nên tiết kiệm được 4 byte mỗi tham số so với Adam ở cùng độ chính xác"
+      ],
+      "answer": 0,
+      "explain": "Với SGD, L2 regularization và weight decay là tương đương. Với Adam thì không: L2 thêm λw vào gradient, rồi cả cụm bị chuẩn hoá bởi √v̂ — tham số có gradient lớn nhận decay hiệu dụng nhỏ (Loshchilov & Hutter, ‘Decoupled Weight Decay Regularization’). AdamW: w ← w − lr·(m̂/(√v̂+ε)) − lr·λ·w → decay đồng đều, dễ tune độc lập với LR. AdamW vẫn lưu cả m và v (8 byte fp32/tham số) — không tiết kiệm bộ nhớ; muốn giảm phải dùng 8-bit Adam, Adafactor, hoặc ZeRO. Phương án ‘AdamW cộng λw vào gradient trước khi cập nhật m’ thực chất chính là mô tả Adam + L2 — bẫy đảo ngược. Thực hành LLM: weight decay ~0.1, thường không decay bias/norm (và đôi khi embedding)."
+    },
+    {
+      "id": "llm-022",
+      "sub": "ZeRO / FSDP",
+      "level": 2,
+      "type": "multi",
+      "trap": false,
+      "q": "Về DeepSpeed ZeRO và PyTorch FSDP, chọn TẤT CẢ phát biểu ĐÚNG.",
+      "options": [
+        "ZeRO-3 (≈ FSDP FULL_SHARD) shard cả parameters, all-gather từng layer ngay trước khi tính rồi giải phóng",
+        "ZeRO-3 có lượng giao tiếp bằng đúng DDP (2Ψ mỗi step), nên không bao giờ chậm hơn DDP",
+        "ZeRO-3 là một dạng tensor parallel: mỗi GPU chỉ giữ và chỉ tính một phần phép nhân ma trận trong layer",
+        "ZeRO-2 shard thêm cả parameters bf16, nên mọi thành phần model states đều giảm tuyến tính theo số GPU",
+        "ZeRO-1 shard optimizer states (m, v, master weights fp32) giữa các GPU data-parallel"
+      ],
+      "answer": [
+        0,
+        4
+      ],
+      "explain": "ZeRO-1: shard optimizer states; ZeRO-2: + shard gradients (reduce-scatter thay all-reduce); ZeRO-3: + shard parameters. Stage 2 vẫn giữ bản đầy đủ parameters trên mỗi GPU — bẫy ‘stage 2 shard parameters’. ZeRO vẫn là DATA parallel: mỗi GPU xử lý batch riêng với layer ĐẦY ĐỦ (được all-gather tạm thời); tensor parallel thì chia chính phép matmul và mỗi GPU chỉ giữ một phần layer khi tính. Giao tiếp: stage 1/2 ≈ DDP (~2Ψ/step); stage 3 ≈ 3Ψ (~1.5× DDP) do all-gather parameters ở cả forward và backward → chậm hơn nếu interconnect yếu. Mở rộng: ZeRO-Offload/Infinity đẩy optimizer states/params sang CPU/NVMe; FSDP SHARD_GRAD_OP ≈ ZeRO-2, HYBRID_SHARD = shard trong node + replicate giữa node."
+    },
+    {
+      "id": "llm-023",
+      "sub": "ZeRO memory",
+      "level": 3,
+      "type": "numeric",
+      "trap": false,
+      "q": "Full fine-tune mô hình **7B** với Adam mixed precision (16 byte/tham số = 2 byte weight bf16 + 2 byte grad bf16 + 12 byte optimizer states fp32), data parallel trên **8 GPU** với DeepSpeed **ZeRO stage 2**. Bộ nhớ model states trên MỖI GPU là bao nhiêu **GB** (1 GB = 10^9 byte)? Bỏ qua activation và buffer. Làm tròn 2 chữ số thập phân.",
+      "answer": 26.25,
+      "tolerance": 0.1,
+      "unit": "GB/GPU",
+      "explain": "ZeRO-2 shard gradients + optimizer states, còn parameters bf16 vẫn replicate. Parameters: 2 × 7e9 = 14 GB (đầy đủ trên mỗi GPU). Gradients + optimizer: (2 + 12) × 7e9 / 8 = 98 / 8 = 12.25 GB. Tổng = 26.25 GB/GPU. So sánh: DDP = 112 GB; ZeRO-1 = 4Ψ + 12Ψ/8 = 28 + 10.5 = 38.5 GB; ZeRO-3 = 16Ψ/8 = 14 GB. Bẫy: lấy 112/8 = 14 GB (đó là ZeRO-3, không phải stage 2). Nhớ cộng thêm activation — thường dùng activation checkpointing để giữ nó trong tầm kiểm soát."
+    },
+    {
+      "id": "llm-024",
+      "sub": "Tensor/Pipeline parallel",
+      "level": 3,
+      "type": "single",
+      "trap": false,
+      "q": "Huấn luyện model dense 70B trên 4 node × 8 GPU 80GB (NVLink trong node, InfiniBand giữa các node). Cấu hình 3D parallelism nào hợp lý nhất?",
+      "options": [
+        "TP = 32 trải trên cả 4 node để chia đều mọi ma trận, PP = 1 nên hoàn toàn không có pipeline bubble",
+        "Chỉ cần DDP thuần trên 32 GPU vì model 70B ở bf16 vừa trong một GPU 80GB nếu bật activation checkpointing",
+        "PP = 8 trong node vì pipeline giao tiếp nhiều nhất, còn TP đặt giữa các node do chỉ gửi activation một lần",
+        "TP = 8 trong mỗi node (all-reduce mỗi layer cần NVLink), PP giữa các node, nhiều micro-batch để giảm bubble"
+      ],
+      "answer": 3,
+      "explain": "Tensor parallel (Megatron) chia các matmul trong layer, cần all-reduce activation nhiều lần MỖI layer ở cả forward/backward → cực nhạy với băng thông, nên giới hạn trong node có NVLink. Pipeline parallel chia các layer thành stage, chỉ gửi activation point-to-point ở ranh giới stage → chịu được link chậm hơn giữa node; cái giá là bubble. Ví dụ p = 4 stage, m = 16 micro-batch: bubble ≈ 3/19 ≈ 15.8%. TP = 32 qua InfiniBand sẽ bị nghẽn giao tiếp; đặt PP trong node và TP giữa node là ngược. DDP thuần không khả thi: riêng trọng số bf16 của 70B đã là 140 GB > 80 GB, chưa kể 16 byte/tham số khi train (~1.12 TB). Trong thực tế còn có lựa chọn FSDP/ZeRO-3 (+ TP) và sequence/context parallel cho context dài."
+    },
+    {
+      "id": "llm-025",
+      "sub": "Gradient accumulation",
+      "level": 1,
+      "type": "numeric",
+      "trap": false,
+      "q": "Huấn luyện trên **8 GPU** data parallel, micro-batch **4** sequence/GPU, độ dài **4096** token/sequence, gradient accumulation **16** bước. Cần bao nhiêu **optimizer step** để đi hết **100B** token (100×10^9)? Làm tròn LÊN thành số nguyên.",
+      "answer": 47684,
+      "tolerance": 0.5,
+      "unit": "step",
+      "explain": "Global batch = 8 GPU × 4 seq × 16 accumulation = 512 sequence/step. Token/step = 512 × 4096 = 2 097 152 (~2M token, cỡ batch thường dùng khi pretrain). Số step = 100×10⁹ / 2 097 152 ≈ 47 683.7 → làm tròn lên 47 684 step. Bẫy: quên nhân gradient accumulation (ra ~763K step) hoặc quên số GPU. Gradient accumulation tăng batch hiệu dụng mà không tăng bộ nhớ activation, đổi lại mỗi optimizer step chậm hơn (tuần tự). Khi đổi global batch nên chỉnh lại LR (thường scale theo √ hoặc tuyến tính trong giới hạn) và số warmup step."
+    },
+    {
+      "id": "llm-026",
+      "sub": "Gradient accumulation",
+      "level": 3,
+      "type": "single",
+      "trap": true,
+      "q": "SFT với gradient accumulation 4 micro-batch; số token assistant (không bị mask) mỗi micro-batch rất khác nhau. Code tính loss = trung bình token-loss TRONG từng micro-batch, chia 4 rồi cộng dồn gradient. So với train một batch lớn gộp cả 4 micro-batch với loss = trung bình trên mọi token, điều gì ĐÚNG?",
+      "options": [
+        "Khác nhau chỉ do sai số làm tròn khi cộng dồn gradient bf16, không gây ra sai lệch có hệ thống nào đáng kể",
+        "Tương đương hoàn toàn vì gradient tuyến tính theo loss, nên gradient accumulation luôn cho kết quả y hệt batch lớn",
+        "Không tương đương: token ở micro-batch ít token bị gán trọng số lớn hơn; phải chia tổng loss cho tổng số token của cả 4",
+        "Chỉ khác nhau nếu model có BatchNorm; LLM dùng RMSNorm chuẩn hoá theo từng token nên kết quả giống hệt batch lớn"
+      ],
+      "answer": 2,
+      "explain": "Gradient tuyến tính theo loss, nhưng ‘mean của các mean’ ≠ ‘mean toàn cục’ khi các nhóm có kích thước khác nhau. Ví dụ micro-batch 1 có 10 token, micro-batch 2 có 1000 token: với cách cài sai, mỗi token ở micro-batch 1 có trọng số 1/(4·10), ở micro-batch 2 chỉ 1/(4·1000) — chênh 100 lần → bias về các mẫu ngắn. Cách đúng: loss_sum từng micro-batch / tổng số token hợp lệ của cả global batch (kể cả cộng dồn qua các GPU DDP). Đây chính là bug gradient accumulation được phát hiện và sửa trong Hugging Face Transformers (10/2024). BatchNorm là một nguồn khác biệt khác nhưng không liên quan ở đây; sai số bf16 không giải thích được độ lệch có hệ thống này."
+    },
+    {
+      "id": "llm-027",
+      "sub": "SFT & chat template",
+      "level": 2,
+      "type": "single",
+      "trap": false,
+      "q": "Sau khi SFT một base model thành chat model, khi inference model trả lời đúng nội dung nhưng không dừng, tiếp tục tự viết ‘User: …’ và ‘Assistant: …’ các lượt mới. Nguyên nhân khả dĩ nhất?",
+      "options": [
+        "Loss masking các token prompt khiến model không học được ranh giới giữa lượt user và lượt assistant",
+        "Learning rate quá thấp nên model chưa kịp học phân phối độ dài câu trả lời trong dữ liệu SFT",
+        "Token kết thúc lượt (EOS/<|eot_id|>) bị mask khỏi labels, hoặc template inference khác lúc train",
+        "Temperature quá cao khi inference; đặt temperature = 0 sẽ khiến model tự dừng ngay sau câu trả lời"
+      ],
+      "answer": 2,
+      "explain": "Model chỉ học cách DỪNG nếu token kết thúc lượt nằm trong phần được tính loss. Lỗi hay gặp: mask cả EOS cùng với prompt, pad_token = eos_token rồi mask hết pad (vô tình mask luôn EOS thật), hoặc quên thêm EOS khi tokenize. Lệch template (train ChatML nhưng inference dùng template Llama hay chuỗi ‘User:’ tự chế) cũng khiến model không sinh đúng token dừng — luôn dùng tokenizer.apply_chat_template giống nhau ở train và inference, và cấu hình stop tokens. Loss masking prompt (label = −100 cho system/user) là thực hành ĐÚNG: model vẫn ‘đọc’ prompt qua attention, chỉ không bị phạt khi dự đoán prompt. Temperature = 0 (greedy) không tạo ra khả năng dừng nếu model chưa học xác suất cao cho EOS; LR thấp không giải thích việc nội dung đúng nhưng không dừng."
+    },
+    {
+      "id": "llm-028",
+      "sub": "Catastrophic forgetting",
+      "level": 2,
+      "type": "multi",
+      "trap": false,
+      "q": "Fine-tune model chat tổng quát trên dữ liệu chuyên ngành (y tế) khiến khả năng chung giảm (catastrophic forgetting). Chọn TẤT CẢ biện pháp HỢP LÝ.",
+      "options": [
+        "Bỏ loss masking prompt để model học thêm nhiều token hơn, nhờ đó giảm quên",
+        "Tăng số epoch để model ‘ghi nhớ’ đồng thời cả kiến thức mới lẫn cũ",
+        "Đo trên benchmark tổng quát (vd MMLU, IFEval) trước và sau fine-tune để định lượng mức quên",
+        "Trộn một tỷ lệ dữ liệu tổng quát/instruction chung vào tập fine-tune (replay)",
+        "Dùng LoRA/PEFT, learning rate nhỏ hơn, ít epoch hơn"
+      ],
+      "answer": [
+        2,
+        3,
+        4
+      ],
+      "explain": "Forgetting xảy ra vì gradient chỉ tối ưu phân phối mới, kéo trọng số khỏi vùng tốt cho tác vụ cũ. Replay/data mixing là biện pháp hiệu quả và đơn giản nhất. PEFT/LoRA hạn chế không gian cập nhật — Biderman et al. (2024, ‘LoRA Learns Less and Forgets Less’) cho thấy LoRA quên ít hơn full fine-tune (đổi lại học domain mới kém hơn). LR nhỏ, ít epoch, early stopping cũng giúp; ngoài ra có thể dùng regularization về model gốc (KL, EWC) hoặc model merging. Tăng epoch thường làm quên NHIỀU hơn vì càng overfit dữ liệu mới. Bỏ loss masking làm model học dự đoán cả prompt — không giải quyết forgetting, có thể làm giảm chất lượng trả lời. Luôn có bộ eval ‘không được tụt’ (regression suite) bên cạnh eval domain."
+    },
+    {
+      "id": "llm-029",
+      "sub": "LoRA params",
+      "level": 3,
+      "type": "numeric",
+      "trap": true,
+      "q": "Áp LoRA rank **r = 16** lên `q_proj, k_proj, v_proj, o_proj` của cả **32 layer** của một model có d_model = 4096 và dùng GQA với 8 KV head × head_dim 128 (tức `k_proj, v_proj`: 4096 → 1024; `q_proj, o_proj`: 4096 → 4096). Tổng số tham số LoRA trainable là bao nhiêu **triệu (M, 10^6)**? Làm tròn 2 chữ số thập phân.",
+      "answer": 13.63,
+      "tolerance": 0.02,
+      "unit": "M tham số",
+      "explain": "LoRA cho ma trận d_in → d_out thêm A (r × d_in) và B (d_out × r): r·(d_in + d_out) tham số. q_proj, o_proj: 16 × (4096 + 4096) = 131 072 mỗi cái; k_proj, v_proj: 16 × (4096 + 1024) = 81 920 mỗi cái. Mỗi layer: 2 × 131 072 + 2 × 81 920 = 425 984 → × 32 = 13 631 488 ≈ 13.63M. Bẫy: coi cả 4 ma trận đều 4096×4096 sẽ ra 16.78M (sai với model GQA như Llama 3 8B / Mistral 7B). Tham khảo: thêm cả gate/up/down (4096 ↔ 14336) mỗi layer cộng 3 × 16 × (4096 + 14336) = 884 736 → tổng ~41.94M, vẫn chỉ ~0.5% của 8B — lý do optimizer states của LoRA rất nhỏ."
+    },
+    {
+      "id": "llm-030",
+      "sub": "LoRA",
+      "level": 2,
+      "type": "single",
+      "trap": false,
+      "q": "Với LoRA: W' = W + (α/r)·B·A, trong đó A ∈ R^(r×d_in), B ∈ R^(d_out×r). Phát biểu nào ĐÚNG?",
+      "options": [
+        "B khởi tạo 0 nên ΔW = 0 lúc đầu; merge được vào W nên không thêm latency; giữ α = 16, r: 8 → 32 thì scale 2 → 0.5",
+        "Sau khi merge vẫn phải giữ A và B trong bộ nhớ, vì forward cần cộng riêng nhánh B·A để giữ được độ chính xác",
+        "Cả A và B đều khởi tạo bằng 0 để ΔW = 0 lúc đầu; sau đó tăng r luôn làm chất lượng tăng gần tuyến tính",
+        "α/r chỉ là hằng số trang trí: khi dùng Adam, gradient đã được chuẩn hoá nên đổi α không ảnh hưởng quá trình học"
+      ],
+      "answer": 0,
+      "explain": "LoRA khởi tạo A ngẫu nhiên (Kaiming/Gaussian) và B = 0 → ΔW = 0, model bắt đầu đúng bằng base. Nếu CẢ HAI bằng 0 thì gradient theo A tỷ lệ với B, gradient theo B tỷ lệ với A, nên đều bằng 0 → không bao giờ học được. Hệ số α/r: α = 16, r = 8 → 2; r = 32 → 0.5. Với Adam, độ lớn bước cập nhật trên B·A gần như cố định theo LR, nên α/r nhân trực tiếp vào thay đổi của ΔW — đổi α ≈ đổi learning rate hiệu dụng, phải tune lại (rsLoRA đề xuất α/√r để ổn định khi r lớn). Merge: W ← W + (α/r)·B·A, sau đó bỏ A, B — không thêm latency (khác adapter nối tiếp). Lưu ý: merge vào base đã lượng tử 4-bit (QLoRA) cần dequantize, có sai số làm tròn. Tăng r không đảm bảo tốt hơn tuyến tính; r 8–64 thường đủ cho SFT."
+    },
+    {
+      "id": "llm-031",
+      "sub": "QLoRA",
+      "level": 2,
+      "type": "multi",
+      "trap": false,
+      "q": "Về QLoRA (Dettmers et al., 2023), chọn TẤT CẢ phát biểu ĐÚNG.",
+      "options": [
+        "NF4 đặt các mức theo quantile của phân phối chuẩn, khác lưới đều của INT4",
+        "Double quantization lượng tử hoá cả hằng số absmax của từng block",
+        "Gradient được cập nhật trực tiếp vào trọng số NF4 của base, còn LoRA chỉ học phần dư do sai số lượng tử",
+        "Base lưu NF4 và frozen; khi forward/backward được dequantize sang bf16 để tính",
+        "Paged optimizers dùng unified memory đẩy optimizer states sang CPU RAM khi bộ nhớ GPU tăng đột biến"
+      ],
+      "answer": [
+        0,
+        1,
+        3,
+        4
+      ],
+      "explain": "QLoRA = base 4-bit NF4 frozen + LoRA adapters (bf16) được train; gradient backprop ĐI QUA trọng số đã dequantize để tới adapter, nhưng KHÔNG cập nhật base — bẫy ‘cập nhật NF4’ (LoRA cũng không ‘học phần dư sai số lượng tử’ ở QLoRA chuẩn; đó là ý tưởng của biến thể khác như LoftQ khi khởi tạo). NF4: 16 mức lấy theo quantile của N(0,1) (trọng số pretrained xấp xỉ chuẩn) sau khi chuẩn hoá theo absmax từng block 64 → mỗi bin chứa số lượng giá trị như nhau, tốt hơn INT4/FP4 đều. Double quantization: absmax fp32 mỗi block 64 được lượng tử 8-bit (block thứ cấp 256), giảm overhead từ 0.5 xuống ~0.127 bit/tham số. Paged optimizers tránh OOM khi spike (vd batch có sequence dài + gradient checkpointing). Kết quả nổi bật: fine-tune 65B trên một GPU 48GB mà giữ chất lượng ngang 16-bit fine-tuning (Guanaco)."
+    },
+    {
+      "id": "llm-032",
+      "sub": "QLoRA memory",
+      "level": 3,
+      "type": "numeric",
+      "trap": false,
+      "q": "QLoRA lượng tử base model sang NF4 với block size 64, mỗi block có 1 hằng số absmax. Không dùng double quantization: absmax lưu fp32. Dùng double quantization: absmax được lượng tử 8-bit, và cứ 256 hằng số 8-bit có thêm 1 hằng số fp32. Với model **70B** tham số, double quantization tiết kiệm được bao nhiêu **GB** (1 GB = 10^9 byte)? Làm tròn 2 chữ số thập phân.",
+      "answer": 3.26,
+      "tolerance": 0.03,
+      "unit": "GB",
+      "explain": "Overhead không DQ: 32 bit / 64 tham số = 0.5 bit/tham số. Có DQ: 8/64 + 32/(64 × 256) = 0.125 + 0.00195 ≈ 0.127 bit/tham số → tiết kiệm 0.373 bit/tham số (đúng con số trong paper QLoRA). 70×10⁹ × 0.373 / 8 ≈ 3.26×10⁹ byte ≈ 3.26 GB (paper nêu ~3 GB cho model 65B). Tổng bộ nhớ base: 4 + 0.127 ≈ 4.127 bit/tham số → 70B ≈ 36.1 GB (so với 140 GB ở bf16). Bẫy: quên chia 8 (bit → byte) hoặc tính cả 4 bit của trọng số vào phần tiết kiệm."
+    },
+    {
+      "id": "llm-033",
+      "sub": "PEFT",
+      "level": 1,
+      "type": "single",
+      "trap": false,
+      "q": "Phương pháp PEFT nào sau khi huấn luyện có thể gộp (merge) hoàn toàn vào trọng số gốc, để inference không phát sinh thêm latency hay chiếm thêm token trong context?",
+      "options": [
+        "Adapter bottleneck (Houlsby) chèn nối tiếp sau attention/FFN",
+        "Prefix tuning (học prefix K/V ở mọi layer)",
+        "Prompt tuning (học soft prompt embedding ở đầu input)",
+        "LoRA"
+      ],
+      "answer": 3,
+      "explain": "LoRA học ΔW = B·A có cùng hình dạng với W, nên merge W + (α/r)·B·A cho ra model y hệt kiến trúc gốc — không thêm latency. Adapter (Houlsby) chèn module down-project → phi tuyến → up-project NỐI TIẾP; có phi tuyến nên không gộp được vào W, thêm latency (đáng kể khi batch nhỏ). Prompt tuning học vài chục soft token ở input → chiếm chỗ trong context mỗi request; prefix tuning học prefix K/V cho mọi layer → tăng độ dài KV cache. Mặt khác, LoRA không merge (giữ riêng adapter) lại có lợi khi serve nhiều adapter trên một base (multi-LoRA serving như S-LoRA, vLLM)."
+    },
+    {
+      "id": "llm-034",
+      "sub": "RLHF",
+      "level": 2,
+      "type": "single",
+      "trap": false,
+      "q": "Trong pipeline RLHF kinh điển (InstructGPT): SFT → reward model → PPO, phát biểu nào ĐÚNG?",
+      "options": [
+        "Reward theo Bradley–Terry là xác suất tuyệt đối trong [0, 1], nên so sánh trực tiếp được giữa các prompt khác nhau",
+        "PPO cập nhật reward model đồng thời với policy ở mỗi step để reward luôn theo kịp phân phối output mới",
+        "RM học từ cặp so sánh với loss Bradley–Terry; PPO tối đa reward − β·KL(π_θ‖π_ref) để không trôi xa model SFT",
+        "RM học hồi quy điểm tuyệt đối 1–10 do annotator chấm; PPO chỉ cần policy và RM, không cần reference model"
+      ],
+      "answer": 2,
+      "explain": "Bradley–Terry: P(y_w ≻ y_l | x) = σ(r(x, y_w) − r(x, y_l)). Reward chỉ xác định tới một hằng số cộng theo từng prompt (chỉ hiệu số có nghĩa) → không phải xác suất tuyệt đối, so sánh giữa prompt khác nhau không đáng tin; thường chuẩn hoá reward. Người ta thu thập so sánh cặp/xếp hạng vì con người so sánh nhất quán hơn chấm điểm tuyệt đối. Mục tiêu PPO: max E[r(x,y)] − β·KL(π_θ‖π_ref), thường hiện thực bằng phạt KL theo từng token cộng vào reward. KL giữ policy gần SFT, hạn chế reward hacking (khai thác điểm yếu của RM) và mất độ trôi chảy/đa dạng. PPO cần 4 model: policy, reference, reward, value (critic). RM thường frozen trong suốt PPO; cập nhật RM là một vòng lặp riêng (iterated RLHF với dữ liệu mới), không đồng thời."
+    },
+    {
+      "id": "llm-035",
+      "sub": "DPO",
+      "level": 3,
+      "type": "numeric",
+      "trap": false,
+      "q": "DPO với **β = 0.1**. Cho một cặp (y_w, y_l): log π_θ(y_w|x) = −12, log π_ref(y_w|x) = −14, log π_θ(y_l|x) = −15, log π_ref(y_l|x) = −13. Tính DPO loss của cặp này (log tự nhiên), làm tròn 3 chữ số thập phân.",
+      "answer": 0.513,
+      "tolerance": 0.003,
+      "explain": "L_DPO = −log σ( β·[ (log π_θ(y_w) − log π_ref(y_w)) − (log π_θ(y_l) − log π_ref(y_l)) ] ). Log-ratio chosen = −12 − (−14) = +2; log-ratio rejected = −15 − (−13) = −2. Margin = 0.1 × (2 − (−2)) = 0.4. Loss = −log σ(0.4) = log(1 + e^(−0.4)) ≈ 0.513. Lúc khởi tạo π_θ = π_ref → margin 0 → loss = log 2 ≈ 0.693; loss giảm khi policy tăng xác suất chosen TƯƠNG ĐỐI so với rejected (so với reference). Bẫy: sai dấu ở log-ratio của rejected (ra margin 0 → 0.693), hoặc quên reference model. β·log(π_θ/π_ref) chính là ‘implicit reward’ của DPO — vì vậy DPO không cần reward model riêng."
+    },
+    {
+      "id": "llm-036",
+      "sub": "DPO & biến thể",
+      "level": 3,
+      "type": "multi",
+      "trap": false,
+      "q": "Về DPO và các biến thể preference optimization, chọn TẤT CẢ phát biểu ĐÚNG.",
+      "options": [
+        "ORPO gộp SFT loss với số hạng odds-ratio trong một giai đoạn, không cần reference model",
+        "KTO bắt buộc dữ liệu dạng cặp (chosen, rejected) cho cùng prompt như DPO, chỉ thay hàm loss theo prospect theory",
+        "SimPO dùng log-prob trung bình theo độ dài làm reward ngầm, có margin γ, không cần reference model",
+        "β trong DPO càng lớn thì policy càng được phép đi xa reference, vì β nhân vào reward ngầm làm margin lớn hơn",
+        "DPO cần reference policy nhưng không cần reward model riêng hay sampling online"
+      ],
+      "answer": [
+        0,
+        2,
+        4
+      ],
+      "explain": "DPO suy ra từ nghiệm đóng của bài toán RLHF có ràng buộc KL: r(x,y) = β·log(π_θ/π_ref) + const → tối ưu trực tiếp trên dữ liệu preference offline; vẫn cần forward qua π_ref (hoặc cache log-prob). β đóng vai trò hệ số KL: β LỚN → ràng buộc mạnh, policy ở GẦN reference; β nhỏ → đi xa hơn (thường 0.1–0.5) — bẫy đảo chiều. KTO (Kahneman–Tversky) chỉ cần nhãn nhị phân tốt/xấu cho từng output, KHÔNG cần cặp — tiện khi có thumbs up/down. IPO thay log-sigmoid bằng loss bình phương để tránh overfit khi preference gần như tất định. SimPO: reward = (β/|y|)·log π_θ(y|x), loss với margin γ, reference-free và giảm thiên lệch độ dài. ORPO: L = L_SFT + λ·L_OR, align ngay trong SFT, không cần reference."
+    },
+    {
+      "id": "llm-037",
+      "sub": "GRPO",
+      "level": 2,
+      "type": "numeric",
+      "trap": false,
+      "q": "GRPO sample **G = 8** câu trả lời cho một bài toán, reward (đúng = 1, sai = 0): `[1, 0, 0, 1, 1, 0, 0, 0]`. Advantage Â_i = (r_i − mean) / std, với std là độ lệch chuẩn tổng thể (chia cho G). Tính advantage của một câu trả lời **ĐÚNG**, làm tròn 3 chữ số thập phân.",
+      "answer": 1.291,
+      "tolerance": 0.005,
+      "explain": "Mean = 3/8 = 0.375. Phương sai = mean((r − 0.375)²) = 0.375 × 0.625 = 0.234375 → std ≈ 0.4841. Câu đúng: (1 − 0.375)/0.4841 ≈ 1.291; câu sai: (0 − 0.375)/0.4841 ≈ −0.775. Advantage được gán cho mọi token của câu trả lời đó. Nếu dùng std mẫu (chia G − 1) sẽ ra ≈ 1.208 — chú ý quy ước. Nếu cả nhóm cùng đúng (hoặc cùng sai) thì r − mean = 0 → không có tín hiệu học: prompt quá dễ/khó lãng phí compute (DAPO lọc bằng dynamic sampling). Baseline là trung bình nhóm thay cho value network → GRPO không cần critic, tiết kiệm bộ nhớ đáng kể so với PPO."
+    },
+    {
+      "id": "llm-038",
+      "sub": "GRPO & reasoning RL",
+      "level": 2,
+      "type": "single",
+      "trap": false,
+      "q": "Phát biểu nào ĐÚNG về GRPO và DeepSeek-R1?",
+      "options": [
+        "GRPO bỏ critic, dùng reward chuẩn hoá trong nhóm output làm advantage; R1-Zero được RL thẳng từ base với reward theo luật",
+        "GRPO là phương pháp offline giống DPO: chỉ cần dữ liệu cặp preference có sẵn, không sinh output mới khi train",
+        "GRPO vẫn cần critic cùng kích thước policy như PPO, chỉ khác ở cách clip ratio và cách cộng KL vào reward",
+        "R1-Zero được SFT trên long CoT do người viết trước, rồi mới RL bằng neural reward model chấm từng bước reasoning"
+      ],
+      "answer": 0,
+      "explain": "GRPO (DeepSeekMath, 2024): online RL, mỗi prompt sinh G output từ policy hiện tại, tính reward, chuẩn hoá trong nhóm làm advantage; giữ objective clip kiểu PPO và thêm KL với reference trực tiếp vào loss (không cộng vào reward). Bỏ critic → giảm mạnh bộ nhớ/compute. DeepSeek-R1-Zero: RL thuần từ DeepSeek-V3-Base với reward theo luật (đáp án đúng có thể kiểm chứng, đúng định dạng <think>), không dùng neural RM để tránh reward hacking; model tự phát triển CoT dài, tự kiểm tra (‘aha moment’) nhưng khó đọc, trộn ngôn ngữ. DeepSeek-R1 (bản chính) mới thêm cold-start SFT với một lượng nhỏ long-CoT, rồi RL nhiều giai đoạn + rejection sampling SFT, và distill sang các model nhỏ (Qwen/Llama). Phương án ‘offline như DPO’ sai: GRPO cần rollout online."
+    },
+    {
+      "id": "llm-039",
+      "sub": "Reward hacking & RLAIF",
+      "level": 2,
+      "type": "multi",
+      "trap": true,
+      "q": "Chọn TẤT CẢ phát biểu ĐÚNG về reward hacking và RLAIF/Constitutional AI.",
+      "options": [
+        "Constitutional AI: model tự phê bình/sửa theo bộ nguyên tắc (SL), rồi RL với preference do AI gán nhãn (RLAIF)",
+        "Reward hacking chỉ xảy ra với PPO; DPO miễn nhiễm vì tối ưu trực tiếp trên dữ liệu preference, không có RM tường minh",
+        "RM thiên vị độ dài khiến policy học trả lời dài dòng để ăn điểm mà không hữu ích hơn",
+        "Giảm hệ số KL penalty β về 0 giúp hạn chế reward hacking, vì policy không còn bị ép bắt chước lỗi của model SFT",
+        "Reward kiểm chứng được (unit test, đáp án toán) giảm nhưng không loại hết hacking, vd model sửa test"
+      ],
+      "answer": [
+        0,
+        2,
+        4
+      ],
+      "explain": "Reward hacking (Goodhart): policy tối ưu proxy (RM) thay vì mục tiêu thật — dài dòng, sycophancy (chiều theo người dùng), định dạng đẹp nhưng sai. Reward thật thường tăng rồi GIẢM khi tối ưu proxy quá mức (Gao et al. 2022, RM overoptimization). KL penalty là hàng rào chính: β → 0 khiến policy trôi xa vùng RM còn đáng tin → hacking NHIỀU hơn (bẫy). Biện pháp khác: ensemble RM, chuẩn hoá theo độ dài, cập nhật RM định kỳ, early stopping theo eval của người. DPO vẫn bị over-optimization (vd khai thác độ dài, giảm cả xác suất chosen) dù không có RM tường minh. Constitutional AI (Anthropic, 2022): SL-CAI (critique → revision) rồi RL-CAI với preference model train trên nhãn AI → giảm phụ thuộc nhãn con người cho harmlessness."
+    },
+    {
+      "id": "llm-040",
+      "sub": "Test-time compute",
+      "level": 1,
+      "type": "single",
+      "trap": true,
+      "q": "Self-consistency (Wang et al., 2022) cải thiện chain-of-thought như thế nào?",
+      "options": [
+        "Sinh nhiều chuỗi reasoning rồi chọn chuỗi reasoning xuất hiện nhiều lần nhất ở dạng nguyên văn",
+        "Chỉ sinh một lần nhưng yêu cầu model tự kiểm tra lại trong cùng output, nên không tốn thêm compute",
+        "Chạy greedy decoding N lần với cùng prompt rồi majority vote trên các đáp án cuối thu được",
+        "Sample nhiều chuỗi CoT với temperature > 0 rồi majority vote trên đáp án cuối"
+      ],
+      "answer": 3,
+      "explain": "Ý tưởng: bài toán phức tạp có nhiều con đường lập luận dẫn tới đáp án đúng, còn lỗi thì phân tán → vote trên ĐÁP ÁN CUỐI (marginalize qua các reasoning path). Bẫy: greedy là tất định nên N lần greedy cho cùng một kết quả — vote vô nghĩa; phải sampling (T ≈ 0.5–1.0, top-p). Các chuỗi reasoning gần như không bao giờ trùng nguyên văn nên không vote trên chuỗi. Self-refine/self-verify trong một lần sinh vẫn tốn thêm token và là kỹ thuật khác. Self-consistency là dạng đơn giản của test-time compute scaling; các dạng khác: best-of-N với verifier/reward model, tree search, và ‘long CoT’ của reasoning model được train bằng RL."
+    },
+    {
+      "id": "llm-041",
+      "sub": "Knowledge distillation",
+      "level": 2,
+      "type": "numeric",
+      "trap": false,
+      "q": "Teacher có logits `[2, 1, 0]` trên 3 lớp. Tính xác suất soft target của **lớp đầu tiên** với temperature **T = 2** (softmax(z/T)), làm tròn 3 chữ số thập phân.",
+      "answer": 0.506,
+      "tolerance": 0.003,
+      "explain": "z/T = [1, 0.5, 0] → e¹ ≈ 2.718, e^0.5 ≈ 1.649, e⁰ = 1, tổng ≈ 5.367 → p₁ ≈ 2.718/5.367 ≈ 0.506. So với T = 1: p₁ = e²/(e² + e + 1) ≈ 0.665 → T lớn làm phân phối mềm hơn, lộ ‘dark knowledge’ (lớp 2 giống lớp 1 hơn lớp 3). Hinton KD: L = α·CE(y, student) + (1 − α)·T²·KL(p_teacher^T ‖ p_student^T); nhân T² vì gradient của phần soft co lại ~1/T². Bẫy: chia T ở teacher mà quên chia ở student (phải dùng cùng T cho cả hai khi tính loss mềm), hoặc nghĩ T < 1 làm mềm hơn (ngược lại: sắc hơn)."
+    },
+    {
+      "id": "llm-042",
+      "sub": "Knowledge distillation",
+      "level": 2,
+      "type": "single",
+      "trap": true,
+      "q": "Phát biểu nào ĐÚNG về distillation cho LLM?",
+      "options": [
+        "Temperature T < 1 làm soft target mềm hơn, lộ nhiều dark knowledge hơn, nên thường đặt T = 0.5 khi distill",
+        "Sequence-level KD huấn luyện student bằng CE trên output teacher sinh ra, nên dùng được cả khi chỉ có API teacher",
+        "Logit KD dùng thẳng được giữa hai model khác tokenizer, vì chỉ cần so khớp phân phối xác suất ở mỗi bước sinh",
+        "Forward KL(p_teacher ‖ q_student) có tính mode-seeking, nên student tập trung vào mode chính của teacher"
+      ],
+      "answer": 1,
+      "explain": "Sequence-level KD ≈ SFT trên dữ liệu synthetic do teacher sinh (beam search/sampling) — chính là cách distill DeepSeek-R1 sang Qwen/Llama, Alpaca/Vicuna từ GPT. Không cần logit nên không cần chung vocab. Logit/token-level KD so khớp phân phối trên VOCAB tại từng vị trí → hai tokenizer khác nhau thì phân phối không cùng không gian; cần cùng tokenizer hoặc kỹ thuật căn chỉnh đặc biệt. Forward KL(p‖q) là mean-seeking/mode-covering (student cố phủ mọi vùng teacher có xác suất, dễ sinh ra vùng ‘giữa’ vô nghĩa); reverse KL(q‖p) mới là mode-seeking — MiniLLM dùng reverse KL cho generative LM. T > 1 mới làm mềm phân phối. Lưu ý thực tế: dùng output của API thương mại để train model cạnh tranh có thể vi phạm điều khoản sử dụng."
+    },
+    {
+      "id": "llm-043",
+      "sub": "Hallucination",
+      "level": 2,
+      "type": "multi",
+      "trap": false,
+      "q": "Chọn TẤT CẢ phát biểu ĐÚNG về nguyên nhân/bản chất hallucination của LLM.",
+      "options": [
+        "SFT trên sự kiện mà base model chưa biết có thể khuyến khích model bịa (Gekhman et al., 2024)",
+        "Đã sinh ra token sai thì model có xu hướng tiếp tục nhất quán với lỗi đó (snowballing)",
+        "Đặt temperature = 0 loại bỏ hallucination, vì model luôn chọn token có xác suất cao nhất tức là token đúng nhất",
+        "Dùng RAG với retriever tốt đảm bảo loại bỏ hoàn toàn hallucination, vì model chỉ trả lời dựa trên context",
+        "Eval chấm đúng/sai nhị phân thưởng việc đoán hơn nói ‘không biết’, đẩy model về phía đoán",
+        "Objective next-token thưởng chuỗi ‘nghe hợp lý’, không có tín hiệu trực tiếp về tính đúng sự thật"
+      ],
+      "answer": [
+        0,
+        1,
+        4,
+        5
+      ],
+      "explain": "Hallucination có gốc từ objective (likelihood ≠ factuality), dữ liệu (sai, lỗi thời, sự kiện hiếm/long-tail, knowledge cutoff), training (SFT dạy model trả lời tự tin cả khi không biết; RLHF có thể thưởng sự tự tin/chiều lòng) và decoding (exposure bias, snowballing). Greedy chỉ chọn token có xác suất cao nhất — nếu kiến thức sai/thiếu thì vẫn sai một cách tự tin; temperature thấp giảm ngẫu nhiên, không tạo ra kiến thức. Gekhman et al. (2024): model học ví dụ ‘kiến thức mới’ trong SFT chậm hơn và khi học được thì tăng xu hướng hallucinate. OpenAI (2025, ‘Why language models hallucinate’) lập luận các eval nhị phân phạt việc kiêng trả lời, nên tối ưu cho benchmark khuyến khích đoán. RAG giảm nhưng không loại bỏ: retriever có thể lấy sai, model có thể bỏ qua/hiểu sai context — vẫn cần citation, kiểm tra faithfulness (vd Langfuse eval, RAGAS)."
+    },
+    {
+      "id": "llm-044",
+      "sub": "Emergent abilities",
+      "level": 3,
+      "type": "single",
+      "trap": true,
+      "q": "Schaeffer et al. (2023, ‘Are Emergent Abilities of LLMs a Mirage?’) lập luận gì về ‘emergent abilities’ — năng lực xuất hiện đột ngột khi model vượt một ngưỡng kích thước?",
+      "options": [
+        "Emergence chỉ xuất hiện ở model MoE, do số expert active tăng đột ngột khi kích thước vượt một ngưỡng",
+        "Emergence là bằng chứng của chuyển pha kiểu vật lý, về nguyên tắc không thể dự đoán bằng scaling law",
+        "Nhiều bước nhảy là do chọn metric không liên tục như exact match; dùng metric liên tục thì hiệu năng tăng mượt",
+        "Emergent abilities hoàn toàn là hệ quả của data contamination khi model lớn đã thấy nhiều benchmark hơn"
+      ],
+      "answer": 2,
+      "explain": "Wei et al. (2022) định nghĩa emergent ability là năng lực không có ở model nhỏ nhưng có ở model lớn, không ngoại suy được từ model nhỏ. Schaeffer et al. chỉ ra: nếu xác suất đúng mỗi token p tăng mượt, thì exact match trên đáp án L token ≈ p^L trông như ‘nhảy vọt’; đổi sang metric liên tục hoặc tăng số mẫu test thì đường cong mượt. Họ còn tạo ra ‘emergence’ giả trên model thị giác chỉ bằng cách chọn metric. Ý nghĩa phỏng vấn: khi báo cáo ‘model đột nhiên làm được X’, cần kiểm tra metric, độ phân giải đánh giá và cỡ mẫu trước khi kết luận. Contamination là vấn đề có thật nhưng không phải luận điểm của paper; emergence được báo cáo chủ yếu trên model dense, không liên quan MoE."
+    },
+    {
+      "id": "llm-045",
+      "sub": "In-context learning",
+      "level": 2,
+      "type": "single",
+      "trap": true,
+      "q": "Phát biểu nào ĐÚNG về in-context learning (ICL) với few-shot demonstrations?",
+      "options": [
+        "ICL chỉ xuất hiện sau instruction tuning; base model chưa qua SFT không làm được few-shot theo ví dụ",
+        "ICL thực hiện vài bước gradient descent thật lên trọng số trong forward, nên càng nhiều shot model càng đổi vĩnh viễn",
+        "Nhãn đúng trong demo là yếu tố quyết định nhất; định dạng và thứ tự các ví dụ gần như không ảnh hưởng kết quả",
+        "ICL không cập nhật trọng số; nhạy với định dạng và thứ tự ví dụ, còn nhãn demo sai đôi khi chỉ giảm nhẹ hiệu năng"
+      ],
+      "answer": 3,
+      "explain": "ICL: model ‘học’ từ ví dụ trong prompt chỉ bằng forward pass; trọng số không đổi, hết context là ‘quên’. Một số nghiên cứu diễn giải attention như thực hiện ngầm thuật toán giống gradient descent, nhưng không có cập nhật trọng số thật. Min et al. (2022, ‘Rethinking the Role of Demonstrations’): không gian nhãn, phân phối input và định dạng quan trọng; tính đúng của nhãn ảnh hưởng ít hơn ta nghĩ. Tuy vậy Wei et al. (2023) cho thấy model RẤT lớn có thể bị nhãn lật ngược kéo theo — kết luận không tuyệt đối. Thứ tự ví dụ có thể làm accuracy dao động rất mạnh (Lu et al., 2022). GPT-3 base (chưa instruction tuning) đã thể hiện few-shot ICL mạnh — đó là thông điệp chính của paper ‘Language Models are Few-Shot Learners’. Ứng dụng: chọn demo tương tự query (retrieval-based few-shot), cố định định dạng, cân bằng nhãn; context dài cho phép many-shot ICL."
+    }
+  ]
+}

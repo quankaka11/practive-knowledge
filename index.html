@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<!-- ARTIFACT:HEAD:START -->
+<title>AI Engineer Drill</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@500;600;700;800&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<!-- ARTIFACT:HEAD:END -->
+<link rel="stylesheet" href="assets/app.css">
+</head>
+<body>
+<!-- ARTIFACT:BODY:START -->
+<header class="topbar">
+  <div class="topbar-inner">
+    <a class="brand" href="#home" data-nav="home">
+      <span class="brand-mark" aria-hidden="true">∂</span>
+      <span class="brand-text">AI Engineer Drill<small>NLP · LLM · Agents · ML</small></span>
+    </a>
+    <nav class="tabs" aria-label="Điều hướng">
+      <a href="#home" data-nav="home">Làm bài</a>
+      <a href="#notes" data-nav="notes">Kiến thức</a>
+      <a href="#bank" data-nav="bank">Ngân hàng câu</a>
+      <a href="#stats" data-nav="stats">Thống kê</a>
+    </nav>
+    <button class="icon-btn" id="themeBtn" type="button" title="Đổi giao diện sáng/tối" aria-label="Đổi giao diện sáng/tối">◐</button>
+  </div>
+</header>
+<main id="app" class="wrap" tabindex="-1"></main>
+<div id="modal" class="modal" hidden></div>
+<!-- ARTIFACT:BODY:END -->
+<script src="data/bank.js"></script>
+<script src="assets/app.js"></script>
+</body>
+</html>

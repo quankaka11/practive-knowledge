@@ -1,0 +1,764 @@
+{
+  "id": "infer",
+  "name": "LLM Inference & Model Optimization",
+  "icon": "⚡",
+  "order": 3,
+  "notes": [
+    {
+      "title": "Decoding & sampling",
+      "md": "**Pipeline xử lý logits (thứ tự phổ biến):** penalties / logit_bias → chia cho temperature → lọc top-k / top-p / min-p → chuẩn hóa lại → sample.\n\n| Kỹ thuật | Cách làm | Ghi nhớ |\n|---|---|---|\n| Greedy | argmax mỗi bước | tất định về thuật toán, dễ lặp |\n| Beam search | giữ k chuỗi có Σlog p cao nhất | hợp dịch máy/ASR; văn bản mở dễ nhạt, lặp; tốn k× KV cache; KHÔNG đảm bảo tối ưu toàn cục |\n| Temperature | `softmax(z/T)` | T<1 nhọn hơn, T>1 phẳng hơn, T→0 ≈ greedy |\n| Top-k | giữ k token xác suất cao nhất | k cố định, không thích nghi |\n| Top-p (nucleus) | tập NHỎ NHẤT có tổng ≥ p | phải thêm cả token làm tổng vượt p, rồi chuẩn hóa lại |\n| Min-p | giữ token có p ≥ min_p × p_max | ngưỡng tự co giãn theo độ tự tin của model |\n\n**Penalties:**\n- OpenAI: `mu[j] − c[j]·frequency_penalty − 1[c[j]>0]·presence_penalty` (frequency nhân theo số lần, presence trừ đúng 1 lần).\n- HF `repetition_penalty` (CTRL): logit > 0 thì CHIA, logit < 0 thì NHÂN cho penalty — luôn làm token kém khả năng hơn, không phụ thuộc số lần.\n- `logit_bias`: cộng vào logit theo **token ID** (không phải chuỗi); −100 ≈ cấm, +100 ≈ ép.\n\n**Không tất định ở temperature=0:** nguyên nhân chính trong serving là kernel không *batch-invariant* (kích thước batch đổi theo tải → thứ tự reduction đổi → logits lệch nhỏ → argmax đổi khi 2 token sát nhau). `seed` của provider chỉ là best-effort (xem `system_fingerprint`)."
+    },
+    {
+      "title": "Prefill vs decode, metrics, roofline",
+      "md": "| | Prefill | Decode |\n|---|---|---|\n| Xử lý | toàn bộ prompt song song | 1 token/bước/chuỗi |\n| Bottleneck | compute-bound (matmul lớn) | memory-bandwidth-bound (đọc lại weights + KV mỗi bước) |\n| Metric | **TTFT** | **TPOT / ITL** |\n\n- **E2E latency = TTFT + (n − 1) · TPOT** (token đầu đã nằm trong TTFT).\n- **Throughput hệ thống** ≈ batch / TPOT (tokens/s) ở pha decode; **goodput** = throughput thỏa SLO.\n- TTFT tăng do: prompt dài, hàng đợi, cache miss. `max_tokens` và độ dài output KHÔNG ảnh hưởng TTFT.\n\n**Roofline:** arithmetic intensity AI = FLOPs / bytes. Ridge point = peak FLOPS / bandwidth. AI < ridge → memory-bound.\n- Ví dụ H100 SXM: 989 TFLOPS BF16 dense / 3.35 TB/s ≈ **295 FLOP/byte**; A100 80GB: 312 / 2.04 ≈ 153.\n- Decode linear layer BF16: ≈ 2B FLOPs / 2 bytes mỗi param → AI ≈ **B** (batch size). Batch 1 ≈ 1 FLOP/byte → cực kỳ memory-bound.\n- Attention trên KV cache: mỗi chuỗi đọc KV riêng → AI gần như không tăng theo batch → context dài giữ decode memory-bound."
+    },
+    {
+      "title": "Toán bộ nhớ: weights, GB vs GiB, tokens/s",
+      "md": "| dtype | bytes/param | 7B | 13B | 70B |\n|---|---|---|---|---|\n| FP32 | 4 | 28 GB | 52 GB | 280 GB |\n| FP16/BF16 | 2 | 14 GB | 26 GB | 140 GB |\n| INT8/FP8 | 1 | 7 GB | 13 GB | 70 GB |\n| INT4 | 0.5 | 3.5 GB | 6.5 GB | 35 GB |\n\n- **GB = 10⁹ byte, GiB = 2³⁰ = 1.0737·10⁹ byte.** 26 GB = 24.21 GiB. nvidia-smi hiển thị MiB.\n- INT4 thực tế > 4 bit/weight: group-wise 4-bit, group 128 + scale FP16 + zero FP16 → 4 + 32/128 = **4.25 bpw**; GGUF Q4_K_M ≈ 4.8–4.9 bpw.\n- Tổng VRAM = weights + KV cache + activation/workspace + CUDA context (≈ vài GB).\n- **Cận trên tokens/s decode (batch 1)** ≈ bandwidth / bytes weights. Vd 8B FP16 (16 GB) trên 2 TB/s ≈ 125 tok/s; 70B INT4 (35 GB) trên 3.35 TB/s ≈ 96 tok/s. Thực tế đạt ~60–80%.\n- Quantization weight giúp decode nhanh gần tỉ lệ giảm bytes, nhưng không giảm FLOPs nếu vẫn tính FP16 (W4A16)."
+    },
+    {
+      "title": "KV cache",
+      "md": "**Công thức:** `KV bytes = 2 (K và V) × n_layers × n_kv_heads × head_dim × seq_len × batch × bytes/elem`\n\n| Model | layers | kv_heads | head_dim | KV/token FP16 |\n|---|---|---|---|---|\n| Llama-2-7B (MHA) | 32 | 32 | 128 | 512 KiB |\n| Llama-3-8B (GQA) | 32 | 8 | 128 | 128 KiB |\n| Llama-3-70B (GQA) | 80 | 8 | 128 | 320 KiB |\n\n- Llama-3-8B, batch 16 × 8192 token → 16 GiB; Llama-3-70B, 1 request 128K token → 40 GiB = 42.95 GB.\n- **GQA** giảm KV theo n_q_heads / n_kv_heads (8B: 32/8 = 4×); **MQA** = 1 KV head (giảm nhiều nhất, chất lượng giảm hơn).\n- **KV cache quantization** (FP8/INT8/INT4) giảm 2–4× → nhiều chuỗi đồng thời hơn / context dài hơn.\n- vLLM: ngân sách KV = `gpu_memory_utilization × VRAM − weights − activation peak`; số chuỗi tối đa = ngân sách / KV mỗi chuỗi.\n- Lỗi hay gặp: dùng n_q_heads thay n_kv_heads, quên hệ số 2, lẫn GB/GiB."
+    },
+    {
+      "title": "Kỹ thuật serving: PagedAttention, batching, prefix caching, FlashAttention, TP",
+      "md": "- **PagedAttention (vLLM):** KV cache chia block cố định (mặc định 16 token), cấp phát theo nhu cầu, không cần liên tục → lãng phí bộ nhớ < 4% (so với cấp phát trước max_len), chia sẻ block bằng copy-on-write (parallel sampling, beam, prefix). Không xấp xỉ attention.\n- **Static batching:** chờ cả batch xong (bị chuỗi dài nhất giữ). **Dynamic batching** (Triton): gom request theo cửa sổ thời gian/batch size tối đa — ở mức request. **Continuous / in-flight batching:** lập lịch mỗi iteration, chuỗi xong rời ngay, chuỗi mới vào ngay → throughput cao hơn nhiều.\n- **Chunked prefill:** chia prefill dài thành chunk, trộn với decode → ITL ổn định, không bị khựng; TTFT prompt dài có thể tăng nhẹ. Thay thế khác: disaggregated prefill/decode.\n- **Prefix caching (vLLM APC, SGLang RadixAttention, prompt caching của provider):** tái dùng KV của prefix trùng khớp CHÍNH XÁC theo token → giảm TTFT và giá input cached. Đặt phần tĩnh lên đầu, phần động xuống cuối.\n- **FlashAttention:** attention CHÍNH XÁC, IO-aware: tiling vào SRAM + online softmax, không ghi ma trận N×N ra HBM → bộ nhớ O(N), ít truy cập HBM; FLOPs vẫn O(N²). FA2 song song tốt hơn, FA3 cho Hopper (FP8, async).\n- **Tensor parallel:** chia ma trận trong mỗi layer (Megatron: column rồi row), 2 all-reduce/block → cần NVLink trong node; giảm weights/GPU và latency/token. Pipeline parallel tăng throughput nhưng không giảm latency/token ở batch 1. TP > n_kv_heads → nhân bản KV head."
+    },
+    {
+      "title": "Speculative decoding",
+      "md": "- Draft (model nhỏ / head) đề xuất γ token → target verify song song trong 1 forward → chấp nhận tiền tố đúng + 1 token từ target.\n- **Rejection sampling chuẩn** (Leviathan/Chen 2023): chấp nhận với xác suất min(1, p/q); nếu từ chối, sample từ norm(max(0, p − q)) → **phân phối output y hệt target**.\n- Số token kỳ vọng mỗi vòng (α i.i.d.): **(1 − α^(γ+1)) / (1 − α)**. Speedup walltime ≈ **(1 − α^(γ+1)) / ((1 − α)(γc + 1))**, c = chi phí 1 bước draft / 1 bước target.\n  - α = 0.8, γ = 4, c = 0.1 → 3.36 token/vòng, speedup ≈ 2.40×.\n- **Medusa:** thêm nhiều decoding head + tree attention, không cần draft model; *typical acceptance* KHÔNG đảm bảo giữ đúng phân phối (greedy thì lossless).\n- **EAGLE:** draft head nhẹ tự hồi quy ở mức feature (hidden state) của target, lossless.\n- Lợi ích giảm khi batch lớn (GPU đã compute-bound) và khi α thấp (task sáng tạo, temperature cao). Dạng chuẩn cần chung tokenizer."
+    },
+    {
+      "title": "Quantization: nền tảng & tính tay",
+      "md": "- **Asymmetric (uint8 [0,255]):** `scale = (max − min)/255`, `zp = round(−min/scale)`, `q = clamp(round(x/scale) + zp)`, `x̂ = (q − zp)·scale`.\n  - Vd [−1, 3]: scale = 0.01569, zp = 64; x = 1.5 → q = 160, x̂ = 1.5059.\n- **Symmetric (int8 [−127,127]):** `scale = max|x|/127`, zp = 0. Đơn giản, nhanh; lãng phí range nếu phân phối lệch (vd sau ReLU).\n- **Granularity:** per-tensor < per-channel < group-wise (vd 128 phần tử/group) về độ chính xác; tốn thêm metadata. Một outlier làm scale per-tensor phình to → giá trị nhỏ bị làm tròn về 0.\n- **PTQ:** lượng tử model đã train, ít/không cần calibration data, nhanh (GPTQ, AWQ, SmoothQuant đều là PTQ). **QAT:** fake-quant + straight-through estimator khi train → tốt hơn ở bit thấp, tốn compute.\n- **Weight-only (W4A16, W8A16)** lợi cho decode memory-bound; **W8A8 / FP8** lợi cả compute (Tensor Core INT8/FP8) → tốt cho prefill & batch lớn.\n- Activation LLM có **outlier features** (xuất hiện rõ từ ~6.7B params), tập trung ở một số kênh → per-tensor activation INT8 hỏng."
+    },
+    {
+      "title": "Các phương pháp lượng tử hóa LLM",
+      "md": "| Phương pháp | Ý tưởng | Loại |\n|---|---|---|\n| LLM.int8() | vector-wise INT8 + tách cột outlier (>6) tính FP16 (mixed-precision decomposition) | W8A8 hỗn hợp, thường chậm hơn FP16 |\n| GPTQ | lượng tử từng cột, dùng xấp xỉ Hessian (từ calibration) để cập nhật weight còn lại bù sai số (OBQ) | weight-only 3/4-bit |\n| AWQ | tìm ~1% kênh quan trọng theo độ lớn ACTIVATION, bảo vệ bằng per-channel scaling; không backprop | weight-only 4-bit |\n| SmoothQuant | chia activation, nhân weights theo kênh: `s_j = max|X_j|^α / max|W_j|^(1−α)` (α≈0.5) → chuyển độ khó sang weights | W8A8 |\n| FP8 | E4M3 (max 448, chính xác hơn) cho W/A; E5M2 (max 57344, range rộng) cho gradient | Hopper/Ada+ |\n| NF4 (QLoRA) | 16 mức theo quantile N(0,1) + double quantization cho scale | lưu trữ 4-bit, tính BF16 |\n| GGUF k-quants | super-block 256 weight, block con có scale/min lượng tử 6-bit; Q4_K_M ≈ 4.8–4.9 bpw | llama.cpp / Ollama, CPU/Apple/GPU |\n\nHay hỏi: *Vì sao W4A16 không nhanh ở batch lớn?* → compute-bound, vẫn tính FP16, thêm chi phí dequant."
+    },
+    {
+      "title": "Pruning, distillation, low-rank",
+      "md": "**Pruning**\n- Unstructured (từng weight): giữ chất lượng tốt nhưng ít tăng tốc GPU (vẫn dense kernel; sparse kernel cần độ thưa rất cao).\n- Structured (head/neuron/layer): tăng tốc thật với dense kernel, mất chất lượng nhiều hơn → cần fine-tune/distill.\n- **2:4 semi-structured:** mỗi 4 weight liên tiếp có 2 số 0 (50%), Sparse Tensor Core (Ampere+) tối đa ~2× math.\n- **SparseGPT:** one-shot, cập nhật weight còn lại theo xấp xỉ Hessian. **Wanda:** điểm = |W|·‖X‖₂, so sánh trong từng output, không cập nhật weight. Magnitude thuần kém ở LLM.\n\n**Knowledge distillation (Hinton)**\n- `L = α·CE(y, p_s) + (1 − α)·T²·KL(p_t^T ‖ p_s^T)`, `p^T = softmax(z/T)`.\n- T lớn làm lộ *dark knowledge* (quan hệ giữa các lớp sai). Nhân T² vì gradient soft term ∝ 1/T².\n- Biến thể LLM: sequence-level KD (train trên output teacher), on-policy/GKD, reverse KL.\n\n**Low-rank / weight sharing**\n- W (d×d) ≈ A(d×r)·B(r×d): tham số 2dr, có lợi khi r < d/2. d = 4096, r = 256 → 8×. Là xấp xỉ, cần fine-tune hồi phục. LoRA áp ý tưởng này cho phần cập nhật.\n- Weight sharing (ALBERT dùng chung layer) giảm params nhưng KHÔNG giảm FLOPs."
+    },
+    {
+      "title": "Serving engines",
+      "md": "| Engine | Điểm mạnh |\n|---|---|\n| vLLM | PagedAttention, continuous batching, APC, chunked prefill, speculative, nhiều định dạng quant, API OpenAI-compatible |\n| SGLang | RadixAttention (radix tree KV, LRU) — mạnh khi nhiều prefix chung: agent, multi-turn, few-shot, structured output |\n| TensorRT-LLM | compile engine tối ưu cho NVIDIA, FP8/INT4, in-flight batching; thường chạy sau Triton |\n| TGI | server của Hugging Face, continuous batching, streaming |\n| Triton Inference Server | server đa backend (TensorRT, ONNX, PyTorch, Python, vLLM, TRT-LLM), dynamic batching, ensemble |\n| ONNX Runtime | inference engine đa nền tảng, graph optimization, execution providers (CUDA, TensorRT, CPU, DirectML) |\n| Ollama / llama.cpp | chạy local GGUF, CPU/Apple Silicon, quant k-quants |\n\n**Streaming SSE:** `text/event-stream`, một chiều server → client; giảm *perceived latency* (người dùng thấy token đầu sau TTFT) nhưng không giảm E2E latency hay chi phí. Nhớ tắt buffering ở reverse proxy (nginx `X-Accel-Buffering: no`)."
+    },
+    {
+      "title": "Production: caching, routing, rate limit, chi phí, token optimization",
+      "md": "- **Chi phí/request** = uncached_in × giá_in + cached_in × giá_cached + out × giá_out. Output thường đắt 3–5× input.\n- **Prompt caching (provider):** prefix trùng chính xác; giảm TTFT + giá phần cached; không trả lại response cũ.\n- **Exact cache:** hash(prompt + params) → an toàn, hit thấp. **Semantic cache:** embedding + ngưỡng cosine → hit cao, rủi ro false hit (khác thực thể/số/phủ định), cần phân vùng theo tenant/quyền, TTL/invalidation, tránh câu hỏi thời gian thực.\n- **Rate limit:** RPM và TPM, cái nào chạm trước thì giới hạn. Azure OpenAI ước lượng TPM = prompt + `max_tokens` (+ best_of) tại lúc nhận request → đặt `max_tokens` sát thực tế. RPM được đánh giá theo cửa sổ 1–10 s → tránh burst.\n- **Retry:** exponential backoff + jitter, tôn trọng `retry-after(-ms)`; request bị 429 vẫn tính vào limit. Circuit breaker cho provider lỗi.\n- **Fallback đa provider:** khác tokenizer, context window, tool-calling schema, structured output, safety filter → cần lớp adapter + eval; fallback an toàn trước token đầu tiên khi stream.\n- **Token optimization:** cắt context RAG (rerank, top-k nhỏ, nén), system prompt gọn và tĩnh (để cache), output ngắn bằng structured output, `max_tokens` hợp lý, tránh gửi lại lịch sử dài (tóm tắt), chọn model nhỏ cho task dễ (routing theo độ khó)."
+    }
+  ],
+  "questions": [
+    {
+      "id": "infer-001",
+      "sub": "Temperature",
+      "level": 2,
+      "type": "numeric",
+      "trap": false,
+      "q": "Logits của 3 token lần lượt là `[2, 1, 0]`. Với **temperature T = 0.5**, xác suất của token có logit 2 sau softmax là bao nhiêu?\n\n(Nhập dạng thập phân 0.xxxx, làm tròn 4 chữ số.)",
+      "answer": 0.8668,
+      "tolerance": 0.001,
+      "unit": "",
+      "explain": "Temperature CHIA logits: z/T = [4, 2, 0]. Tính e^4 ≈ 54.598, e^2 ≈ 7.389, e^0 = 1 → tổng ≈ 62.987. Xác suất = 54.598 / 62.987 ≈ 0.8668. So sánh với T = 1: e^2/(e^2 + e + 1) ≈ 0.6652 → T < 1 làm phân phối nhọn hơn (gần greedy), T > 1 làm phẳng hơn. Bẫy: nhân logits với T (được [1, 0.5, 0] → ≈ 0.5065) là sai chiều — đó chính là hiệu ứng của T = 2. Ghi nhớ: T → 0 tiến tới argmax, temperature không đổi thứ hạng token nên không ảnh hưởng greedy."
+    },
+    {
+      "id": "infer-002",
+      "sub": "Top-p",
+      "level": 2,
+      "type": "single",
+      "trap": true,
+      "q": "Phân phối token tiếp theo (đã sắp xếp): A = 0.50, B = 0.20, C = 0.15, D = 0.10, E = 0.05. Dùng **top_p = 0.75** (nucleus sampling). Phát biểu nào đúng?",
+      "options": [
+        "Giữ {A, B} vì tổng 0.70 vẫn dưới ngưỡng; C làm tổng vượt 0.75 nên bị loại, P(C) = 0",
+        "Giữ {A, B, C}; sau khi chuẩn hóa lại, P(C) ≈ 0.176",
+        "Giữ {A, B, C}; P(C) giữ nguyên 0.15 vì top-p chỉ lọc, không chuẩn hóa lại",
+        "Giữ mọi token có p ≥ 0.75 × 0.50 = 0.375, tức chỉ còn {A}, P(C) = 0"
+      ],
+      "answer": 1,
+      "explain": "Nucleus là tập NHỎ NHẤT các token có tổng xác suất ≥ p. Cộng dồn: 0.50 → 0.70 → 0.85; tại B tổng mới 0.70 < 0.75 nên phải thêm C (token làm tổng vượt ngưỡng vẫn được giữ). Sau đó chuẩn hóa lại trên tập giữ: xác suất của C = 0.15 / 0.85 ≈ 0.176. Chọn {A, B} là bẫy off-by-one phổ biến. 'Không chuẩn hóa lại' sai vì tổng xác suất phải bằng 1 để sample. Ngưỡng 0.75 × p_max là công thức của min-p (với min_p = 0.75), nhầm khái niệm gần nhau."
+    },
+    {
+      "id": "infer-003",
+      "sub": "Min-p",
+      "level": 2,
+      "type": "single",
+      "trap": false,
+      "q": "Phân phối token: `[0.60, 0.20, 0.08, 0.05, 0.04, 0.03]`, dùng **min_p = 0.1**. Phát biểu nào đúng?",
+      "options": [
+        "Ngưỡng tuyệt đối 0.1 áp lên xác suất gốc → giữ 2 token (0.60 và 0.20); ngưỡng cố định bất kể hình dạng phân phối",
+        "Giữ token theo thứ tự cho tới khi tổng cộng dồn ≥ 0.1 rồi chuẩn hóa lại → chỉ còn token 0.60, tương đương greedy",
+        "Ngưỡng = 0.1 × 0.60 = 0.06 → giữ 3 token; phân phối càng phẳng (p_max nhỏ) thì ngưỡng càng thấp",
+        "Ngưỡng = 0.1 × 0.60 = 0.06 → giữ 3 token; phân phối càng phẳng thì ngưỡng càng cao, giữ ít token hơn"
+      ],
+      "answer": 2,
+      "explain": "Min-p giữ token có p ≥ min_p × p_max. Ở đây ngưỡng = 0.1 × 0.60 = 0.06 → giữ 0.60, 0.20, 0.08 (3 token), loại 0.05, 0.04, 0.03. Điểm mạnh: ngưỡng tỉ lệ với độ tự tin — model chắc chắn (p_max lớn) thì cắt mạnh, phân phối phẳng (p_max nhỏ) thì ngưỡng thấp, giữ nhiều lựa chọn hơn; nhờ vậy dùng được temperature cao mà ít sinh rác. Hiểu min_p là ngưỡng tuyệt đối 0.1 là sai; cộng dồn xác suất là cơ chế của top-p (và với p = 0.1 sẽ gần như greedy); ý 'phân phối càng phẳng thì ngưỡng càng cao' đảo ngược chiều co giãn."
+    },
+    {
+      "id": "infer-004",
+      "sub": "Frequency/presence penalty",
+      "level": 2,
+      "type": "numeric",
+      "trap": true,
+      "q": "Theo công thức của OpenAI: `mu[j] − c[j]·frequency_penalty − 1[c[j] > 0]·presence_penalty`, trong đó c[j] là số lần token j đã xuất hiện trong phần đã sinh.\n\nToken j có logit gốc **3.0**, đã xuất hiện **4 lần**, `frequency_penalty = 0.5`, `presence_penalty = 0.6`. Logit sau khi phạt là bao nhiêu? (1 chữ số thập phân)",
+      "answer": 0.4,
+      "tolerance": 0.01,
+      "unit": "",
+      "explain": "Frequency penalty nhân theo số lần: 4 × 0.5 = 2.0. Presence penalty chỉ trừ MỘT lần nếu token đã xuất hiện ít nhất 1 lần: 0.6. Logit mới = 3.0 − 2.0 − 0.6 = 0.4. Bẫy: nhân cả presence theo số lần (3.0 − 2.0 − 2.4 = −1.4) — sai vì presence là chỉ báo nhị phân 'đã có hay chưa'. Khác với HF repetition_penalty (nhân/chia logit, không đếm số lần). Penalty quá cao làm model né cả từ cần lặp hợp lệ (tên riêng, keyword JSON)."
+    },
+    {
+      "id": "infer-005",
+      "sub": "Non-determinism",
+      "level": 3,
+      "type": "multi",
+      "trap": true,
+      "q": "Bạn gọi cùng một prompt tới endpoint (API provider hoặc vLLM tự host) với `temperature=0` và `seed` cố định nhưng thỉnh thoảng output vẫn khác nhau. Chọn **TẤT CẢ** phát biểu đúng.",
+      "options": [
+        "Kernel không batch-invariant: batch size đổi theo tải server làm đổi thứ tự reduction → logits lệch nhỏ, đủ đổi argmax khi 2 token sát nhau",
+        "Tham số seed của provider (vd OpenAI) chỉ là best-effort; backend đổi (system_fingerprint khác) có thể cho kết quả khác",
+        "Thủ phạm chính là các phép atomic add chạy song song trong forward pass (matmul, attention); chỉ cần tắt atomic là inference trở nên tất định",
+        "Greedy decoding tất định về mặt thuật toán, nên khác biệt chỉ có thể đến từ số học dấu phẩy động và cách thực thi",
+        "Cố định seed và temperature=0 đảm bảo output giống hệt giữa hai provider khác nhau cùng phục vụ một open-weight model với cùng checkpoint"
+      ],
+      "answer": [
+        0,
+        1,
+        3
+      ],
+      "explain": "Phân tích của Thinking Machines (9/2025, 'Defeating Nondeterminism in LLM Inference') chỉ ra: một forward pass LLM thông thường gần như không có atomic add; nguyên nhân chính là thiếu batch invariance — kết quả cho 1 request phụ thuộc vào batch size, mà batch size lại phụ thuộc tải server (nên ý 'thủ phạm chính là atomic add' là sai). Họ chứng minh dùng kernel batch-invariant (RMSNorm, matmul, attention) thì vLLM chạy tất định ở temperature 0. Seed của provider chỉ là best-effort. Greedy là argmax nên tất định về thuật toán; sai khác đến từ numerics. Hai provider khác phần cứng, kernel, quant, batch → cùng seed không đảm bảo output giống nhau giữa provider."
+    },
+    {
+      "id": "infer-006",
+      "sub": "Beam search",
+      "level": 1,
+      "type": "single",
+      "trap": false,
+      "q": "Phát biểu nào đúng về **beam search** khi dùng với LLM?",
+      "options": [
+        "Giữ k chuỗi có tổng log-prob cao nhất mỗi bước; hợp dịch máy/ASR, còn với văn bản mở dễ cho câu nhạt và lặp",
+        "Beam size = 1 tương đương sampling ở temperature 1, nên khi tăng beam size output luôn đa dạng và sáng tạo hơn so với greedy",
+        "Với beam đủ lớn (vd k ≥ 5), beam search đảm bảo tìm được chuỗi có xác suất cao nhất toàn cục (exact MAP)",
+        "Tốn compute và bộ nhớ như greedy vì mỗi bước chỉ chọn top-k token từ một phân phối, KV cache không nhân theo k"
+      ],
+      "answer": 0,
+      "explain": "Beam search mở rộng k giả thuyết song song và giữ k chuỗi có Σ log p cao nhất; phù hợp dịch máy/ASR nơi đáp án hội tụ. Với văn bản mở, chuỗi xác suất cao thường nhạt, lặp (degeneration), nên chatbot dùng sampling. Beam = 1 chính là greedy, không phải sampling, và tăng beam làm output càng 'an toàn', ít đa dạng. Beam search là heuristic, KHÔNG đảm bảo tối ưu toàn cục dù beam lớn. Nó phải duy trì k chuỗi nên tốn ~k× KV cache và compute (vLLM dùng copy-on-write để chia sẻ prefix giữa các beam)."
+    },
+    {
+      "id": "infer-007",
+      "sub": "Repetition penalty",
+      "level": 3,
+      "type": "single",
+      "trap": true,
+      "q": "Trong Hugging Face, `repetition_penalty=1.2` (kiểu CTRL) được áp cho 2 token đã xuất hiện: token X có logit **−2.0** và token Y có logit **2.0**. Logit sau khi áp penalty là?",
+      "options": [
+        "X: −2.0/1.2 ≈ −1.667; Y: 2.0/1.2 ≈ 1.667 (chia mọi logit cho penalty)",
+        "X: −2.0 − 1.2 = −3.2; Y: 2.0 − 1.2 = 0.8 (trừ hằng số như presence penalty)",
+        "X: −2.0 × 1.2 = −2.4; Y: 2.0 × 1.2 = 2.4",
+        "X: −2.0 × 1.2 = −2.4; Y: 2.0/1.2 ≈ 1.667"
+      ],
+      "answer": 3,
+      "explain": "RepetitionPenaltyLogitsProcessor của HF: nếu logit < 0 thì NHÂN với penalty, nếu logit > 0 thì CHIA cho penalty — cả hai đều làm token kém khả năng hơn. X: −2.0 × 1.2 = −2.4; Y: 2.0 / 1.2 ≈ 1.667. Bẫy 1: chia mọi logit → logit âm −2.0 thành −1.667, tức là TĂNG xác suất token lặp (ngược mục đích) — đây là lý do công thức tách 2 nhánh. Bẫy 2: trừ hằng số là kiểu OpenAI presence penalty. Nhân cả logit dương thì lại khuyến khích lặp. Lưu ý repetition_penalty không phụ thuộc số lần xuất hiện và trong HF áp lên mọi token trong input_ids (cả prompt)."
+    },
+    {
+      "id": "infer-008",
+      "sub": "Logit bias",
+      "level": 2,
+      "type": "single",
+      "trap": false,
+      "q": "Bạn muốn ép một LLM API chỉ trả lời `Yes` hoặc `No` cho bài phân loại bằng `logit_bias`. Phát biểu nào đúng?",
+      "options": [
+        "logit_bias nhận chuỗi ký tự, API tự tokenize và áp cho mọi biến thể hoa/thường, nên chỉ cần truyền {'Yes': 100, 'No': 100}",
+        "Bias cộng vào xác suất sau softmax rồi chuẩn hóa lại, nên +100 cho 'Yes' và 'No' sẽ chia đều xác suất 50/50 giữa hai nhãn",
+        "Bias cộng vào logit theo token ID trước softmax (−100 ≈ cấm, +100 ≈ ép); cần tính biến thể ' Yes', 'yes' và đặt max_tokens=1",
+        "logit_bias chỉ có hiệu lực khi sampling (temperature > 0); với temperature = 0 server lấy argmax trên logit gốc nên bỏ qua bias"
+      ],
+      "answer": 2,
+      "explain": "logit_bias là map {token_id: bias} (OpenAI cho phép −100..100), cộng vào logit TRƯỚC softmax. −100 thực tế loại bỏ token, +100 gần như ép chọn. Vì làm việc ở mức token ID, phải tokenize đúng tokenizer của model và tính đến biến thể ' Yes' (có dấu cách) vs 'Yes' vs 'yes'. Kết hợp max_tokens = 1 để chỉ sinh 1 token nhãn. Cộng vào xác suất rồi 'chia đều 50/50' là sai: bias ở không gian logit, hai nhãn cùng +100 vẫn giữ chênh lệch logit gốc giữa chúng. Greedy (temperature 0) vẫn chịu ảnh hưởng, server không bỏ qua bias, vì argmax dựa trên logit đã cộng bias."
+    },
+    {
+      "id": "infer-009",
+      "sub": "Prefill vs decode",
+      "level": 1,
+      "type": "single",
+      "trap": false,
+      "q": "Phát biểu nào mô tả đúng hai pha **prefill** và **decode** khi inference LLM?",
+      "options": [
+        "Prefill memory-bound vì phải ghi KV cache của cả prompt ra HBM; decode compute-bound vì mỗi token phải tính attention với toàn bộ context",
+        "Prefill chạy song song cả prompt → thường compute-bound, quyết định TTFT; decode đọc lại weights + KV mỗi bước → memory-bound, quyết định TPOT",
+        "Cả hai đều compute-bound; decode chậm hơn trên mỗi token chỉ vì kernel attention với 1 query khó tận dụng Tensor Core như prefill",
+        "Nhờ KV cache, decode chỉ tốn O(1) FLOPs mỗi token nên đã tối ưu sẵn; tăng batch size không cải thiện throughput decode mà chỉ làm tăng latency"
+      ],
+      "answer": 1,
+      "explain": "Prefill nhân ma trận với hàng nghìn token cùng lúc → arithmetic intensity cao → compute-bound; thời gian prefill (cộng hàng đợi) quyết định TTFT. Decode mỗi bước chỉ xử lý 1 token/chuỗi nhưng phải đọc toàn bộ weights (vd 16 GB cho 8B FP16) và KV cache → memory-bandwidth-bound, quyết định TPOT. Chính vì decode memory-bound nên tăng batch tăng throughput gần tuyến tính (đọc weights 1 lần, phục vụ nhiều chuỗi) cho tới khi chạm compute hoặc hết bộ nhớ KV. Ý 'prefill memory-bound, decode compute-bound' là đảo ngược hai pha; KV cache giúp decode khỏi tính lại prefix nhưng không biến nó thành O(1) hay hết memory-bound."
+    },
+    {
+      "id": "infer-010",
+      "sub": "Latency",
+      "level": 1,
+      "type": "numeric",
+      "trap": false,
+      "q": "Một request có **TTFT = 350 ms**, **TPOT = 25 ms**, sinh **400 output tokens**. Quy ước: TTFT đã bao gồm việc sinh token đầu tiên; mỗi token **sau** token đầu tốn đúng 1 TPOT. Tổng end-to-end latency là bao nhiêu **giây**? (làm tròn 3 chữ số thập phân)",
+      "answer": 10.325,
+      "tolerance": 0.005,
+      "unit": "s",
+      "explain": "Token đầu tiên đã được tính trong TTFT, các token còn lại mỗi token tốn 1 TPOT: E2E = TTFT + (n − 1)·TPOT = 0.350 + 399 × 0.025 = 0.350 + 9.975 = 10.325 s. Bẫy off-by-one: 0.350 + 400 × 0.025 = 10.350 s. Từ đây thấy với output dài, TPOT chi phối E2E — rút ngắn output (structured output, max_tokens) hiệu quả hơn tối ưu prompt. Output throughput của request ≈ (n − 1)/(E2E − TTFT) = 1/TPOT = 40 tok/s."
+    },
+    {
+      "id": "infer-011",
+      "sub": "Roofline",
+      "level": 3,
+      "type": "numeric",
+      "trap": false,
+      "q": "GPU có peak **989 TFLOPS** (BF16 dense) và băng thông HBM **3.35 TB/s**. Xét các linear layer ở pha decode với weights BF16: mỗi param tốn ~2 FLOPs/token (multiply-add), weights được đọc 1 lần mỗi bước và dùng chung cho cả batch B → arithmetic intensity ≈ 2B FLOPs / 2 bytes = **B FLOP/byte**. Bỏ qua KV cache và activation.\n\nBatch size tối thiểu (xấp xỉ, số nguyên) để linear layer chuyển từ memory-bound sang compute-bound là bao nhiêu?",
+      "answer": 295,
+      "tolerance": 5,
+      "unit": "",
+      "explain": "Ridge point của roofline = peak FLOPS / bandwidth = 989·10¹² / 3.35·10¹² ≈ 295 FLOP/byte. Arithmetic intensity ≈ B, nên cần B ≈ 295 để chạm ridge. Với batch 1 (AI ≈ 1) GPU chỉ dùng ~0.3% compute → decode cực kỳ memory-bound, đó là lý do batching/continuous batching tăng throughput mạnh. Thực tế còn phức tạp hơn: phần attention đọc KV cache riêng của từng chuỗi nên AI gần như không tăng theo batch → context dài khiến decode vẫn memory-bound ngay cả khi batch lớn; ngoài ra kernel thực tế đạt peak thấp hơn lý thuyết."
+    },
+    {
+      "id": "infer-012",
+      "sub": "Decode tokens/s",
+      "level": 2,
+      "type": "numeric",
+      "trap": false,
+      "q": "Model **70B** lượng tử hóa weight-only INT4 (coi đúng 0.5 byte/param, bỏ qua scale), chạy trên GPU băng thông **3.35 TB/s** (1 TB = 10¹² byte), batch 1. Bỏ qua KV cache và overhead, **cận trên** tốc độ decode là bao nhiêu tokens/s? (1 chữ số thập phân)",
+      "answer": 95.7,
+      "tolerance": 1,
+      "unit": "tokens/s",
+      "explain": "Batch 1 decode bị giới hạn bởi băng thông: mỗi token phải đọc toàn bộ weights một lần. Bytes weights = 70·10⁹ × 0.5 = 35·10⁹ byte = 35 GB. Tokens/s ≈ 3.35·10¹² / 35·10⁹ ≈ 95.7 tok/s. Cùng model ở FP16 (140 GB) sẽ không vừa 1 GPU và cận trên chỉ ~24 tok/s nếu có đủ băng thông → quantization weight tăng tốc decode gần tỉ lệ giảm bytes. Thực tế đạt ~60–80% cận trên do KV cache, kernel dequant và overhead."
+    },
+    {
+      "id": "infer-013",
+      "sub": "TTFT vs TPOT",
+      "level": 2,
+      "type": "multi",
+      "trap": false,
+      "q": "Giữ nguyên model và GPU. Những thay đổi nào làm **tăng TTFT** của một request? Chọn **TẤT CẢ** đáp án đúng.",
+      "options": [
+        "Prompt dài hơn do nhồi thêm nhiều chunk RAG",
+        "Tăng max_tokens từ 256 lên 4096 trong khi độ dài output thực tế không đổi",
+        "Hàng đợi scheduler đầy, request phải chờ được đưa vào batch",
+        "Chèn timestamp vào đầu system prompt làm mất prefix cache hit",
+        "Model trả lời dài dòng hơn (nhiều output tokens hơn)"
+      ],
+      "answer": [
+        0,
+        2,
+        3
+      ],
+      "explain": "TTFT = thời gian chờ hàng đợi + prefill (+ mạng). Prompt dài → prefill nhiều token hơn → TTFT tăng. Hàng đợi đầy → thời gian chờ tăng. Prefix cache miss → phải prefill lại toàn bộ phần lẽ ra được tái sử dụng. Ngược lại, max_tokens và độ dài output chỉ ảnh hưởng pha decode (E2E latency, TPOT tổng), không ảnh hưởng token đầu tiên (max_tokens lớn có thể ảnh hưởng rate limit/KV reservation ở một số hệ thống, nhưng không trực tiếp làm chậm prefill)."
+    },
+    {
+      "id": "infer-014",
+      "sub": "Low-rank compression",
+      "level": 1,
+      "type": "single",
+      "trap": false,
+      "q": "Một ma trận weights W kích thước 4096 × 4096 được xấp xỉ bằng tích A (4096 × r) · B (r × 4096) với **r = 256** (truncated SVD). Phát biểu nào đúng?",
+      "options": [
+        "Params giảm từ ~16.8M xuống ~1.05M (16×) và chất lượng không đổi vì SVD là phân rã chính xác của ma trận W",
+        "Params giảm 8× nhưng FLOPs mỗi token tăng gần gấp đôi vì phải nhân liên tiếp hai ma trận thay vì một, nên latency tăng theo",
+        "Params chỉ giảm khoảng 2× vì phải lưu cả A lẫn B ở FP32 để tránh mất chính xác khi nhân hai ma trận liên tiếp",
+        "Params giảm từ ~16.8M xuống ~2.1M (8×), FLOPs/token cũng giảm ~8×; nhưng truncated SVD là xấp xỉ, thường cần fine-tune hồi phục"
+      ],
+      "answer": 3,
+      "explain": "Gốc: 4096² = 16,777,216 params. Low-rank: 2 × 4096 × 256 = 2,097,152 → giảm 8×. FLOPs của x·A·B là 2·(4096·256 + 256·4096) mỗi token, cũng giảm 8× so với x·W. Low-rank chỉ có lợi khi r < d/2 (ở đây hòa vốn tại r = 2048). Truncated SVD bỏ các singular value nhỏ nên là xấp xỉ — SVD đầy đủ mới chính xác nhưng khi đó không nén. Đáp số '16×' quên rằng phải lưu cả A và B; ý 'FLOPs tăng vì nhân 2 ma trận' sai vì hai ma trận mỏng có tổng FLOPs nhỏ hơn 8×; dtype lưu A, B không liên quan tới tỉ lệ nén tham số."
+    },
+    {
+      "id": "infer-015",
+      "sub": "KV cache",
+      "level": 2,
+      "type": "numeric",
+      "trap": true,
+      "q": "Llama-3-8B: **32 layers**, **32 query heads**, **8 KV heads** (GQA), **head_dim = 128**. KV cache lưu FP16. Phục vụ **batch 16**, mỗi chuỗi **8192 tokens**.\n\nTổng dung lượng KV cache là bao nhiêu **GiB** (1 GiB = 2³⁰ byte)? (1 chữ số thập phân)",
+      "answer": 16,
+      "tolerance": 0.1,
+      "unit": "GiB",
+      "explain": "KV/token = 2 (K và V) × 32 layers × 8 kv_heads × 128 × 2 byte = 131,072 byte = 128 KiB. Tổng = 131,072 × 8192 × 16 = 17,179,869,184 byte = 16 GiB (≈ 17.18 GB thập phân). Bẫy 1: dùng 32 query heads (như MHA) → 64 GiB, gấp 4 lần. Bẫy 2: quên hệ số 2 cho K và V → 8 GiB. Bẫy 3: nhầm GB và GiB. Đây là lý do GQA quan trọng: Llama-2-7B (MHA, 32 KV heads) tốn 512 KiB/token, gấp 4 lần Llama-3-8B."
+    },
+    {
+      "id": "infer-016",
+      "sub": "KV cache",
+      "level": 3,
+      "type": "numeric",
+      "trap": true,
+      "q": "Llama-3-70B: **80 layers**, **64 query heads**, **8 KV heads**, **head_dim = 128**. Một request duy nhất có context **131,072 tokens** (128K), KV cache FP16.\n\nKV cache của request này là bao nhiêu **GB** (1 GB = 10⁹ byte)? (2 chữ số thập phân)",
+      "answer": 42.95,
+      "tolerance": 0.05,
+      "unit": "GB",
+      "explain": "KV/token = 2 × 80 × 8 × 128 × 2 byte = 327,680 byte (320 KiB). Tổng = 327,680 × 131,072 = 42,949,672,960 byte = 42.95 GB = đúng 40 GiB. Bẫy: trả lời 40 (đơn vị GiB) khi đề hỏi GB. Thêm 140 GB weights FP16 → một request 128K đã cần >180 GB, phải dùng TP nhiều GPU. KV cache FP8 sẽ giảm còn ≈ 21.47 GB; nếu là MHA (64 KV heads) sẽ là 343.6 GB — GQA giảm 8×."
+    },
+    {
+      "id": "infer-017",
+      "sub": "GQA / MQA",
+      "level": 2,
+      "type": "single",
+      "trap": false,
+      "q": "Phát biểu nào đúng về **Grouped-Query Attention (GQA)** và **Multi-Query Attention (MQA)**?",
+      "options": [
+        "Nhiều query head dùng chung một cặp K/V → KV cache giảm theo n_q_heads/n_kv_heads (Llama-3-8B: 4×); MQA là trường hợp n_kv_heads = 1",
+        "GQA gộp các query head thành nhóm nên FLOPs của QKᵀ và số tham số W_Q giảm theo tỉ lệ n_q_heads/n_kv_heads, còn KV cache giữ nguyên như MHA",
+        "GQA giảm head_dim của K và V xuống head_dim/số nhóm, nên KV cache giảm nhưng chất lượng thường giảm mạnh hơn cả MQA",
+        "MQA cho chất lượng tốt hơn GQA vì mỗi query head có K/V riêng, đổi lại KV cache lớn hơn; GQA là bản rút gọn của MQA"
+      ],
+      "answer": 0,
+      "explain": "GQA giữ nguyên số query heads nhưng nhiều query head dùng chung K/V → số KV heads giảm → KV cache và băng thông đọc KV ở decode giảm theo n_q/n_kv. MQA (1 KV head) tiết kiệm nhất nhưng chất lượng giảm nhiều hơn; GQA là điểm cân bằng (Llama 2-70B, Llama 3, Mistral). Số query heads và W_Q không đổi nên FLOPs attention gần như không đổi — lợi ích chủ yếu ở bộ nhớ/băng thông. head_dim không thay đổi. 'Mỗi query head có K/V riêng' là MHA, không phải MQA."
+    },
+    {
+      "id": "infer-018",
+      "sub": "KV cache budget",
+      "level": 3,
+      "type": "numeric",
+      "trap": false,
+      "q": "Serve Llama-3-8B (8.0B params, BF16; KV/token = 131,072 byte như Llama-3-8B FP16 KV) bằng vLLM trên GPU **80 GB** (= 80·10⁹ byte) với `gpu_memory_utilization = 0.9`. Giả sử activation peak + overhead khác chiếm **4 GB**. Mỗi chuỗi cần tối đa **4096 tokens**.\n\nSố chuỗi tối đa có thể giữ KV cache **đầy đủ** đồng thời là bao nhiêu? (số nguyên, làm tròn xuống)",
+      "answer": 96,
+      "tolerance": 0,
+      "unit": "sequences",
+      "explain": "Ngân sách vLLM = 0.9 × 80 = 72 GB. Weights = 8.0·10⁹ × 2 = 16 GB. KV budget = 72 − 16 − 4 = 52 GB = 52·10⁹ byte. KV mỗi chuỗi = 131,072 × 4096 = 536,870,912 byte ≈ 0.537 GB. Số chuỗi = 52·10⁹ / 536,870,912 ≈ 96.86 → 96. Thực tế vLLM cho phép nhiều chuỗi hơn vì PagedAttention cấp phát theo nhu cầu (chuỗi chưa dài tới 4096 thì chưa chiếm), và preempt/swap khi thiếu block. Bật KV cache FP8 sẽ gấp đôi con số này."
+    },
+    {
+      "id": "infer-019",
+      "sub": "VRAM weights",
+      "level": 1,
+      "type": "numeric",
+      "trap": true,
+      "q": "Model **13B params** lưu ở **BF16**. Chỉ tính weights, dung lượng là bao nhiêu **GiB** (1 GiB = 2³⁰ byte)? (2 chữ số thập phân)",
+      "answer": 24.21,
+      "tolerance": 0.05,
+      "unit": "GiB",
+      "explain": "BF16 = 2 byte/param → 13·10⁹ × 2 = 26·10⁹ byte = 26 GB. Đổi sang GiB: 26·10⁹ / 1,073,741,824 ≈ 24.21 GiB. Bẫy: trả lời 26 (GB) hoặc nhầm BF16 là 1 byte. nvidia-smi và PyTorch báo theo MiB/GiB nên con số luôn nhỏ hơn GB ~7%. Ngoài weights còn KV cache, activation, CUDA context (~0.5–1 GB) — vì vậy model 13B BF16 không chạy được trên GPU 24 GB."
+    },
+    {
+      "id": "infer-020",
+      "sub": "VRAM weights",
+      "level": 2,
+      "type": "multi",
+      "trap": true,
+      "q": "Bạn có ngân sách **20 GB** (10⁹ byte) VRAM cho **weights** (phần còn lại để dành cho KV cache/overhead). Những cấu hình nào **vừa** ngân sách? Chọn **TẤT CẢ**.",
+      "options": [
+        "Model 7B ở FP16",
+        "Model 13B ở INT8 (1 byte/param)",
+        "Model 34B ở GGUF Q4_K_M (trung bình ~4.85 bit/weight)",
+        "Model 70B ở INT4 thuần (0.5 byte/param)",
+        "Model 34B ở INT4 thuần (0.5 byte/param, bỏ qua scale)",
+        "Model 13B ở BF16"
+      ],
+      "answer": [
+        0,
+        1,
+        4
+      ],
+      "explain": "7B × 2 = 14 GB ✓. 13B × 1 = 13 GB ✓. 34B × 0.5 = 17 GB ✓. 34B Q4_K_M: 34·10⁹ × 4.85 / 8 ≈ 20.6 GB ✗ — bẫy: 'Q4' không có nghĩa là đúng 4 bit; k-quants lưu thêm scale/min theo block và Q4_K_M giữ một số tensor (một nửa attention.wv, feed_forward.w2) ở Q6_K. 70B × 0.5 = 35 GB ✗. 13B × 2 = 26 GB ✗. Luôn tính bits/weight thực tế (kể cả metadata) khi ước lượng VRAM."
+    },
+    {
+      "id": "infer-021",
+      "sub": "PagedAttention",
+      "level": 2,
+      "type": "single",
+      "trap": false,
+      "q": "**PagedAttention** (vLLM) giải quyết vấn đề gì và bằng cách nào?",
+      "options": [
+        "Chỉ cho mỗi token attend tới vài page KV gần nhất (giống sliding window), nhờ đó giảm FLOPs attention từ O(N²) xuống O(N·page)",
+        "Offload KV cache sang CPU RAM theo từng page và prefetch qua PCIe trước mỗi layer, nhờ đó hỗ trợ được context dài hơn dung lượng VRAM",
+        "Chia KV cache thành block cố định (vd 16 token) cấp phát dần, không cần liên tục → giảm fragmentation, batch lớn hơn, chia sẻ được block",
+        "Nén KV cache theo từng page xuống INT4 với scale riêng mỗi page, nên giảm ~4× bộ nhớ KV mà không cần đổi kernel attention"
+      ],
+      "answer": 2,
+      "explain": "Trước vLLM, các hệ thống cấp phát KV cache liên tục cho max_len mỗi request → lãng phí do internal/external fragmentation và reservation (paper báo chỉ ~20–40% bộ nhớ KV thực sự được dùng). PagedAttention mượn ý tưởng virtual memory: block table ánh xạ block logic → block vật lý, cấp phát dần khi chuỗi dài ra, lãng phí < 4%. Nhờ đó batch lớn hơn → throughput tăng 2–4×, và các chuỗi có thể chia sẻ block prefix (parallel sampling, beam search, prefix caching). Attention vẫn chính xác (không phải sliding window); swap/offload CPU và KV quantization là tính năng riêng, không phải bản chất PagedAttention."
+    },
+    {
+      "id": "infer-022",
+      "sub": "Continuous batching",
+      "level": 1,
+      "type": "single",
+      "trap": false,
+      "q": "Phát biểu nào mô tả đúng **continuous (in-flight) batching**?",
+      "options": [
+        "Gom request đến trong một cửa sổ thời gian cố định (vd 50 ms) hoặc đến khi đủ max batch size, rồi chạy cả batch tới khi mọi chuỗi kết thúc",
+        "Lập lịch ở mức iteration: chuỗi xong rời batch ngay, request mới vào ở bước kế tiếp, không phải chờ chuỗi dài nhất như static batching",
+        "Sắp xếp request theo độ dài prompt và chỉ ghép các request cùng độ dài vào một batch để loại bỏ hoàn toàn padding và lãng phí compute",
+        "Ghép prefill của request mới vào KV cache có sẵn của request cũ nên bỏ qua được pha prefill, đưa TTFT của mọi request về gần 0"
+      ],
+      "answer": 1,
+      "explain": "Static batching: batch chạy đến khi chuỗi dài nhất xong, các slot đã xong bị bỏ trống, request mới phải chờ. Continuous batching (Orca, vLLM, TGI, TensorRT-LLM in-flight) quyết định lại thành phần batch sau mỗi bước decode → tận dụng GPU tốt hơn, throughput tăng nhiều lần. Mô tả 'gom theo cửa sổ thời gian' mô tả dynamic batching ở mức request (như Triton Inference Server) — hợp với model một bước (classifier, embedding) chứ không tối ưu cho sinh tự hồi quy. Continuous batching không bỏ prefill và không cần ghép các request cùng độ dài (PagedAttention + kernel varlen xử lý độ dài khác nhau)."
+    },
+    {
+      "id": "infer-023",
+      "sub": "Chunked prefill",
+      "level": 3,
+      "type": "single",
+      "trap": false,
+      "q": "Hệ thống vLLM đang stream cho ~50 user. Mỗi khi có một request với prompt **30K tokens** vào, các user khác thấy token bị 'khựng' vài trăm ms (ITL p99 tăng vọt). Biện pháp phù hợp nhất?",
+      "options": [
+        "Tăng block_size của PagedAttention từ 16 lên 128 để giảm số block phải cấp phát cho prompt 30K, từ đó prefill nhanh hơn và bớt khựng",
+        "Tắt continuous batching, chuyển sang static batching để request prompt dài được xử lý trong batch riêng, không chen vào các chuỗi đang decode",
+        "Bật speculative decoding với draft model nhỏ để các chuỗi đang decode sinh nhiều token mỗi bước, bù lại thời gian bị prefill chặn",
+        "Bật chunked prefill: chia prefill dài thành chunk giới hạn token mỗi bước, trộn với các decode đang chạy; TTFT prompt dài có thể tăng nhẹ"
+      ],
+      "answer": 3,
+      "explain": "Không có chunked prefill, một bước scheduler phải prefill trọn 30K token (compute-bound, hàng trăm ms) → mọi chuỗi đang decode bị dừng chờ → ITL spike. Chunked prefill giới hạn số token mỗi bước (max_num_batched_tokens), chia prefill thành nhiều chunk và ghép với các token decode: vừa tận dụng compute (prefill) vừa tận dụng băng thông (decode), ITL ổn định. Các bản vLLM gần đây bật mặc định. Giải pháp mạnh hơn ở quy mô lớn là disaggregated prefill/decode (tách GPU prefill và GPU decode). block_size không làm prefill nhanh hơn; static batching làm tệ hơn (request mới phải chờ cả batch); speculative decoding không giải quyết việc prefill chặn decode."
+    },
+    {
+      "id": "infer-024",
+      "sub": "Prefix / prompt caching",
+      "level": 2,
+      "type": "multi",
+      "trap": true,
+      "q": "Về **prefix caching** (vLLM APC) và **prompt caching** của các provider (OpenAI, Anthropic, Gemini...), chọn **TẤT CẢ** phát biểu đúng.",
+      "options": [
+        "Hai prompt khác vài từ ở đầu nhưng cùng ý nghĩa vẫn hit cache, vì provider so khớp prefix theo embedding với ngưỡng cosine cao",
+        "Hit đòi hỏi trùng khớp chính xác prefix theo token; nên đặt phần tĩnh (system prompt, tools, few-shot) ở đầu và phần động ở cuối",
+        "Chèn timestamp hoặc request_id vào dòng đầu system prompt có thể làm hit rate gần như về 0",
+        "Prompt caching lưu và trả lại nguyên response của lần gọi trước có cùng prefix, nên output luôn giống hệt lần trước kể cả khi temperature > 0",
+        "Prompt caching giảm TTFT và giá phần input được cache, nhưng không giảm giá output tokens"
+      ],
+      "answer": [
+        1,
+        2,
+        4
+      ],
+      "explain": "Prompt/prefix caching tái sử dụng KV cache (hoặc tương đương) của phần prefix trùng khớp CHÍNH XÁC theo token tính từ đầu; khác một token ở đầu là toàn bộ phần sau miss. Vì vậy đặt nội dung tĩnh lên trước, tránh timestamp/ID động ở đầu. Lợi ích: bỏ qua prefill phần cached → TTFT giảm, và cached input được tính giá thấp hơn (mức giảm tùy provider). Model vẫn sinh output mới hoàn toàn — không phải response cache, và output tokens tính giá bình thường. Khớp theo embedding là semantic cache ở tầng ứng dụng, một cơ chế khác hẳn."
+    },
+    {
+      "id": "infer-025",
+      "sub": "Cost",
+      "level": 2,
+      "type": "numeric",
+      "trap": false,
+      "q": "Bảng giá: input **$2.50 / 1M tokens**, cached input **$1.25 / 1M tokens**, output **$10.00 / 1M tokens**.\n\nMỗi request có **6,000 input tokens**, trong đó **5,000** token hit prompt cache, và **300 output tokens**. Hệ thống xử lý **10,000 request/ngày**. Chi phí mỗi ngày là bao nhiêu **USD**? (1 chữ số thập phân)",
+      "answer": 117.5,
+      "tolerance": 0.5,
+      "unit": "USD",
+      "explain": "Mỗi request: uncached input = 1,000 × 2.50/10⁶ = $0.0025; cached input = 5,000 × 1.25/10⁶ = $0.00625; output = 300 × 10/10⁶ = $0.003. Tổng = $0.01175/request × 10,000 = $117.5/ngày. Không có cache: 6,000 × 2.50/10⁶ + 0.003 = $0.018 → $180/ngày, tiết kiệm ~34.7%. Bẫy: cộng 5,000 cached tokens cả ở giá input đầy đủ lẫn giá cached (tính trùng), hoặc quên rằng output dù ít token vẫn chiếm ~26% chi phí vì đơn giá gấp 4."
+    },
+    {
+      "id": "infer-026",
+      "sub": "Speculative decoding",
+      "level": 3,
+      "type": "numeric",
+      "trap": false,
+      "q": "Speculative decoding với acceptance rate **α = 0.8** (giả sử i.i.d. cho mỗi token), draft đề xuất **γ = 4** token mỗi vòng, chi phí một bước draft bằng **c = 0.1** lần một bước target. Theo Leviathan et al.:\n\n`speedup = (1 − α^(γ+1)) / ((1 − α)(γ·c + 1))`\n\nSpeedup walltime kỳ vọng là bao nhiêu lần? (2 chữ số thập phân)",
+      "answer": 2.4,
+      "tolerance": 0.02,
+      "unit": "×",
+      "explain": "Số token kỳ vọng sinh được mỗi vòng (gồm cả token 'bonus' do target sinh khi verify) = (1 − 0.8⁵)/(1 − 0.8) = (1 − 0.32768)/0.2 = 3.3616. Chi phí mỗi vòng = γ bước draft + 1 bước target = 4 × 0.1 + 1 = 1.4 (đơn vị bước target). Speedup = 3.3616 / 1.4 ≈ 2.40×. Bẫy: lấy γ·α = 3.2 hoặc quên chi phí draft. Lưu ý: tăng γ không phải lúc nào cũng tốt — α^k giảm nhanh nên token thêm ít được chấp nhận mà chi phí draft vẫn tăng; ở batch lớn GPU đã compute-bound nên việc verify không còn 'miễn phí'."
+    },
+    {
+      "id": "infer-027",
+      "sub": "Speculative decoding",
+      "level": 3,
+      "type": "single",
+      "trap": true,
+      "q": "Chọn phát biểu **SAI** về speculative decoding và các biến thể.",
+      "options": [
+        "Với speculative sampling chuẩn (chấp nhận với xác suất min(1, p/q), nếu từ chối thì sample lại từ phân phối max(0, p − q) đã chuẩn hóa), phân phối output trùng chính xác với target model",
+        "Lợi ích giảm dần khi batch size lớn, vì GPU đã gần compute-bound nên việc verify thêm token draft không còn gần như miễn phí",
+        "EAGLE dùng một draft head nhẹ dự đoán tự hồi quy ở mức feature (hidden state) của chính target model thay vì dùng một draft LLM riêng",
+        "Medusa với typical acceptance đảm bảo phân phối output giống hệt mô hình gốc ở mọi temperature, tương đương rejection sampling"
+      ],
+      "answer": 3,
+      "explain": "Phát biểu SAI là Medusa: paper Medusa đề xuất typical acceptance thay cho rejection sampling chính vì cho rằng không cần khớp chính xác phân phối gốc — đổi độ chính xác phân phối lấy acceptance rate cao hơn (với greedy thì vẫn lossless). Các phát biểu khác đúng: rejection sampling của Leviathan/Chen bảo toàn phân phối target; speedup giảm ở batch lớn vì decode không còn memory-bound; EAGLE dự đoán ở mức feature của lớp gần cuối và dùng LM head của target, lossless. Câu hỏi phỏng vấn hay gặp: 'speculative decoding có làm thay đổi chất lượng không?' — dạng chuẩn thì không."
+    },
+    {
+      "id": "infer-028",
+      "sub": "FlashAttention",
+      "level": 2,
+      "type": "single",
+      "trap": false,
+      "q": "Phát biểu nào đúng về **FlashAttention**?",
+      "options": [
+        "Tính attention chính xác: tiling Q, K, V vào SRAM + online softmax, không ghi ma trận N×N ra HBM → ít truy cập HBM, bộ nhớ O(N); FLOPs vẫn O(N²)",
+        "Xấp xỉ ma trận attention bằng low-rank/kernel feature map nên giảm FLOPs từ O(N²) xuống O(N), đổi lại sai số nhỏ chấp nhận được",
+        "Nén KV cache bằng cách gộp các tile K/V gần giống nhau trong SRAM, nên giảm đáng kể dung lượng KV cache khi decode context dài",
+        "Chỉ có lợi cho training vì lợi ích đến từ việc recompute ở backward pass; ở inference (chỉ có forward) tốc độ gần như không đổi so với attention chuẩn"
+      ],
+      "answer": 0,
+      "explain": "FlashAttention là thuật toán IO-aware: bottleneck của attention chuẩn là đọc/ghi ma trận score N×N lên HBM chứ không phải FLOPs. Bằng tiling + online softmax (giữ max và tổng chạy), nó tính kết quả chính xác trong SRAM và chỉ ghi output. FLOPs không giảm (backward còn tăng nhẹ do recompute) nhưng wall-clock nhanh hơn và bộ nhớ tuyến tính theo N. Bẫy: nhầm với các attention xấp xỉ (Linformer, Performer). FlashAttention không thay đổi kích thước KV cache; nó tăng tốc cả prefill khi inference (và có biến thể FlashDecoding cho decode context dài)."
+    },
+    {
+      "id": "infer-029",
+      "sub": "Tensor parallel",
+      "level": 3,
+      "type": "multi",
+      "trap": false,
+      "q": "Serve model 70B trên **4 GPU** bằng **tensor parallel (TP = 4)**. Chọn **TẤT CẢ** phát biểu đúng.",
+      "options": [
+        "Mỗi layer chia ma trận theo cột/hàng (Megatron), cần all-reduce mỗi block (thường 2 lần) → nên đặt trong cùng node có NVLink",
+        "Chạy TP chéo 2 node qua Ethernet 25 Gbps hiệu quả gần như trong node, vì mỗi all-reduce chỉ truyền activation kích thước hidden, rất nhỏ",
+        "TP giảm weights trên mỗi GPU ~4× và có thể giảm latency mỗi token vì mỗi GPU chỉ đọc 1/4 số bytes weights trong decode",
+        "Pipeline parallel (PP = 4) với batch 1 giảm latency mỗi token tương đương TP = 4, vì mỗi GPU cũng chỉ giữ và đọc 1/4 số layer",
+        "Số KV heads cần tương thích với TP size; nếu TP lớn hơn số KV heads (GQA) thì KV heads phải được nhân bản giữa các GPU"
+      ],
+      "answer": [
+        0,
+        2,
+        4
+      ],
+      "explain": "TP chia mỗi phép nhân ma trận ra nhiều GPU (column-parallel rồi row-parallel) nên mỗi block cần all-reduce — tần suất cao, nhạy latency mạng → chỉ hiệu quả với NVLink/NVSwitch trong node; chéo node qua Ethernet sẽ bị nghẽn giao tiếp. Vì mỗi GPU giữ 1/4 weights và đọc 1/4 bytes mỗi bước, latency decode giảm (không tuyến tính do chi phí all-reduce). PP chia theo layer: ở batch 1 các stage chạy tuần tự (mỗi GPU giữ 1/4 layer nhưng chạy lần lượt) nên latency/token không giảm (chỉ giúp vừa bộ nhớ và throughput khi có nhiều micro-batch). Với GQA 8 KV heads, TP = 16 buộc phải nhân bản KV heads. Thực hành: TP trong node, PP giữa các node."
+    },
+    {
+      "id": "infer-030",
+      "sub": "Serving engines",
+      "level": 2,
+      "type": "single",
+      "trap": false,
+      "q": "Hệ thống agent multi-turn: rất nhiều request dùng chung một system prompt dài + tool schemas + few-shot, lại có nhiều nhánh (tree search) xuất phát từ cùng một lịch sử. Chọn engine/tính năng **tận dụng tốt nhất** đặc điểm này.",
+      "options": [
+        "Ollama, vì nó giữ model GGUF thường trú trong RAM và tự cache KV của system prompt dùng chung cho mọi user đồng thời",
+        "Triton Inference Server với dynamic batching mặc định, vì gom request theo cửa sổ thời gian sẽ tự tái dùng KV cache giữa các request chung prefix",
+        "SGLang với RadixAttention: KV cache lưu trong radix tree theo prefix token, tự tái dùng giữa request/nhánh, evict LRU",
+        "ONNX Runtime, vì graph optimization và constant folding sẽ hợp nhất các prompt có prefix giống nhau thành một lần tính"
+      ],
+      "answer": 2,
+      "explain": "RadixAttention của SGLang tổ chức KV cache thành radix tree theo chuỗi token: mọi prefix chung (system prompt, tool schema, lịch sử chung của các nhánh) được tái sử dụng tự động, evict LRU, kết hợp scheduler ưu tiên cache hit — rất hợp agent/multi-turn/tree-of-thought. vLLM (Automatic Prefix Caching) và TensorRT-LLM (KV cache reuse) cũng có cơ chế tương tự. Triton là server đa backend; dynamic batching của nó gom request ở mức request, không tái dùng KV giữa các request. ONNX Runtime tối ưu graph tĩnh, không gộp prompt. Ollama hợp chạy local, không phải lựa chọn cho throughput nhiều người dùng."
+    },
+    {
+      "id": "infer-031",
+      "sub": "Scale / zero-point",
+      "level": 2,
+      "type": "numeric",
+      "trap": false,
+      "q": "Lượng tử hóa **asymmetric uint8** (miền [0, 255]) cho tensor có min = **−1.0**, max = **3.0**:\n\n- `scale = (max − min) / 255`\n- `zero_point = round(−min / scale)`\n- `q = clamp(round(x / scale) + zero_point, 0, 255)`\n\nGiá trị lượng tử q của **x = 1.5** là bao nhiêu? (số nguyên)",
+      "answer": 160,
+      "tolerance": 0,
+      "unit": "",
+      "explain": "scale = 4 / 255 ≈ 0.015686. zero_point = round(1.0 / 0.015686) = round(63.75) = 64 (đây là mã số nguyên biểu diễn số thực 0). x/scale = 1.5 / 0.015686 = 95.625 → round = 96 → q = 96 + 64 = 160. Dequantize: (160 − 64) × 0.015686 ≈ 1.5059, sai số ≈ 0.006 (≤ scale/2). Bẫy: quên cộng zero_point (ra 96) hoặc dùng symmetric scale. Asymmetric tận dụng range tốt khi phân phối lệch (activation sau ReLU/GELU); symmetric (zp = 0) đơn giản và tính nhanh hơn, thường dùng cho weights."
+    },
+    {
+      "id": "infer-032",
+      "sub": "Per-tensor vs per-channel",
+      "level": 3,
+      "type": "single",
+      "trap": true,
+      "q": "Ma trận weights có kênh output A với |w| ≤ **0.05**, nhưng kênh B có một outlier **8.0**. Lượng tử **symmetric INT8** (q ∈ [−127, 127], scale = max|w| / 127). Giá trị **w = 0.02** thuộc kênh A sau quantize → dequantize sẽ là bao nhiêu với per-tensor và per-channel?",
+      "options": [
+        "Per-tensor ≈ 0.0200 và per-channel ≈ 0.0200, vì INT8 có 255 mức nên sai số làm tròn luôn nhỏ hơn 0.5% giá trị, không đáng kể",
+        "Per-tensor = 0 (scale 8/127 ≈ 0.063, 0.02/0.063 ≈ 0.32 → 0); per-channel ≈ 0.0201 (scale 0.05/127, q = 51)",
+        "Per-tensor ≈ 0.063 (làm tròn lên một bậc vì 0.02 lớn hơn scale/4); per-channel = 0 do scale kênh A quá nhỏ gây underflow",
+        "Per-tensor = 0 và per-channel = 0, vì 0.02 nhỏ hơn mọi scale nên round(x/scale) luôn bằng 0 ở cả hai cách"
+      ],
+      "answer": 1,
+      "explain": "Per-tensor: scale = 8.0 / 127 ≈ 0.0630; 0.02 / 0.0630 ≈ 0.3175 → round = 0 → dequant = 0. Toàn bộ kênh A (|w| ≤ 0.05 → |q| ≤ 0.79) chỉ còn 3 mức {−1, 0, 1}: thông tin gần như mất hết vì một outlier. Per-channel: scale_A = 0.05 / 127 ≈ 0.000394; 0.02 / 0.000394 = 50.8 → q = 51 → 0.0201. Sai số làm tròn chỉ nhỏ so với RANGE (tối đa scale/2), không phải so với từng giá trị — giá trị nhỏ cạnh outlier bị xóa sổ. Đây là lý do weights LLM dùng per-channel hoặc group-wise (128 phần tử/group). Với activation, outlier nằm theo kênh input (chiều reduction) nên không thể đơn giản per-channel → sinh ra LLM.int8() (tách outlier) và SmoothQuant (dời outlier sang weights)."
+    },
+    {
+      "id": "infer-033",
+      "sub": "PTQ vs QAT",
+      "level": 1,
+      "type": "single",
+      "trap": false,
+      "q": "So sánh **PTQ (post-training quantization)** và **QAT (quantization-aware training)**, phát biểu nào đúng?",
+      "options": [
+        "PTQ lượng tử model đã train, cần ít calibration data, nhanh; QAT dùng fake quant + STE khi train, tốn hơn nhưng giữ chất lượng tốt hơn ở bit thấp",
+        "QAT không cần dữ liệu huấn luyện vì chỉ mô phỏng nhiễu lượng tử lúc inference, còn PTQ phải huấn luyện lại toàn bộ model với loss có thêm regularizer",
+        "PTQ luôn chính xác hơn QAT ở mọi bit-width vì giữ nguyên weights gốc, chỉ thêm scale/zero-point, trong khi QAT làm lệch weights",
+        "GPTQ và AWQ là các phương pháp QAT vì chúng cần calibration data và tối ưu weights theo từng layer trước khi lượng tử hóa"
+      ],
+      "answer": 0,
+      "explain": "PTQ áp dụng sau khi train: tính scale/zero-point (và có thể tối ưu weights theo lớp như GPTQ) với vài trăm mẫu calibration, mất vài phút–giờ. QAT chèn fake-quant vào forward, dùng straight-through estimator cho gradient qua hàm round, model học thích nghi với nhiễu lượng tử → tốt hơn ở 4-bit trở xuống nhưng đắt (cần train). GPTQ/AWQ/SmoothQuant đều là PTQ: dùng calibration data nhưng không huấn luyện bằng gradient descent. Với LLM lớn, PTQ là mặc định vì QAT quá tốn kém."
+    },
+    {
+      "id": "infer-034",
+      "sub": "GPTQ / AWQ / SmoothQuant",
+      "level": 3,
+      "type": "multi",
+      "trap": false,
+      "q": "Chọn **TẤT CẢ** phát biểu đúng về các phương pháp lượng tử hóa LLM.",
+      "options": [
+        "LLM.int8() lượng tử toàn bộ activation, kể cả các cột outlier, về INT8 per-tensor để tận dụng tối đa Tensor Core INT8",
+        "GPTQ lượng tử từng cột, dùng xấp xỉ Hessian từ calibration data để cập nhật các weight chưa lượng tử, bù sai số",
+        "AWQ cần backprop để fine-tune lại toàn bộ model trên calibration data, giống QAT nhưng chỉ chạy một epoch ngắn",
+        "SmoothQuant dời độ khó lượng tử từ activation sang weights bằng scale theo kênh (tương đương toán học), cho phép W8A8",
+        "AWQ chọn ~1% kênh salient theo độ lớn activation (không phải weight) và bảo vệ bằng per-channel scaling, không giữ FP16 riêng"
+      ],
+      "answer": [
+        1,
+        3,
+        4
+      ],
+      "explain": "LLM.int8() KHÔNG lượng tử outlier về INT8 mà làm ngược lại: tách các cột outlier (|x| > 6) ra tính FP16 (mixed-precision decomposition), phần còn lại INT8 vector-wise — giữ chất lượng nhưng thường chậm hơn FP16. GPTQ dựa trên OBQ: lượng tử từng cột, dùng nghịch đảo Hessian H = 2XXᵀ để phân phối sai số sang các cột còn lại, one-shot không cần gradient. AWQ là PTQ không backprop: tìm kênh salient theo độ lớn activation và nhân scale để giảm sai số tương đối, tránh mixed-precision bất tiện cho phần cứng. SmoothQuant: Y = (X·diag(s)⁻¹)(diag(s)·W), s_j = max|X_j|^α / max|W_j|^(1−α), làm activation 'mượt' để INT8 được cả hai."
+    },
+    {
+      "id": "infer-035",
+      "sub": "Weight-only quantization",
+      "level": 3,
+      "type": "single",
+      "trap": false,
+      "q": "Model AWQ INT4 (W4A16) decode nhanh hơn FP16 khoảng 2–3× ở batch 1, nhưng khi chạy batch 64 throughput gần như không cải thiện, thậm chí chậm hơn FP16. Giải thích đúng nhất?",
+      "options": [
+        "INT4 giảm FLOPs 4× so với FP16, nhưng ở batch lớn các warp phải chờ đồng bộ khi unpack bit nên phần lợi FLOPs bị triệt tiêu",
+        "Ở batch lớn, engine tự lượng tử cả KV cache xuống INT4 theo weights, nên phải dequant KV ở mỗi bước attention và tính lại softmax",
+        "W4A16 chỉ giảm bytes đọc weights; batch lớn thì compute-bound, matmul vẫn chạy FP16 sau dequantize, lại thêm chi phí dequant",
+        "Kernel AWQ chỉ được tối ưu cho batch size 1; với batch lớn engine tự fallback về kernel PyTorch thuần chạy tuần tự từng chuỗi"
+      ],
+      "answer": 2,
+      "explain": "Weight-only quantization: weights lưu 4-bit, kernel đọc 4-bit rồi dequantize sang FP16 trong register/SRAM và nhân với activation FP16. Ở batch nhỏ, thời gian chủ yếu là đọc weights → giảm 4× bytes ≈ tăng tốc gần tương ứng. Khi batch tăng, arithmetic intensity tăng, kernel trở nên compute-bound; FLOPs không giảm, thêm overhead dequant → lợi thế mất, có khi chậm hơn. Muốn nhanh ở batch lớn/prefill cần lượng tử cả activation (W8A8 INT8, FP8) để dùng Tensor Core độ chính xác thấp. W4A16 vốn không giảm FLOPs (tiền đề 'giảm FLOPs 4×' đã sai); engine không tự lượng tử KV cache theo weights, và kernel AWQ (vd trong vLLM) vẫn hỗ trợ batch lớn."
+    },
+    {
+      "id": "infer-036",
+      "sub": "FP8 / NF4 / GGUF",
+      "level": 2,
+      "type": "multi",
+      "trap": false,
+      "q": "Chọn **TẤT CẢ** phát biểu đúng về các định dạng số bit thấp.",
+      "options": [
+        "E4M3 chính xác hơn nhưng range hẹp hơn (max 448) so với E5M2 (max 57344); E4M3 hay dùng cho forward, E5M2 cho gradient",
+        "NF4 đặt 16 mức theo quantile của phân phối chuẩn, hợp weights xấp xỉ normal; khi tính vẫn dequantize về BF16",
+        "GGUF k-quants (vd Q4_K) có scale/min riêng cho từng block con trong super-block, nên bits/weight thực tế lớn hơn 4",
+        "NF4 tăng tốc matmul khoảng 4× so với BF16 trên Ampere/Hopper nhờ Tensor Core hỗ trợ NF4 native, tương tự INT8",
+        "Double quantization trong QLoRA lượng tử hóa cả các hằng số scale để tiết kiệm thêm bộ nhớ"
+      ],
+      "answer": [
+        0,
+        1,
+        2,
+        4
+      ],
+      "explain": "E4M3: 4 bit exponent, 3 bit mantissa → chính xác hơn, max 448; E5M2: range rộng (max 57344) hợp gradient có dynamic range lớn. NF4 là kiểu dữ liệu 'tối ưu thông tin' cho phân phối chuẩn: 16 mức đặt theo quantile của N(0,1), blocksize 64; double quantization lượng tử tiếp các scale FP32 (tiết kiệm ~0.37 bit/param). NF4 chỉ là định dạng lưu trữ — tính toán vẫn dequant sang BF16; không có Tensor Core NF4 nên không tăng tốc 4× như INT8 (bẫy). GGUF Q4_K: super-block 256 weight = 8 block × 32, scale/min lượng tử 6-bit → ~4.5 bpw; Q4_K_M trộn thêm Q6_K → ~4.8–4.9 bpw."
+    },
+    {
+      "id": "infer-037",
+      "sub": "Token optimization",
+      "level": 1,
+      "type": "single",
+      "trap": false,
+      "q": "Endpoint trích xuất thông tin: input **1,500 tokens**, output là JSON **~900 tokens** với key dài dòng và một đoạn 'giải thích' model tự thêm vào. Kết quả được một service khác parse (không hiển thị cho người). Thay đổi nào giảm **latency và chi phí** nhiều nhất?",
+      "options": [
+        "Rút system prompt từ 1,500 xuống 1,000 tokens, vì prefill là pha tốn compute nhất và input chiếm phần lớn số token của mỗi request",
+        "Chuyển sang streaming SSE để service nhận token sớm hơn, giảm end-to-end latency và giảm số token phải tính phí cho mỗi request",
+        "Tăng temperature lên 1.2 để phân phối phẳng hơn, model 'quyết định' nhanh hơn và kết thúc sớm hơn nên sinh ít token hơn",
+        "Rút gọn output: schema chặt, key ngắn, bỏ phần giải thích, max_tokens hợp lý → ít token decode, phần chi phối latency và đắt hơn input"
+      ],
+      "answer": 3,
+      "explain": "Latency ≈ TTFT + (n − 1)·TPOT: 900 output tokens × ~20–30 ms = 18–27 s, trong khi prefill 1,500 tokens chỉ tốn vài chục–vài trăm ms. Output cũng thường đắt gấp 3–5× input. Vì vậy cắt output (bỏ giải thích, schema chặt, key ngắn nhưng vẫn rõ nghĩa) hiệu quả nhất, có thể giảm 50–70% cả latency lẫn chi phí. Rút 500 input tokens chỉ giảm chút TTFT và chi phí input. Streaming chỉ cải thiện độ trễ cảm nhận của người dùng, không giảm E2E khi service cần JSON đầy đủ. Temperature không ảnh hưởng tốc độ mỗi token và không có cơ chế làm model kết thúc sớm."
+    },
+    {
+      "id": "infer-038",
+      "sub": "Group-wise quantization",
+      "level": 3,
+      "type": "numeric",
+      "trap": true,
+      "q": "Model **7B params** (7·10⁹) lượng tử **INT4 group-wise**, **group size = 128**, mỗi group lưu thêm **1 scale FP16** và **1 zero-point FP16**. Dung lượng weights là bao nhiêu **GB** (10⁹ byte)? (2 chữ số thập phân)",
+      "answer": 3.72,
+      "tolerance": 0.01,
+      "unit": "GB",
+      "explain": "Metadata mỗi group = 16 + 16 = 32 bit, chia cho 128 weight = 0.25 bit/weight. Tổng = 4 + 0.25 = 4.25 bit/weight. Dung lượng = 7·10⁹ × 4.25 / 8 = 3.71875·10⁹ byte ≈ 3.72 GB. Bẫy: tính 4 bit thuần → 3.50 GB. Group size nhỏ hơn (vd 32) chính xác hơn nhưng metadata tăng: 4 + 32/32 = 5 bit/weight. Thực tế một số tensor (embedding, lm_head) thường giữ FP16 nên file còn lớn hơn."
+    },
+    {
+      "id": "infer-039",
+      "sub": "Pruning",
+      "level": 2,
+      "type": "single",
+      "trap": false,
+      "q": "Team đã prune **50% weights unstructured** (magnitude) của một LLM, chất lượng giảm ít, nhưng latency trên GPU **gần như không đổi**. Nguyên nhân chính?",
+      "options": [
+        "Weights vẫn tính dense (số 0 vẫn được đọc và nhân); sparse kernel cho mẫu ngẫu nhiên tốn index, truy cập không đều — cần structured hoặc 2:4",
+        "Pruning chỉ giảm số tham số cần cập nhật khi training; ở inference framework luôn nạp lại đầy đủ ma trận nên tốc độ không bị ảnh hưởng",
+        "Ma trận 50% unstructured làm lệch tải giữa các warp, nên cuBLAS tự chuyển sang kernel FP32 an toàn hơn, chậm đi bù lại phần tiết kiệm",
+        "50% là quá ít; chỉ cần lên 60% unstructured thì cuBLAS dense kernel sẽ tự bỏ qua các số 0 và tăng tốc khoảng 2.5×"
+      ],
+      "answer": 0,
+      "explain": "Unstructured pruning tạo các số 0 rải rác; nếu vẫn lưu dense, GPU vẫn đọc và nhân đủ phần tử → không nhanh hơn, không nhẹ hơn. Lưu dạng sparse (CSR...) thì tốn index và truy cập bộ nhớ không liên tục, Tensor Core không tận dụng được → chỉ có lợi ở độ thưa rất cao (thường >90%) hoặc trên CPU/accelerator chuyên dụng. Cách có speedup thật: structured pruning (bỏ head, neuron, layer → ma trận nhỏ hơn) hoặc 2:4 semi-structured trên Sparse Tensor Core. Dense kernel (cuBLAS) không bao giờ tự bỏ qua số 0 dù độ thưa 60% hay 90%, cũng không tự đổi sang FP32; framework nạp đúng ma trận đã prune."
+    },
+    {
+      "id": "infer-040",
+      "sub": "SparseGPT / Wanda / 2:4",
+      "level": 3,
+      "type": "multi",
+      "trap": true,
+      "q": "Chọn **TẤT CẢ** phát biểu đúng về pruning LLM.",
+      "options": [
+        "Wanda chấm điểm bằng |W| × ‖X‖₂ (norm activation kênh input), so sánh trong từng output, không cập nhật weight, không retrain",
+        "Mẫu 2:4 nghĩa là trong mỗi 4 weight liên tiếp chỉ có 1 số 0 bị ép, nên đạt 25% sparsity và Sparse Tensor Core tăng tốc ~1.33×",
+        "Magnitude pruning thuần (chỉ dựa |W|) đã đủ tốt với LLM lớn ở 50% sparsity, nên SparseGPT/Wanda cải thiện không đáng kể",
+        "SparseGPT prune one-shot và tái tạo (cập nhật) các weight còn lại dựa trên xấp xỉ Hessian để bù sai số của từng layer",
+        "Structured pruning (bỏ head/neuron/layer) tăng tốc ngay với dense kernel nhưng mất chất lượng nhiều hơn, thường cần fine-tune/distill"
+      ],
+      "answer": [
+        0,
+        3,
+        4
+      ],
+      "explain": "Wanda (Pruning by Weights and activations): điểm = |W_ij| · ‖X_j‖₂, so sánh theo từng output row, không cập nhật weight, chạy rất nhanh. SparseGPT: one-shot, giải bài toán tái tạo layer-wise bằng xấp xỉ Hessian (họ OBS), prune 50–60% OPT/BLOOM 175B mà perplexity tăng ít. Mẫu 2:4 thực chất là 2 số 0 trong mỗi 4 weight → 50% sparsity, Sparse Tensor Core (Ampere+) cho tối đa ~2× math — ý '2:4 = 25% sparsity' là sai. Magnitude thuần sụp chất lượng ở LLM vì bỏ qua outlier activation; đó là động lực của Wanda. Structured pruning tăng tốc thật nhưng tổn hại chất lượng nhiều hơn (vd Minitron/Sheared-LLaMA dùng pruning + distillation)."
+    },
+    {
+      "id": "infer-041",
+      "sub": "Knowledge distillation",
+      "level": 2,
+      "type": "numeric",
+      "trap": false,
+      "q": "Teacher có logits `[4, 2, 0]` cho 3 lớp. Trong knowledge distillation với **temperature T = 4**, soft target của lớp thứ ba (logit 0) là bao nhiêu? (4 chữ số thập phân)",
+      "answer": 0.1863,
+      "tolerance": 0.001,
+      "unit": "",
+      "explain": "z/T = [1, 0.5, 0]. e^1 ≈ 2.7183, e^0.5 ≈ 1.6487, e^0 = 1 → tổng ≈ 5.3670. P(lớp 3) = 1 / 5.3670 ≈ 0.1863. Với T = 1: 1/(e⁴ + e² + 1) ≈ 0.0159. T lớn làm mềm phân phối, khuếch đại thông tin về quan hệ tương đối giữa các lớp 'sai' (dark knowledge: lớp 2 giống đáp án hơn lớp 3) — tín hiệu mà one-hot label không có. Student cũng phải dùng cùng T khi tính soft loss; lúc inference student dùng T = 1."
+    },
+    {
+      "id": "infer-042",
+      "sub": "Knowledge distillation",
+      "level": 3,
+      "type": "single",
+      "trap": false,
+      "q": "Loss distillation kiểu Hinton: `L = α·CE(y, softmax(z_s)) + (1 − α)·T²·KL(softmax(z_t/T) ‖ softmax(z_s/T))`. Vì sao soft term được **nhân T²**?",
+      "options": [
+        "Để KL divergence giữa hai phân phối đã làm mềm luôn không âm và có cùng thang đo với cross-entropy của nhãn cứng khi T thay đổi trong khoảng 1–20",
+        "Gradient soft term theo logit student ≈ (1/T)(p_s − p_t), và hiệu này cũng co ~1/T khi T lớn → ∝ 1/T²; nhân T² giữ cân bằng với hard loss",
+        "Để bù việc softmax với T lớn làm entropy của soft targets giảm, khiến student nhận ít thông tin về quan hệ giữa các lớp sai",
+        "Vì student thường có số layer ít hơn teacher theo tỉ lệ khoảng T, nên cần khuếch đại loss tương ứng để gradient lan đủ sâu"
+      ],
+      "answer": 1,
+      "explain": "Đạo hàm cross-entropy mềm theo logit student z_i là (1/T)(p_i − q_i) với p, q tính ở nhiệt độ T. Ở giới hạn T lớn, p_i − q_i ≈ (z_i − v_i)/(N·T), nên gradient tỉ lệ 1/T². Nếu không nhân T², tăng T sẽ làm soft term gần như biến mất so với hard loss, và phải chỉnh lại α mỗi khi đổi T. KL luôn ≥ 0 sẵn, không cần T² để đảm bảo điều đó. T lớn làm entropy TĂNG (phẳng hơn) chứ không giảm. Số layer không liên quan."
+    },
+    {
+      "id": "infer-043",
+      "sub": "Semantic cache",
+      "level": 2,
+      "type": "multi",
+      "trap": true,
+      "q": "Bạn thêm **semantic cache** (embedding + ngưỡng cosine) trước LLM của chatbot CSKH đa tenant. Chọn **TẤT CẢ** phát biểu đúng.",
+      "options": [
+        "Nên bật semantic cache mặc định cho mọi câu hỏi, kể cả câu phụ thuộc dữ liệu thời gian thực (giá, tồn kho, trạng thái đơn), vì luôn tiết kiệm chi phí",
+        "Ngưỡng quá thấp gây false hit: 'hủy đơn 123' và 'hủy đơn 456' (hoặc 'đặt' vs 'hủy') có cosine rất cao nhưng cần trả lời khác",
+        "Cache phải được phân vùng theo tenant/user/quyền truy cập; nếu không có thể trả cho người này câu trả lời chứa dữ liệu của người khác",
+        "Tăng ngưỡng similarity (vd 0.85 → 0.97) vừa tăng hit rate vừa giảm false hit, nên luôn nên đặt ngưỡng cao nhất có thể",
+        "Exact-match cache an toàn hơn về độ đúng nhưng hit rate thấp với truy vấn ngôn ngữ tự nhiên"
+      ],
+      "answer": [
+        1,
+        2,
+        4
+      ],
+      "explain": "Embedding câu thường không nhạy với khác biệt nhỏ nhưng quan trọng (số, ID, phủ định, động từ đối nghịch) → ngưỡng thấp gây trả lời sai một cách tự tin. Cache phải kèm khóa tenant/user/quyền và TTL/invalidation khi tài liệu đổi; nếu không sẽ rò rỉ dữ liệu. Câu hỏi phụ thuộc trạng thái thời gian thực không nên cache. Tăng ngưỡng là trade-off: giảm false hit nhưng GIẢM hit rate — không thể vừa tăng vừa giảm. Exact cache (hash prompt + params) đúng tuyệt đối nhưng ít khi trùng nguyên văn. Thực hành: đo precision của cache trên tập câu thật, chuẩn hóa/trích entity trước khi so khớp."
+    },
+    {
+      "id": "infer-044",
+      "sub": "Rate limit",
+      "level": 3,
+      "type": "numeric",
+      "trap": true,
+      "q": "Deployment Azure OpenAI có **TPM = 600,000** và **RPM = 1,000**. Azure ước lượng token cho rate limit tại thời điểm nhận request = **prompt tokens + max_tokens**. Mỗi request có **2,000 prompt tokens**, đặt **max_tokens = 1,000**, nhưng output thực tế chỉ ~**300 tokens**.\n\nSố request tối đa mỗi phút có thể gửi mà không bị 429 (giả sử phân bố đều) là bao nhiêu?",
+      "answer": 200,
+      "tolerance": 0,
+      "unit": "requests/min",
+      "explain": "Token ước lượng mỗi request = 2,000 + 1,000 = 3,000 (dùng max_tokens, không phải output thực tế). Giới hạn theo TPM = 600,000 / 3,000 = 200 req/min; theo RPM = 1,000 → giới hạn ràng buộc là TPM: 200. Bẫy: dùng token thực tế 2,300 → ~260 req/min, sẽ bị 429 dù metric billing còn dư. Cách sửa: đặt max_tokens sát thực tế (vd 400 → 600,000/2,400 = 250 req/min), rút gọn prompt, chia tải nhiều deployment/region. Lưu ý RPM được đánh giá theo cửa sổ 1–10 s nên burst vẫn bị 429 dù tổng/phút dưới limit."
+    },
+    {
+      "id": "infer-045",
+      "sub": "Routing & fallback",
+      "level": 2,
+      "type": "multi",
+      "trap": false,
+      "q": "Bạn xây LLM gateway: Azure OpenAI là provider chính, Gemini là dự phòng, trả kết quả cho client qua streaming SSE. Chọn **TẤT CẢ** phát biểu đúng.",
+      "options": [
+        "Streaming SSE giảm tổng thời gian sinh và số token tính phí, vì server không phải giữ toàn bộ response trong bộ nhớ trước khi gửi",
+        "Gặp 429: retry với exponential backoff + jitter, tôn trọng retry-after; request bị 429 vẫn có thể bị tính vào rate limit",
+        "Fallback sang provider khác chỉ cần đổi base_url vì tokenizer, context window, format tool-calling và hành vi structured output là như nhau",
+        "Nếu lỗi khi đã stream một phần, fallback 'trong suốt' dễ gây lặp/mâu thuẫn nội dung; thường chỉ fallback an toàn trước token đầu tiên"
+      ],
+      "answer": [
+        1,
+        3
+      ],
+      "explain": "Streaming chỉ giảm độ trễ cảm nhận (người dùng thấy token đầu sau TTFT); tổng thời gian sinh và số token tính phí không đổi; việc server không phải buffer response không làm giảm token. Retry đúng cách: backoff lũy thừa + jitter, đọc header retry-after, giới hạn số lần, kèm circuit breaker để ngừng gọi provider đang lỗi. Provider khác nhau về tokenizer (số token, chi phí, giới hạn context), schema tool-calling, JSON mode, safety filter → cần adapter chuẩn hóa và eval chất lượng trên prompt riêng cho từng provider. Khi đã stream nửa chừng, provider dự phòng sẽ sinh lại từ đầu với nội dung khác → nên fallback trước first token hoặc có giao thức báo client."
+    }
+  ]
+}

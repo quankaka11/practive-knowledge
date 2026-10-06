@@ -1,0 +1,767 @@
+{
+  "id": "nlp",
+  "name": "NLP & Transformer",
+  "icon": "📝",
+  "order": 1,
+  "notes": [
+    {
+      "title": "Tokenization: BPE, WordPiece, Unigram, byte-level",
+      "md": "| Thuật toán | Train | Inference | Dùng ở |\n|---|---|---|---|\n| BPE | Bắt đầu từ ký tự, lặp: gộp cặp **tần suất cao nhất** | Áp merge rules theo thứ tự | GPT-2/3/4 (byte-level), RoBERTa, LLaMA (SentencePiece-BPE) |\n| WordPiece | Gộp cặp có điểm `freq(ab)/(freq(a)·freq(b))` (tăng likelihood nhiều nhất) | Greedy longest-match-first, tiền tố `##` | BERT, DistilBERT |\n| Unigram LM | Bắt đầu từ vocab **lớn**, loại dần token làm likelihood giảm ít nhất | Viterbi; hỗ trợ subword regularization (sampling) | T5, ALBERT, XLNet (qua SentencePiece) |\n\n- **SentencePiece** là *thư viện* (không phải thuật toán thứ 3): train thẳng trên raw text, coi khoảng trắng là ký hiệu `▁` → detokenize lossless; cài đặt cả BPE và Unigram.\n- **Byte-level BPE**: vocab cơ sở 256 byte → không bao giờ có `[UNK]`. GPT-2: 50,257 = 256 byte + 50,000 merges + `<|endoftext|>`. Một token có thể là *nửa ký tự* UTF-8 → cẩn thận khi stream/decode từng token.\n- **Tiếng Việt**: ký tự có dấu chiếm 2–3 byte UTF-8 (`ă`=2, `ệ`=3); tokenizer thiên tiếng Anh tốn nhiều token hơn → tốn tiền, tốn context. Phải chuẩn hóa Unicode **NFC** (NFD tách dấu thành combining char → chuỗi byte khác → token khác).\n- **PhoBERT** yêu cầu input đã **word-segment** (VnCoreNLP RDRSegmenter: `sản_phẩm`), max 256 token.\n- Số token ≠ số ký tự ≠ số từ: tiếng Anh ~0.75 từ/token (~4 ký tự/token); so sánh perplexity giữa 2 tokenizer khác nhau là **không hợp lệ** nếu không quy về cùng đơn vị (word/byte)."
+    },
+    {
+      "title": "Biểu diễn từ: TF-IDF, n-gram LM, word2vec, GloVe, fastText",
+      "md": "- **TF-IDF** cổ điển: `tf·log(N/df)` → từ xuất hiện ở mọi doc có idf = 0. **sklearn** (`smooth_idf=True`): `idf = ln((1+N)/(1+df)) + 1`, tf = raw count, sau đó chuẩn hóa L2 từng vector.\n- **n-gram LM**: Markov bậc n−1; MLE cho xác suất 0 với n-gram chưa thấy → smoothing: Laplace (add-1, kém), Good-Turing, interpolation/back-off, **Kneser-Ney** (absolute discount d≈0.75 + *continuation probability* ∝ số ngữ cảnh khác nhau mà từ đứng sau → 'Francisco' thấp dù tần suất cao).\n- **word2vec**: skip-gram (center → context, tốt cho từ hiếm), CBOW (trung bình context → center, nhanh hơn). 2 ma trận W_in, W_out. Tránh softmax O(V) bằng hierarchical softmax hoặc **negative sampling**: `log σ(u_o·v_c) + Σ_k log σ(−u_k·v_c)`, noise ∝ `count^0.75`, k = 5–20 (data nhỏ), 2–5 (data lớn). Subsampling từ phổ biến (t ≈ 1e-5).\n- Số cặp skip-gram câu n từ, window w: mỗi vị trí i có `min(i,w) + min(n−1−i,w)` context.\n- **GloVe**: weighted least squares trên log co-occurrence: `Σ f(X_ij)(w_i·w̃_j + b_i + b̃_j − log X_ij)²`, `f(x) = (x/x_max)^0.75` nếu x < x_max=100, ngược lại 1; f(0)=0.\n- **fastText**: vector từ = tổng vector character n-gram (3–6, có biên `<`, `>`, hashing vào bucket) + vector từ → tạo được vector cho OOV, tốt cho ngôn ngữ giàu hình thái.\n- Tất cả là **static embedding**: 1 vector / từ, không phân biệt đa nghĩa ('bank'). Contextual (ELMo, BERT) giải quyết."
+    },
+    {
+      "title": "RNN, LSTM, GRU, seq2seq & attention cổ điển",
+      "md": "- Vanilla RNN: `h_t = tanh(W_hh h_{t−1} + W_xh x_t + b)`. Gradient = tích nhiều Jacobian → **vanishing/exploding** theo hàm mũ.\n- **LSTM**: 3 cổng (input, forget, output) + candidate g; `c_t = f⊙c_{t−1} + i⊙g` (cập nhật **cộng**) → gradient đi qua cell state ít bị suy giảm khi f≈1. Không chống exploding → vẫn cần **gradient clipping**. Mẹo: forget-gate bias = 1.\n- **GRU**: 2 cổng (update z, reset r), không có cell state riêng, 3 khối trọng số (≈3/4 tham số LSTM).\n\n| Công thức tham số (x = input, h = hidden) | |\n|---|---|\n| LSTM Keras (1 bias) | `4·(h·(x+h) + h)` |\n| LSTM PyTorch (b_ih + b_hh) | `4·(h·(x+h) + 2h)` |\n| GRU PyTorch | `3·(h·(x+h) + 2h)` |\n| Bidirectional | ×2 |\n\n- **Seq2seq**: encoder nén cả câu vào 1 vector cố định → nút cổ chai với câu dài → **attention**.\n- **Bahdanau** (additive): `v^T tanh(W1 s_{t−1} + W2 h_j)`, dùng trạng thái decoder *trước*, encoder BiRNN. **Luong** (multiplicative): `dot` hoặc `general h_tᵀ W h̄_s`, dùng trạng thái decoder *hiện tại* h_t."
+    },
+    {
+      "title": "Transformer: attention, multi-head, mask, độ phức tạp",
+      "md": "- `Attention(Q,K,V) = softmax(QKᵀ/√d_k + M)·V`. Chia **√d_k** vì nếu q,k có thành phần độc lập mean 0 var 1 thì `Var(q·k) = d_k` → softmax bão hòa, gradient ≈ 0.\n- **Multi-head**: h head, mỗi head d_k = d/h → tổng tham số chiếu vẫn `4·d²` (+4d bias), bằng single-head d; nhưng có **h ma trận score n×n** → bộ nhớ attention weights tăng theo h.\n- **Mask**: cộng −∞ *trước* softmax. Causal: j > i. Padding: theo chiều **key**. Cross-attention: padding mask của nguồn, không causal.\n- **FLOPs 1 layer** (d_ff = 4d): chiếu QKVO `8nd²`, FFN `16nd²`, QKᵀ + AV `4n²d`. Phần n² vượt FFN khi n > 4d → với LLM d=4096, n=512 thì FFN chiếm ưu thế (~32×).\n- **Bộ nhớ attention weights**: `B·H·n²·bytes` mỗi layer (B=8, H=16, n=4096, fp16 → 4 GiB). FlashAttention không vật chất hóa ma trận n×n (tiled + online softmax) → bộ nhớ O(n).\n- Không có positional info, self-attention là **permutation-equivariant**.\n- Câu hay hỏi: vì sao √d_k? MHA có tốn tham số hơn không? Độ phức tạp O(n²d) vs O(nd²)? Mask đặt ở đâu?"
+    },
+    {
+      "title": "Thành phần Transformer & đếm tham số",
+      "md": "| Thành phần | Ghi nhớ |\n|---|---|\n| Post-LN (gốc) | `LN(x + F(x))`; gradient lớn ở layer gần output lúc init → cần LR warmup, khó train sâu |\n| Pre-LN | `x + F(LN(x))`; ổn định, train được không warmup (Xiong 2020), cần LN cuối |\n| LayerNorm | trừ mean, chia std, có γ và β (2d tham số) |\n| RMSNorm | chỉ chia RMS, không trừ mean, chỉ γ (d tham số), rẻ hơn — LLaMA, T5 |\n| FFN chuẩn | `W2·act(W1 x)`, d_ff = 4d, `8d²` tham số |\n| SwiGLU | `W2(SiLU(W1 x) ⊙ W3 x)`, 3 ma trận, hidden ≈ 2/3·4d (LLaMA-7B: 11008) |\n| Sinusoidal PE | **cộng** vào embedding, không tham số |\n| Learned PE | BERT/GPT-2, không ngoại suy quá max_position |\n| RoPE | xoay Q, K (không V) → tích chỉ phụ thuộc m−n |\n| ALiBi | không PE, cộng bias âm tỷ lệ với khoảng cách vào score, slope riêng mỗi head |\n| Weight tying | output head dùng chung ma trận embedding (tiết kiệm V·d) |\n\n**Đếm tham số 1 layer encoder (có bias)**: attention `4(d²+d)` + FFN `2·d·d_ff + d_ff + d` + 2 LN `4d`. BERT-base (768, 3072): 2,362,368 + 4,722,432 + 3,072 = **7,087,872** ≈ 7.09M; ×12 = 85M + embedding 23.8M ≈ 110M.\n\nXấp xỉ nhanh decoder không bias: `12·L·d²` (FFN 4d)."
+    },
+    {
+      "title": "Kiến trúc & mục tiêu pre-train",
+      "md": "| Model | Kiến trúc | Objective |\n|---|---|---|\n| BERT | Encoder | MLM 15% (80% [MASK] / 10% random / 10% giữ) + NSP |\n| RoBERTa | Encoder | MLM **dynamic masking**, **bỏ NSP**, data 160GB, batch lớn, byte-level BPE 50K |\n| ELECTRA | Encoder | Replaced Token Detection: generator nhỏ (MLM) + discriminator phân loại **mọi** token |\n| GPT | Decoder | Causal LM (next token) |\n| T5 | Enc-Dec | Span corruption 15%, mean span 3, sentinel `<extra_id_i>`, target chỉ chứa các span bị xóa |\n| BART | Enc-Dec | Denoising (text infilling, sentence permutation), target = toàn câu gốc |\n\n- Loss MLM chỉ tính trên ~15% vị trí được chọn → kém hiệu quả mẫu → ELECTRA cải thiện.\n- 10% random + 10% giữ nguyên: giảm lệch pha pre-train/fine-tune (fine-tune không có [MASK]).\n- Chọn kiến trúc: encoder → phân loại/NER/embedding; decoder → sinh; enc-dec → dịch/tóm tắt (nhưng T5 làm được cả phân loại dạng text-to-text, GPT dịch được qua prompting)."
+    },
+    {
+      "title": "Tác vụ NLP: NER, CRF, QA, tóm tắt, MT",
+      "md": "- **NER BIO (IOB2)**: B- bắt đầu, I- bên trong, O ngoài. `O I-PER` không hợp lệ. BIOES/BILOU thêm E/L (end) và S/U (single).\n- Subword: gán nhãn subword đầu, các subword còn lại `-100` (bị CrossEntropy bỏ qua) — hoặc gán I-.\n- **Linear-chain CRF**: mô hình *discriminative* trên cả chuỗi nhãn, có ma trận transition, chuẩn hóa bằng partition function (forward algorithm), giải mã **Viterbi** → loại chuỗi nhãn vô lý. BiLSTM-CRF là baseline kinh điển.\n- **Extractive QA**: dự đoán start/end logits trên token context; context dài → sliding window (`max_length=384`, `doc_stride=128`), không có đáp án → trỏ về [CLS]; chọn span hợp lệ (end ≥ start, độ dài giới hạn) có tổng logit lớn nhất.\n- **Tóm tắt**: extractive (chọn câu) vs abstractive (sinh mới, rủi ro hallucination). **MT**: enc-dec hoặc LLM; beam search, đánh giá BLEU/chrF/COMET.\n- **POS tagging**, **sentiment**, **text classification**: encoder + head [CLS]/mean pooling."
+    },
+    {
+      "title": "Metrics NLP (công thức cần nhớ)",
+      "md": "- **Perplexity** = `exp(CE trung bình theo nats/token)` (hoặc `2^CE` nếu bits). Word-level PPL = `exp(CE_token × số token/từ)`. Chỉ so sánh PPL khi cùng tokenizer/đơn vị.\n- **BLEU** = `BP · exp(Σ w_n log p_n)`, p_n = modified (clipped) n-gram precision, n = 1..4, w = 1/4. `BP = 1` nếu c > r, ngược lại `exp(1 − r/c)`. Corpus BLEU cộng dồn count toàn corpus (≠ trung bình sentence BLEU). Sentence BLEU = 0 nếu không có 4-gram khớp (cần smoothing).\n- **ROUGE-N**: n-gram overlap, thiên về recall. **ROUGE-L**: LCS (không cần liên tiếp), `P = LCS/|cand|`, `R = LCS/|ref|`.\n- **METEOR**: khớp unigram (exact, stem, synonym), `F_mean` trọng recall (10PR/(R+9P)), phạt phân mảnh theo số chunk.\n- **BERTScore**: greedy matching token–token bằng cosine contextual embedding → P/R/F, tùy chọn idf weighting, baseline rescaling.\n- **SQuAD EM/F1**: chuẩn hóa (lowercase, bỏ dấu câu, bỏ a/an/the, gộp khoảng trắng); F1 trên **túi token** (không xét thứ tự); lấy max qua các gold answer.\n- **NER**: entity-level (seqeval, strict: đúng biên + đúng loại) thấp hơn nhiều so với token-level accuracy (bị O chi phối)."
+    },
+    {
+      "title": "Sentence embedding & contrastive learning",
+      "md": "- **Cosine** = `u·v / (‖u‖·‖v‖)`; với vector đã L2-normalize thì cosine = dot product.\n- **Anisotropy**: embedding của LM pre-trained nằm trong một hình nón hẹp → cosine của mọi cặp đều cao. Khắc phục: mean-centering/whitening (BERT-whitening), contrastive fine-tune (SimCSE, SBERT).\n- [CLS] / mean pooling BERT chưa fine-tune cho STS **kém hơn** cả average GloVe (SBERT paper).\n- **SBERT**: siamese bi-encoder, mean pooling; objective NLI classification `softmax(W·[u; v; |u−v|])`; regression cosine; triplet.\n- **Bi-encoder vs cross-encoder**: bi-encoder precompute + ANN (retrieval); cross-encoder chính xác hơn nhưng O(số cặp) forward → reranker.\n- **InfoNCE / MultipleNegativesRankingLoss**: `−log(exp(sim(q,p⁺)/τ) / Σ_j exp(sim(q,p_j)/τ))`, in-batch negatives → batch lớn tốt hơn; τ nhỏ → phạt hard negative mạnh hơn.\n- **SimCSE unsupervised**: cùng câu qua encoder 2 lần với dropout khác nhau = positive; τ = 0.05. Supervised SimCSE: NLI entailment = positive, contradiction = hard negative."
+    },
+    {
+      "title": "Zero-shot / few-shot classification",
+      "md": "- **NLI-based zero-shot** (bart-large-mnli): premise = văn bản, hypothesis = `This example is about {label}.` → điểm = P(entailment). Chi phí ∝ số nhãn (1 forward / nhãn).\n- **Embedding zero-shot**: cosine giữa embedding văn bản và embedding mô tả nhãn (rẻ, nhanh).\n- **LLM prompting**: zero-shot / few-shot in-context learning — **không cập nhật trọng số**. Nhạy với thứ tự ví dụ (recency bias), tỷ lệ nhãn (majority-label bias), từ phổ biến (common-token bias) → contextual calibration, cân bằng demo, chọn demo bằng kNN.\n- **SetFit**: contrastive fine-tune sentence-transformer trên vài cặp + logistic head → mạnh với 8–64 ví dụ/nhãn.\n- Khi có vài nghìn nhãn chất lượng, fine-tune encoder nhỏ thường rẻ hơn và tốt ngang/hơn LLM zero-shot về accuracy, latency, cost."
+    },
+    {
+      "title": "Bẫy & câu phỏng vấn hay gặp",
+      "md": "- Nhầm LSTM PyTorch (2 bias) với Keras (1 bias).\n- Nghĩ MHA tốn gấp h lần tham số (sai), quên score memory tăng theo h (đúng).\n- Nghĩ O(n²) luôn chiếm ưu thế (sai với n nhỏ hơn ~4d).\n- Nhân mask 0/1 *sau* softmax (sai — hàng không còn tổng = 1).\n- RoPE xoay cả V (sai). Sinusoidal PE nhân với embedding (sai — cộng).\n- RoBERTa vẫn giữ NSP (sai). ELECTRA là GAN đối kháng (sai — generator train bằng MLM).\n- Loss MLM trên toàn chuỗi (sai — chỉ 15%).\n- Corpus BLEU = trung bình sentence BLEU (sai).\n- So PPL giữa 2 tokenizer khác nhau (sai).\n- Token accuracy cho NER (sai — dùng entity F1).\n- Đưa câu tiếng Việt thô vào PhoBERT (thiếu word segmentation), quên NFC.\n- Off-by-one: số merge BPE = vocab − base − special."
+    }
+  ],
+  "questions": [
+    {
+      "id": "nlp-001",
+      "sub": "Tokenization",
+      "level": 2,
+      "type": "single",
+      "trap": false,
+      "q": "Phát biểu nào mô tả ĐÚNG sự khác nhau trong cách **huấn luyện** vocab của BPE, WordPiece và Unigram LM?",
+      "options": [
+        "BPE và WordPiece cùng gộp cặp tần suất cao nhất, chỉ khác ở tiền tố `##` đánh dấu subword; Unigram gộp cặp có PMI cao nhất qua từng vòng",
+        "WordPiece gộp cặp tần suất cao nhất; BPE chọn cặp làm tăng likelihood nhiều nhất; Unigram bắt đầu từ ký tự rồi thêm dần token theo xác suất",
+        "BPE gộp cặp tần suất cao nhất; WordPiece gộp cặp có `freq(ab)/(freq(a)·freq(b))` lớn nhất; Unigram bắt đầu từ vocab lớn rồi cắt tỉa dần",
+        "Cả ba đều bắt đầu từ ký tự và thêm dần token theo cùng tiêu chí tần suất; khác biệt duy nhất là cách tách từ lúc inference (greedy, Viterbi)"
+      ],
+      "answer": 2,
+      "explain": "BPE: bắt đầu từ ký tự (hoặc byte), mỗi bước gộp cặp xuất hiện nhiều nhất và lưu merge rule; inference áp các rule theo thứ tự. WordPiece: cũng gộp dần nhưng chọn cặp tối đa `freq(ab)/(freq(a)·freq(b))` — tương đương cặp làm tăng likelihood của LM nhiều nhất, nên ưu tiên cặp mà các thành phần ít xuất hiện riêng lẻ; inference dùng greedy longest-match-first với tiền tố `##`. Unigram LM đi theo chiều ngược lại: khởi tạo vocab rất lớn, mỗi vòng loại các token mà việc bỏ đi làm likelihood giảm ít nhất, inference bằng Viterbi và hỗ trợ sampling nhiều cách tách (subword regularization). Phương án nói BPE và WordPiece giống nhau sai vì tiêu chí gộp khác; phương án đảo vai BPE/WordPiece sai; phương án 'cả ba đều thêm dần' sai vì Unigram là thuật toán cắt tỉa (pruning)."
+    },
+    {
+      "id": "nlp-002",
+      "sub": "Byte-level BPE & tiếng Việt",
+      "level": 2,
+      "type": "multi",
+      "trap": true,
+      "q": "Về tokenizer **byte-level BPE** (GPT-2, RoBERTa, nhiều LLM) khi xử lý tiếng Việt, chọn TẤT CẢ phát biểu đúng.",
+      "options": [
+        "Không bao giờ sinh token `[UNK]`, vì mọi chuỗi UTF-8 đều biểu diễn được bằng 256 byte cơ sở",
+        "`ệ` (U+1EC7) chiếm 3 byte UTF-8; nếu vocab ít merge tiếng Việt, một âm tiết có thể bị tách thành nhiều token",
+        "Mỗi token khi decode riêng lẻ luôn ra chuỗi Unicode hợp lệ, vì merge chỉ được học trên ranh giới ký tự UTF-8, nên stream từng token không bao giờ lỗi",
+        "Cùng nội dung, bản tiếng Việt thường tốn nhiều token hơn bản tiếng Anh trên tokenizer thiên tiếng Anh → tốn phí API và context",
+        "Vì không có OOV nên không cần chuẩn hóa Unicode (NFC/NFD) trước khi tokenize: mọi dạng biểu diễn dấu đều ra cùng một chuỗi token"
+      ],
+      "answer": [
+        0,
+        1,
+        3
+      ],
+      "explain": "Byte-level BPE dùng 256 byte làm vocab cơ sở nên mọi văn bản đều mã hóa được, không có [UNK]. Tiếng Việt có nhiều ký tự 2–3 byte (`ă` 2 byte, `ệ` 3 byte); nếu corpus train tokenizer ít tiếng Việt thì ít merge cho các chuỗi byte này → nhiều token/âm tiết → tốn tiền (tính theo token) và tốn context. Bẫy 1: một token có thể chỉ là một phần của ký tự nhiều byte, decode riêng lẻ ra ký tự lỗi `U+FFFD` (replacement character) — vì vậy các thư viện streaming phải buffer byte cho đến khi đủ ký tự hợp lệ. Bẫy 2: 'không có OOV' không có nghĩa là không cần chuẩn hóa; cùng chữ 'ệ' ở dạng NFC (1 code point) và NFD (e + dấu mũ + dấu nặng dạng combining) cho chuỗi byte khác hẳn → token khác, embedding khác, làm lệch phân phối và hỏng exact-match/dedup. Luôn chuẩn hóa NFC. Lưu ý thêm: merge của byte-level BPE được học trên chuỗi byte, không bị ràng buộc theo ranh giới ký tự, nên lập luận 'merge chỉ học trên ranh giới ký tự UTF-8' là sai."
+    },
+    {
+      "id": "nlp-003",
+      "sub": "SentencePiece",
+      "level": 2,
+      "type": "single",
+      "trap": true,
+      "q": "Chọn phát biểu **SAI** về SentencePiece.",
+      "options": [
+        "SentencePiece coi khoảng trắng như một ký hiệu thường (thay bằng `▁`), nhờ đó detokenize khôi phục chính xác văn bản gốc",
+        "SentencePiece huấn luyện trực tiếp từ raw text, không cần pre-tokenize theo khoảng trắng, nên phù hợp với tiếng Nhật, tiếng Trung",
+        "SentencePiece là một thuật toán phân đoạn subword riêng, khác về bản chất với cả BPE và Unigram LM",
+        "Chế độ Unigram trong SentencePiece hỗ trợ subword regularization: lấy mẫu nhiều cách tách khác nhau khi huấn luyện để tăng robustness"
+      ],
+      "answer": 2,
+      "explain": "SentencePiece là một *thư viện/framework* tokenization, bên trong cài đặt thuật toán BPE và Unigram LM (cùng chế độ char/word); nó không phải thuật toán thứ ba — đây là phát biểu sai cần chọn. Các phát biểu còn lại đúng: SentencePiece xử lý input như dòng ký tự Unicode thô, khoảng trắng được mã hóa thành `▁` nên quá trình tách/ghép là lossless (không mất thông tin khoảng trắng như các tokenizer pre-split). Không phụ thuộc pre-tokenizer nên dùng tốt cho ngôn ngữ không có khoảng trắng. Subword regularization (Kudo 2018) lấy mẫu segmentation theo xác suất Unigram, hoạt động như data augmentation. T5, ALBERT, XLNet, LLaMA (BPE) đều dùng SentencePiece."
+    },
+    {
+      "id": "nlp-004",
+      "sub": "Tiếng Việt / PhoBERT",
+      "level": 2,
+      "type": "single",
+      "trap": true,
+      "q": "Bạn fine-tune `vinai/phobert-base` cho phân loại cảm xúc, đưa thẳng câu thô `Tôi rất thích sản phẩm này` vào tokenizer. Code chạy không lỗi nhưng F1 thấp hơn hẳn số liệu công bố. Nguyên nhân khả dĩ nhất?",
+      "options": [
+        "PhoBERT là mô hình uncased, nên phải lowercase và bỏ dấu tiếng Việt trước khi tokenize để khớp vocab lúc pre-train",
+        "Câu bị cắt vì vượt `max_length=512` mặc định của tokenizer, nên phần mang cảm xúc ở cuối câu bị mất",
+        "PhoBERT dùng byte-level BPE thiên tiếng Anh, nên ký tự có dấu bị tách vụn thành byte; cần chuyển sang dạng Telex trước",
+        "PhoBERT được pre-train trên văn bản đã tách từ (vd `sản_phẩm`); input thô lệch phân phối lúc pre-train"
+      ],
+      "answer": 3,
+      "explain": "PhoBERT được pre-train trên corpus đã tách từ bằng RDRSegmenter (VnCoreNLP): các âm tiết của một từ ghép được nối bằng `_` như `sản_phẩm`, `học_sinh`. Vocab BPE (fastBPE) cũng được học trên dữ liệu đó, nên input không tách từ sinh ra chuỗi token khác hẳn phân phối pre-train → hiệu năng giảm mà không báo lỗi. README của PhoBERT ghi rõ phải word-segment input. Các phương án khác sai: bỏ dấu sẽ phá hủy thông tin (tiếng Việt không dấu rất mơ hồ); câu chỉ vài token nên không thể vượt giới hạn (PhoBERT thực tế max 256 token, không phải 512); PhoBERT xử lý ký tự có dấu bình thường. Bài học: luôn tái lập đúng pipeline tiền xử lý của lúc pre-train (segmentation, NFC, lowercase hay không)."
+    },
+    {
+      "id": "nlp-005",
+      "sub": "Tokenization",
+      "level": 2,
+      "type": "numeric",
+      "trap": true,
+      "q": "Tokenizer GPT-2 là byte-level BPE với vocab size **50,257**, gồm 256 token byte cơ sở và đúng **1** special token `<|endoftext|>`. Mỗi merge rule thêm đúng 1 token mới. Tokenizer này đã học bao nhiêu merge rules? (số nguyên)",
+      "answer": 50000,
+      "tolerance": 0,
+      "unit": "merges",
+      "explain": "Vocab = base tokens + số merge + special tokens. Suy ra số merge = 50,257 − 256 − 1 = 50,000 (file `merges.txt` của GPT-2 đúng 50,000 dòng rule). Bẫy off-by-one: quên trừ special token sẽ ra 50,001, hoặc quên base byte sẽ ra 50,256. Con số 50,257 cũng giải thích vì sao người ta hay pad vocab lên 50,304 (bội của 64/128) để matmul trên GPU hiệu quả hơn. Cùng lý luận áp dụng khi bạn train tokenizer riêng với `vocab_size` mục tiêu: số merge = vocab_size − alphabet − special."
+    },
+    {
+      "id": "nlp-006",
+      "sub": "TF-IDF",
+      "level": 1,
+      "type": "numeric",
+      "trap": false,
+      "q": "Corpus có **N = 5** văn bản. Từ `attention` xuất hiện **3 lần** trong văn bản d và có mặt trong **2** văn bản của corpus. Dùng công thức mặc định của sklearn `TfidfVectorizer` (`smooth_idf=True`, `sublinear_tf=False`): tf = số lần xuất hiện thô, `idf = ln((1+N)/(1+df)) + 1`. Tính giá trị TF-IDF của `attention` trong d **trước** khi chuẩn hóa L2. Làm tròn 3 chữ số thập phân.",
+      "answer": 5.079,
+      "tolerance": 0.01,
+      "explain": "idf = ln((1+5)/(1+2)) + 1 = ln(2) + 1 ≈ 0.6931 + 1 = 1.6931. tf-idf = 3 × 1.6931 ≈ 5.079. So với công thức sách giáo khoa idf = ln(N/df) = ln(2.5) ≈ 0.916 → 2.749: khác hẳn, nên phải biết thư viện dùng công thức nào. Điểm khác quan trọng: với idf cổ điển, từ có mặt ở mọi văn bản có idf = 0 (bị loại hoàn toàn); với sklearn, +1 làm idf tối thiểu = 1 nên từ đó vẫn còn trọng số; 'smooth' (+1 ở tử và mẫu) như thể có thêm một văn bản chứa mọi từ, tránh chia cho 0. Sau bước này sklearn mặc định chuẩn hóa L2 từng vector văn bản, nên giá trị cuối cùng trong ma trận sẽ nhỏ hơn 1."
+    },
+    {
+      "id": "nlp-007",
+      "sub": "n-gram LM",
+      "level": 3,
+      "type": "single",
+      "trap": false,
+      "q": "Trong corpus, `Francisco` có tần suất rất cao nhưng gần như chỉ xuất hiện sau `San`. Với bigram LM, cho ngữ cảnh chưa thấy `I want to visit ___`, **Kneser-Ney smoothing** xử lý `Francisco` thế nào ở phân phối bậc thấp?",
+      "options": [
+        "Nội suy với xác suất unigram theo tần suất thô, nên `Francisco` được ưu tiên cao vì là một trong các từ phổ biến nhất",
+        "Cộng 1 vào mọi bigram count (add-one) rồi chuẩn hóa lại, nên mọi từ chưa thấy sau `visit` nhận xác suất bằng nhau",
+        "Dùng continuation probability ∝ số ngữ cảnh khác nhau mà từ từng đứng sau, nên `Francisco` nhận xác suất thấp ở ngữ cảnh mới",
+        "Không back-off: bigram chưa thấy nhận xác suất 0, vì phần discount d = 0.75 đã được trừ hết vào các bigram đã thấy"
+      ],
+      "answer": 2,
+      "explain": "Kneser-Ney = absolute discounting (trừ d ≈ 0.75 khỏi mỗi count bậc cao) + phân phối bậc thấp đặc biệt: `P_cont(w) ∝ |{v : c(v, w) > 0}|` — số loại từ khác nhau đứng trước w. `Francisco` chỉ đứng sau `San` nên continuation count = 1 → xác suất thấp trong ngữ cảnh mới, đúng trực giác: từ này không phải 'từ đi được sau nhiều thứ'. Phương án dùng unigram thô chính là vấn đề mà KN muốn sửa (back-off/interpolation đơn giản sẽ cho `Francisco` cao). Laplace add-1 không liên quan và thường rất kém với vocab lớn vì lấy quá nhiều khối xác suất cho n-gram chưa thấy. Phương án 'không back-off' sai: khối xác suất bị discount không mất đi mà được phân phối lại cho phân phối bậc thấp (đó chính là back-off/interpolation); xác suất 0 làm perplexity = ∞ trên tập test — luôn cần smoothing. Modified KN (Chen & Goodman) là chuẩn trong KenLM, vẫn dùng cho ASR rescoring và lọc dữ liệu pre-train (CCNet)."
+    },
+    {
+      "id": "nlp-008",
+      "sub": "word2vec",
+      "level": 2,
+      "type": "single",
+      "trap": false,
+      "q": "Trong word2vec skip-gram với negative sampling (SGNS), các từ âm (negative) được lấy mẫu từ phân phối nào?",
+      "options": [
+        "`P(w) ∝ count(w)^0.75`: làm phẳng phân phối unigram, từ hiếm được lấy mẫu nhiều hơn so với tần suất thô",
+        "Phân phối đều trên toàn vocab, để mọi từ (kể cả từ hiếm) có cơ hội làm negative ngang nhau và tránh thiên lệch",
+        "Phân phối unigram thô `P(w) ∝ count(w)`, vì negative cần mô phỏng đúng phân phối thật của từ trong corpus",
+        "`P(w) ∝ count(w)^−0.75`, nghịch đảo tần suất giống idf, để ưu tiên mạnh từ hiếm và học tốt chúng"
+      ],
+      "answer": 0,
+      "explain": "Mikolov et al. (2013) dùng unigram mũ 3/4 (chọn theo thực nghiệm). Số mũ < 1 làm phẳng phân phối: từ cực phổ biến ('the', 'là') bị giảm tỷ trọng, từ hiếm tăng tỷ trọng tương đối, nhưng vẫn giữ thứ tự tần suất. Phân phối đều làm negative toàn từ hiếm, quá dễ phân biệt → tín hiệu học yếu; unigram thô làm negative bị chi phối bởi stopword; số mũ âm đảo ngược thứ tự, không ai dùng. Objective cho mỗi cặp dương: `log σ(u_o·v_c) + Σ_{k} log σ(−u_k·v_c)` với k = 5–20 cho dữ liệu nhỏ, 2–5 cho dữ liệu lớn. Đừng nhầm với *subsampling* từ phổ biến (bỏ bớt từ khỏi dữ liệu train với xác suất `1 − √(t/f(w))`, t ≈ 1e-5) — đó là một kỹ thuật khác."
+    },
+    {
+      "id": "nlp-009",
+      "sub": "word2vec",
+      "level": 1,
+      "type": "numeric",
+      "trap": false,
+      "q": "Câu có **10 từ**. Skip-gram với window size **2** (tối đa 2 từ mỗi bên, cố định, không dynamic window, không subsampling). Mỗi cặp (center, context) dương đi kèm **k = 5** negative samples. Tổng số phép phân loại nhị phân sigmoid (dương + âm) thực hiện trên câu này trong 1 epoch là bao nhiêu?",
+      "answer": 204,
+      "tolerance": 0,
+      "unit": "phép sigmoid",
+      "explain": "Số context của vị trí i = min(i, 2) + min(9 − i, 2). Vị trí 0 và 9: 2 context; vị trí 1 và 8: 3 context; 6 vị trí giữa (2..7): 4 context. Tổng cặp dương = 2·2 + 2·3 + 6·4 = 34 (không phải 10 × 4 = 40 — bẫy biên câu). Mỗi cặp dương có 1 phân loại dương + 5 phân loại âm → 34 × 6 = 204. Lưu ý thực tế: implementation gốc của word2vec/gensim lấy window hiệu dụng ngẫu nhiên trong [1, window] cho mỗi center (dynamic window, ngầm đánh trọng số cao cho từ gần), nên số cặp thực tế ít hơn; subsampling từ phổ biến cũng giảm thêm. Với k âm, chi phí mỗi cặp là O(kd) thay vì O(Vd) của full softmax."
+    },
+    {
+      "id": "nlp-010",
+      "sub": "word2vec",
+      "level": 2,
+      "type": "multi",
+      "trap": false,
+      "q": "Chọn TẤT CẢ phát biểu đúng về word2vec.",
+      "options": [
+        "Phép tương tự `king − man + woman ≈ queen` được tối ưu trực tiếp như một thành phần trong loss function",
+        "Skip-gram dự đoán từ ngữ cảnh từ từ trung tâm và thường cho vector tốt hơn với từ hiếm",
+        "CBOW gộp (trung bình/tổng) vector ngữ cảnh để dự đoán từ trung tâm và huấn luyện nhanh hơn skip-gram",
+        "Word2vec chỉ có một ma trận tham số; vector 'input' và 'output' của một từ là cùng một vector",
+        "Hierarchical softmax và negative sampling đều nhằm tránh chi phí softmax đầy đủ O(V) cho mỗi dự đoán"
+      ],
+      "answer": [
+        1,
+        2,
+        4
+      ],
+      "explain": "Skip-gram tạo nhiều cặp huấn luyện cho mỗi từ trung tâm (một cặp cho mỗi context), nên từ hiếm nhận nhiều cập nhật hơn → biểu diễn tốt hơn; CBOW chỉ có một dự đoán mỗi vị trí nên nhanh hơn và mượt hơn với từ phổ biến. Hierarchical softmax (cây Huffman, O(log V)) và negative sampling (k + 1 sigmoid) đều thay thế softmax O(V). Phát biểu 'một ma trận' sai: word2vec có hai ma trận W_in (vector từ khi làm center) và W_out (khi làm context); thường chỉ dùng W_in, đôi khi cộng cả hai. Phát biểu về analogy sai: tính chất cộng tuyến tính là *hệ quả nổi lên* (emergent) từ việc phân rã ma trận PMI ngầm định (Levy & Goldberg 2014), không phải một term trong loss."
+    },
+    {
+      "id": "nlp-011",
+      "sub": "GloVe",
+      "level": 3,
+      "type": "single",
+      "trap": false,
+      "q": "Hàm mục tiêu của **GloVe** là gì?",
+      "options": [
+        "Cross-entropy softmax dự đoán từ ngữ cảnh trên cửa sổ trượt, giống skip-gram nhưng duyệt toàn bộ corpus đúng một lần",
+        "Phân rã SVD cắt cụt của ma trận PPMI toàn cục (k = 300 chiều), lấy U·√Σ làm word vector",
+        "Weighted least squares hồi quy `w_i·w̃_j + b_i + b̃_j` về `log X_ij`, trọng số f(X_ij) bão hòa ở x_max, f(0) = 0",
+        "Bình phương tối thiểu `Σ X_ij (w_i·w̃_j − X_ij)²` trên count thô, trọng số tuyến tính nên cặp phổ biến chi phối"
+      ],
+      "answer": 2,
+      "explain": "GloVe (Pennington et al. 2014) xây ma trận đồng xuất hiện toàn cục X rồi hồi quy log-count: `w_i·w̃_j + b_i + b̃_j ≈ log X_ij`. Hàm trọng số `f(x) = (x/x_max)^α` nếu x < x_max, bằng 1 nếu lớn hơn, với x_max = 100, α = 3/4; f(0) = 0 nên các cặp không đồng xuất hiện bị bỏ qua (log 0 không xác định) và cặp quá phổ biến không áp đảo. Phương án cross-entropy trên cửa sổ là word2vec (local, predictive); SVD trên PPMI là phương pháp count-based cổ điển (LSA/Levy-Goldberg), không phải GloVe; phương án hồi quy count thô với trọng số tuyến tính là đúng thứ GloVe tránh (log-count và f bão hòa). Vector cuối thường lấy w + w̃."
+    },
+    {
+      "id": "nlp-012",
+      "sub": "fastText",
+      "level": 1,
+      "type": "single",
+      "trap": false,
+      "q": "Từ `unbelievableness` không xuất hiện trong dữ liệu huấn luyện. fastText (skip-gram, `minn=3`, `maxn=6`) tạo vector cho từ này như thế nào?",
+      "options": [
+        "Trả về vector 0 hoặc vector `<unk>` dùng chung, vì n-gram chỉ được dùng lúc train để regularize",
+        "Cộng vector các character n-gram dài 3–6 của `<unbelievableness>` (có ký hiệu biên, đã hash vào bucket)",
+        "Lấy vector của từ trong vocab có edit distance nhỏ nhất (vd `unbelievable`), có hiệu chỉnh theo tần suất",
+        "Báo KeyError như word2vec, vì fastText chỉ lưu vector cho từ đạt `minCount` trong dữ liệu train"
+      ],
+      "answer": 1,
+      "explain": "fastText (Bojanowski et al. 2017) biểu diễn mỗi từ là túi các character n-gram (thêm ký hiệu biên `<` và `>` để phân biệt tiền tố/hậu tố, vd `<un`, `ness>`) cộng với chính từ đó. Vector n-gram được hash vào số bucket cố định (mặc định 2 triệu). Với từ OOV, chỉ cần cộng vector các n-gram của nó → luôn có vector có nghĩa, nhất là với từ ghép/biến thể hình thái (`unbelievable` + `ness`). Word2vec và GloVe mới là những mô hình không xử lý được OOV (KeyError hoặc phải dùng `<unk>`). Không có bước tìm từ gần theo edit distance. Vector n-gram được dùng cả lúc inference (không chỉ để regularize khi train); `minCount` chỉ quyết định từ nào có vector *từ* riêng, không ngăn việc ghép vector từ n-gram. Ưu điểm này quan trọng với ngôn ngữ giàu hình thái (Thổ Nhĩ Kỳ, Phần Lan) và văn bản có lỗi chính tả."
+    },
+    {
+      "id": "nlp-013",
+      "sub": "Static vs contextual",
+      "level": 1,
+      "type": "single",
+      "trap": false,
+      "q": "Vì sao BERT phân biệt được nghĩa của `bank` trong `river bank` và `bank account` còn word2vec thì không?",
+      "options": [
+        "Vocab WordPiece của BERT đủ lớn để có token riêng cho mỗi nghĩa của `bank`, chọn theo ngữ cảnh lúc tokenize",
+        "BERT được huấn luyện với NSP nên học nghĩa của mỗi từ dựa trên quan hệ với câu kế tiếp trong văn bản",
+        "BERT dùng character n-gram giống fastText nên nắm được hình thái và nghĩa của từ theo tiền tố/hậu tố",
+        "Vector đầu ra của BERT phụ thuộc cả câu qua các lớp self-attention; riêng bảng embedding đầu vào vẫn là tĩnh"
+      ],
+      "answer": 3,
+      "explain": "Word2vec/GloVe/fastText là *static embedding*: một vector duy nhất cho mỗi từ bất kể ngữ cảnh. BERT cũng bắt đầu bằng một bảng embedding tĩnh (token + position + segment), nhưng sau 12/24 lớp self-attention, vector ở mỗi vị trí đã trộn thông tin từ toàn câu → *contextual embedding*, nên `bank` cạnh `river` khác `bank` cạnh `account`. Không có token riêng cho từng nghĩa trong vocab WordPiece. NSP là objective phụ ở mức câu, không phải lý do biểu diễn từ có ngữ cảnh (RoBERTa bỏ NSP vẫn contextual). BERT dùng WordPiece, không dùng character n-gram kiểu fastText. Đây cũng là lý do muốn lấy 'word embedding' từ BERT phải chạy cả mô hình chứ không chỉ tra bảng."
+    },
+    {
+      "id": "nlp-014",
+      "sub": "RNN/LSTM",
+      "level": 2,
+      "type": "multi",
+      "trap": true,
+      "q": "Về vanishing/exploding gradient trong RNN và LSTM, chọn TẤT CẢ phát biểu đúng.",
+      "options": [
+        "LSTM loại bỏ cả exploding gradient vì các cổng sigmoid chặn giá trị trong (0, 1), nên không cần gradient clipping khi huấn luyện",
+        "Cell state cập nhật dạng cộng `c_t = f⊙c_{t−1} + i⊙g`; khi f ≈ 1, gradient qua c gần như được bảo toàn qua nhiều bước",
+        "Khởi tạo bias forget gate dương (vd 1.0) là mẹo phổ biến giúp LSTM nhớ dài hơn lúc đầu huấn luyện",
+        "Dùng ReLU thay tanh trong vanilla RNN giải quyết triệt để cả vanishing lẫn exploding vì đạo hàm ReLU bằng 1 ở vùng dương",
+        "Ở vanilla RNN, gradient qua T bước là tích T Jacobian; nếu chuẩn của chúng < 1 thì gradient suy giảm theo hàm mũ"
+      ],
+      "answer": [
+        1,
+        2,
+        4
+      ],
+      "explain": "Vanilla RNN: ∂h_T/∂h_t là tích nhiều Jacobian; chuẩn < 1 → suy giảm mũ (vanishing), > 1 → bùng nổ. LSTM tạo đường gradient gần như 'tuyến tính' qua cell state (constant error carousel): ∂c_t/∂c_{t−1} = f_t (element-wise), nên khi forget gate ≈ 1 gradient được bảo toàn — vì vậy khởi tạo bias forget gate = 1 (Jozefowicz et al. 2015) rất phổ biến. Bẫy 1: LSTM giảm vanishing nhưng KHÔNG chống exploding (cổng sigmoid nằm trong (0, 1) nhưng các đường gradient qua h_t và ma trận trọng số vẫn có thể nổ) → vẫn dùng gradient clipping (clip norm ≈ 1–5). Bẫy 2: ReLU trong RNN không bị bão hòa (đạo hàm bằng 1 ở vùng dương) nhưng không chặn trên → độ lớn gradient do W_hh quyết định, exploding còn tệ hơn, chỉ hoạt động được với khởi tạo đặc biệt (IRNN, W_hh = identity) và vẫn không 'triệt để'."
+    },
+    {
+      "id": "nlp-015",
+      "sub": "LSTM",
+      "level": 2,
+      "type": "numeric",
+      "trap": true,
+      "q": "Tính số tham số của `torch.nn.LSTM(input_size=100, hidden_size=256, num_layers=1, bias=True, bidirectional=False)`. (số nguyên)",
+      "answer": 366592,
+      "tolerance": 0,
+      "unit": "tham số",
+      "explain": "LSTM có 4 khối (input gate, forget gate, cell candidate, output gate), mỗi khối có W_ih (h × x), W_hh (h × h). PyTorch dùng **hai** vector bias b_ih và b_hh cho mỗi khối. Tổng = 4 × (256·100 + 256·256 + 2·256) = 4 × (25,600 + 65,536 + 512) = 4 × 91,648 = 366,592. Bẫy: công thức Keras chỉ có 1 bias → 4 × (256·356 + 256) = 365,568; hai con số chênh 4h = 1,024. Bidirectional nhân 2; layer thứ 2 trở đi có input_size = h (hoặc 2h nếu bidirectional). GRU PyTorch tương tự với hệ số 3 thay vì 4."
+    },
+    {
+      "id": "nlp-016",
+      "sub": "GRU vs LSTM",
+      "level": 1,
+      "type": "single",
+      "trap": false,
+      "q": "So với LSTM cùng input size và hidden size, phát biểu nào đúng về GRU?",
+      "options": [
+        "GRU có 2 cổng (update, reset), không có cell state riêng, số tham số chỉ khoảng 3/4 LSTM",
+        "GRU có 3 cổng và một cell state riêng giống LSTM, chỉ bỏ output gate nên hidden state luôn lộ ra ngoài",
+        "GRU nhiều tham số hơn LSTM vì cổng reset có ma trận riêng cho cả input lẫn hidden và thêm một bias",
+        "GRU không stack nhiều lớp được vì thiếu cell state để truyền thông tin dài hạn giữa các lớp"
+      ],
+      "answer": 0,
+      "explain": "GRU (Cho et al. 2014) gộp forget và input gate thành update gate z: `h_t = (1 − z)⊙h_{t−1} + z⊙h̃_t`, và reset gate r điều chỉnh mức dùng h_{t−1} khi tính h̃_t. Chỉ có hidden state, không có cell state c riêng. Có 3 khối trọng số (z, r, h̃) so với 4 của LSTM → ~3/4 tham số, nhanh hơn một chút; chất lượng thường ngang LSTM tùy bài toán. Phương án '3 cổng + cell state' mô tả sai kiến trúc; 'nhiều tham số hơn' ngược thực tế; GRU stack nhiều lớp bình thường (`num_layers` trong `nn.GRU`)."
+    },
+    {
+      "id": "nlp-017",
+      "sub": "Seq2seq attention",
+      "level": 3,
+      "type": "single",
+      "trap": true,
+      "q": "Phát biểu nào phân biệt ĐÚNG Bahdanau attention và Luong attention trong seq2seq RNN?",
+      "options": [
+        "Bahdanau: score dot-product dùng trạng thái decoder hiện tại h_t; Luong: score cộng (MLP + tanh) dùng trạng thái decoder trước đó s_{t−1}",
+        "Bahdanau: score cộng (MLP + tanh) dùng trạng thái decoder trước s_{t−1}; Luong: score nhân (dot/general) dùng trạng thái hiện tại h_t",
+        "Hai cơ chế dùng cùng hàm score dot-product; khác biệt chỉ ở chỗ Luong dùng LSTM còn Bahdanau dùng GRU cho decoder",
+        "Luong attention là self-attention giữa các trạng thái encoder, còn Bahdanau là cross-attention giữa encoder và decoder"
+      ],
+      "answer": 1,
+      "explain": "Bahdanau et al. (2015): additive/concat attention, score tính từ trạng thái decoder bước trước s_{t−1} và annotation h_j của encoder BiRNN, context vector được đưa vào để tính s_t. Luong et al. (2015): multiplicative attention với 3 dạng score (dot, general `h_tᵀ W h̄_s`, concat), tính từ trạng thái decoder *hiện tại* h_t, rồi ghép context với h_t để ra attentional hidden state h̃_t = tanh(W_c[c_t; h_t]). Phương án đảo vai là bẫy hay gặp. Lựa chọn RNN cell không phải điểm khác biệt cốt lõi. Cả hai đều là cross-attention (decoder hỏi encoder), không phải self-attention. Dot-product attention của Luong là tiền thân trực tiếp của scaled dot-product trong Transformer."
+    },
+    {
+      "id": "nlp-018",
+      "sub": "Scaled dot-product",
+      "level": 1,
+      "type": "single",
+      "trap": false,
+      "q": "Vì sao scaled dot-product attention chia `QKᵀ` cho √d_k?",
+      "options": [
+        "Để trọng số attention mỗi hàng có tổng bằng 1, giúp đầu ra là trung bình có trọng số của các vector V",
+        "Var(q·k) tăng tỷ lệ với d_k; chia √d_k đưa variance về ~1, tránh softmax bão hòa làm gradient rất nhỏ",
+        "Để giảm độ phức tạp tính toán của QKᵀ từ O(n²·d) xuống O(n·d), nhờ đó attention chạy được với chuỗi dài",
+        "Để đưa kỳ vọng của q·k về 0, vì softmax chỉ cho gradient ổn định khi đầu vào có mean bằng 0 trên mỗi hàng"
+      ],
+      "answer": 1,
+      "explain": "q·k = Σ_{i=1}^{d_k} q_i k_i; mỗi tích có mean 0, variance 1 → tổng có variance d_k, độ lệch chuẩn √d_k. Với d_k = 64 logits có độ lớn ~8, softmax gần như one-hot, nằm ở vùng gradient ≈ 0 → học chậm/không ổn định. Chia √d_k (không phải d_k) đưa std về 1. Tổng bằng 1 là do softmax tự làm, không liên quan việc scale. Scale là phép nhân hằng số, không đổi độ phức tạp. Mean của q·k vốn đã 0 theo giả định; softmax bất biến với việc cộng hằng số vào mọi logit, nên 'mean 0' không phải yêu cầu. Một số model (T5) gộp hệ số này vào khởi tạo W_Q thay vì chia tường minh; muP dùng 1/d_k."
+    },
+    {
+      "id": "nlp-019",
+      "sub": "Multi-head attention",
+      "level": 2,
+      "type": "single",
+      "trap": true,
+      "q": "`d_model = 512`, so sánh multi-head attention **h = 8** head (d_k = d_v = 64) với single-head attention d_k = d_v = 512; cả hai có W_O kích thước 512×512, chuỗi dài n. Phát biểu nào ĐÚNG?",
+      "options": [
+        "Multi-head có gấp 8 lần tham số chiếu, vì mỗi head có bộ W_Q, W_K, W_V riêng kích thước 512×512; bộ nhớ score như nhau",
+        "Multi-head chỉ có 1/8 số tham số vì mỗi head chiếu xuống 64 chiều, còn bộ nhớ attention weights hai bên bằng nhau",
+        "Tham số chiếu bằng nhau (≈ 4·512²), nhưng multi-head có 8 ma trận score n×n nên bộ nhớ attention weights gấp 8",
+        "Hai cấu hình tương đương tuyệt đối cả tham số, bộ nhớ lẫn biểu diễn, vì nối các head lại chính là một head lớn"
+      ],
+      "answer": 2,
+      "explain": "Mỗi head có W_Q^i ∈ ℝ^{512×64}; 8 head ghép lại đúng bằng một ma trận 512×512 → tổng tham số Q, K, V, O = 4·512² = 1,048,576 (+ bias), như single-head. FLOPs của phép chiếu và QKᵀ, AV cũng xấp xỉ bằng nhau (8 × n²·64 = n²·512). Khác biệt: multi-head có h softmax độc lập trên h ma trận n×n → tensor attention weights kích thước B·h·n² thay vì B·n², tức lớn gấp 8 lần khi lưu cho backward. Về biểu diễn, chúng KHÔNG tương đương: softmax được áp riêng cho mỗi subspace, cho phép mỗi head chú ý đến vị trí khác nhau; single-head chỉ có một phân phối attention cho mỗi query. Hai phương án '8 lần' và '1/8' là hiểu lầm về cách chia chiều."
+    },
+    {
+      "id": "nlp-020",
+      "sub": "Đếm tham số Transformer",
+      "level": 2,
+      "type": "numeric",
+      "trap": false,
+      "q": "Tính tổng số tham số của **MỘT** encoder layer BERT-base: `d_model = 768`, 12 head, `d_ff = 3072`, mọi Linear đều có bias, 2 LayerNorm (mỗi cái có γ và β). Không tính embedding. (số nguyên)",
+      "answer": 7087872,
+      "tolerance": 0,
+      "unit": "tham số",
+      "explain": "Attention: 4 Linear 768→768 (Q, K, V, O) = 4 × (768² + 768) = 4 × 590,592 = 2,362,368. Số head không ảnh hưởng tổng tham số. FFN: 768→3072 (768·3072 + 3072) + 3072→768 (3072·768 + 768) = 2,362,368 + 2,360,064 = 4,722,432. LayerNorm: 2 × (768 + 768) = 3,072. Tổng = 7,087,872 ≈ 7.09M. Kiểm tra chéo: 12 layer ≈ 85.05M + embedding (30,522 + 512 + 2)·768 + LN ≈ 23.8M + pooler 0.59M ≈ 110M — đúng con số BERT-base. Quy tắc nhanh không bias: ≈ 12·d² mỗi layer (4d² attention + 8d² FFN)."
+    },
+    {
+      "id": "nlp-021",
+      "sub": "Độ phức tạp",
+      "level": 3,
+      "type": "single",
+      "trap": true,
+      "q": "Một decoder layer có `d_model = 4096`, `d_ff = 4·d_model`, chuỗi n = 512 token (forward, không KV cache). Phần nào chiếm nhiều FLOPs nhất?",
+      "options": [
+        "QKᵀ và softmax·V, vì self-attention luôn là O(n²) nên luôn chiếm ưu thế",
+        "Phép tính softmax và LayerNorm, vì là các phép không tuyến tính trên toàn tensor",
+        "Bốn phép chiếu Q, K, V, O, vì chúng nhiều hơn số ma trận trong FFN",
+        "FFN, vì chi phí ≈ 16·n·d² so với ≈ 4·n²·d của QKᵀ + AV, và ở đây d ≫ n"
+      ],
+      "answer": 3,
+      "explain": "Đếm FLOPs (1 multiply-add = 2 FLOPs): chiếu Q, K, V, O = 4 × 2·n·d² = 8nd²; FFN = 2 ma trận d×4d → 2 × 2·n·d·4d = 16nd²; QKᵀ = 2n²d, AV = 2n²d → 4n²d. Tỷ lệ FFN / (QKᵀ + AV) = 16nd² / 4n²d = 4d/n = 4·4096/512 = 32 lần. Phần O(n²) chỉ vượt FFN khi n > 4d (≈ 16K token ở đây) và vượt toàn bộ phần tuyến tính khi n > 6d. Bẫy: 'O(n²) luôn chiếm ưu thế' — Big-O bỏ qua hằng số và chiều d. Softmax/LayerNorm là O(n²) và O(nd) phép element-wise, nhỏ về FLOPs (dù có thể đáng kể về memory bandwidth). FFN dùng 2 ma trận nhưng mỗi cái gấp 4 lần một phép chiếu d×d nên lớn hơn tổng 4 phép chiếu."
+    },
+    {
+      "id": "nlp-022",
+      "sub": "Bộ nhớ attention",
+      "level": 2,
+      "type": "numeric",
+      "trap": false,
+      "q": "Attention chuẩn (không FlashAttention) phải vật chất hóa ma trận attention weights sau softmax. Với batch = 8, 16 head, độ dài chuỗi 4096, dtype fp16, tính bộ nhớ của tensor này cho **MỘT** layer. Đơn vị **GiB** (1 GiB = 2^30 byte), làm tròn 2 chữ số thập phân.",
+      "answer": 4.0,
+      "tolerance": 0.01,
+      "unit": "GiB",
+      "explain": "Kích thước tensor: B × H × n × n = 8 × 16 × 4096 × 4096 = 2,147,483,648 phần tử. fp16 = 2 byte → 4,294,967,296 byte = 4 GiB (= 4.29 GB nếu dùng 10^9 — chú ý đơn vị). Đó chỉ là 1 layer; lúc huấn luyện tensor này (và mask dropout nếu có) được giữ cho backward ở mọi layer → nhân với số layer, nhanh chóng vượt bộ nhớ GPU. Bộ nhớ tăng bậc hai theo n: gấp đôi n thì gấp 4 bộ nhớ. FlashAttention chia Q, K, V thành tile trong SRAM, dùng online softmax, không lưu ma trận n×n (tính lại khi backward) → bộ nhớ O(n) và nhanh hơn do giảm truy cập HBM."
+    },
+    {
+      "id": "nlp-023",
+      "sub": "Masking",
+      "level": 2,
+      "type": "multi",
+      "trap": false,
+      "q": "Về masking trong Transformer, chọn TẤT CẢ phát biểu đúng.",
+      "options": [
+        "Nhân ma trận attention SAU softmax với mask 0/1 là tương đương với cộng −∞ vào score TRƯỚC softmax",
+        "Causal mask gán −∞ cho vị trí j > i trong ma trận score trước softmax, để trọng số tới token tương lai bằng 0",
+        "Encoder kiểu BERT không cần padding mask vì bidirectional attention vốn được nhìn toàn bộ chuỗi",
+        "Padding mask áp lên chiều key, để không query nào phân bổ trọng số vào token [PAD]",
+        "Cross-attention trong decoder của encoder-decoder cần padding mask theo chuỗi nguồn nhưng không cần causal mask"
+      ],
+      "answer": [
+        1,
+        3,
+        4
+      ],
+      "explain": "Mask phải áp vào score trước softmax: exp(−∞) = 0 nên các vị trí bị chặn có trọng số đúng 0 và phần còn lại tự chuẩn hóa thành tổng 1. Nhân 0/1 sau softmax làm tổng mỗi hàng < 1 (đã 'lãng phí' xác suất vào vị trí bị chặn) — không tương đương trừ khi chuẩn hóa lại. Padding mask cần cho mọi kiến trúc khi batch có độ dài khác nhau, kể cả encoder (đó là `attention_mask` trong HuggingFace); nó che các *key* là PAD (các query là PAD vẫn tính nhưng bị bỏ qua ở loss/pooling). Cross-attention: query từ decoder, key/value từ encoder output — toàn bộ câu nguồn đã biết nên không cần causal, chỉ cần che PAD nguồn. Dùng số âm hữu hạn (vd min của fp16) thay −∞ để tránh NaN khi cả hàng bị mask."
+    },
+    {
+      "id": "nlp-024",
+      "sub": "Pre-LN vs Post-LN",
+      "level": 3,
+      "type": "single",
+      "trap": false,
+      "q": "Phát biểu nào ĐÚNG về Post-LN (Transformer gốc) và Pre-LN?",
+      "options": [
+        "Post-LN `x + F(LN(x))` giữ đường residual thuần nên ổn định hơn; vì vậy GPT-2/3 và LLaMA đều dùng Post-LN",
+        "Pre-LN cần warmup dài hơn Post-LN vì gradient ở các layer đầu lớn hơn lúc khởi tạo, nhất là với mô hình sâu trên 24 layer",
+        "Hai cách cho kỳ vọng gradient giống hệt nhau lúc khởi tạo; khác biệt chỉ ở tốc độ suy luận do Pre-LN tính LN trước attention",
+        "Post-LN `LN(x + F(x))` cần warmup vì gradient gần output lớn lúc init; Pre-LN `x + F(LN(x))` ổn định hơn, cần thêm LN cuối"
+      ],
+      "answer": 3,
+      "explain": "Xiong et al. (2020) chứng minh với Post-LN, kỳ vọng gradient của tham số gần output lớn lúc khởi tạo → learning rate lớn ngay từ đầu gây phân kỳ, nên bắt buộc warmup và khó train mô hình rất sâu. Pre-LN đặt LayerNorm bên trong nhánh residual, đường residual thuần đồng nhất (identity) giữ gradient có độ lớn ổn định qua các layer → train được không cần (hoặc rất ít) warmup. Vì output của chuỗi residual không được chuẩn hóa, Pre-LN cần thêm một LN cuối trước LM head. Phương án gán `x + F(LN(x))` cho Post-LN đã đảo công thức: đó là Pre-LN, và GPT-2/3, LLaMA dùng Pre-LN (LLaMA dùng Pre-RMSNorm). Đánh đổi: Pre-LN đôi khi kém hơn chút về chất lượng cuối, các layer sâu đóng góp ít (một lý do của các biến thể DeepNorm, Sandwich-LN)."
+    },
+    {
+      "id": "nlp-025",
+      "sub": "Normalization",
+      "level": 1,
+      "type": "single",
+      "trap": false,
+      "q": "RMSNorm (dùng trong LLaMA, T5) khác LayerNorm ở điểm nào?",
+      "options": [
+        "RMSNorm chuẩn hóa theo chiều batch thay vì chiều feature, giống BatchNorm nhưng không dùng running mean",
+        "RMSNorm không trừ mean, chỉ chia cho căn bậc hai trung bình bình phương (RMS) rồi nhân γ; không có β",
+        "RMSNorm trừ mean theo chiều feature nhưng không chia cho độ lệch chuẩn, nên rẻ hơn LayerNorm",
+        "RMSNorm có thêm tham số học được cho mean và variance nên nhiều tham số hơn LayerNorm (4d so với 2d)"
+      ],
+      "answer": 1,
+      "explain": "LayerNorm: `y = γ ⊙ (x − μ)/√(σ² + ε) + β` trên chiều feature của từng token (2d tham số). RMSNorm (Zhang & Sennrich 2019): `y = γ ⊙ x / √(mean(x²) + ε)` — bỏ re-centering (trừ mean) và bias β, chỉ giữ re-scaling; tác giả cho thấy tính bất biến với scale mới là phần quan trọng. Kết quả: ít phép tính hơn (không cần tính mean riêng), d tham số, chất lượng tương đương, giảm đáng kể thời gian chạy của phép norm (paper báo 7–64% tùy mô hình). Chuẩn hóa theo batch là BatchNorm (không phù hợp với chuỗi độ dài thay đổi và batch nhỏ). Hai phương án còn lại mô tả sai công thức."
+    },
+    {
+      "id": "nlp-026",
+      "sub": "FFN / SwiGLU",
+      "level": 3,
+      "type": "numeric",
+      "trap": false,
+      "q": "LLaMA-7B: `d_model = 4096`, FFN dạng SwiGLU `FFN(x) = W2·(SiLU(W1·x) ⊙ W3·x)`, hidden size = **11008**, không bias. Tính số tham số FFN của **một** layer. Đơn vị **triệu** (10^6), làm tròn 2 chữ số thập phân.",
+      "answer": 135.27,
+      "tolerance": 0.01,
+      "unit": "triệu tham số",
+      "explain": "SwiGLU có 3 ma trận: W1 (4096→11008), W3 (4096→11008) và W2 (11008→4096). Tổng = 3 × 4096 × 11008 = 135,266,304 ≈ 135.27M. Bẫy: tính như FFN thường 2 ma trận sẽ ra 90.18M. Vì sao 11008? Để giữ số tham số bằng FFN chuẩn (2 × d × 4d = 8d² = 134.22M), hidden của gated FFN phải là 2/3 × 4d = 10922.67, rồi làm tròn lên bội số của 256 → 11008 (= 43 × 256) để kernel GPU hiệu quả. 32 layer × 135.27M ≈ 4.33B, tức FFN chiếm khoảng 2/3 trong ~6.7B tham số của LLaMA-7B."
+    },
+    {
+      "id": "nlp-027",
+      "sub": "Positional encoding",
+      "level": 3,
+      "type": "multi",
+      "trap": true,
+      "q": "Về positional encoding, chọn TẤT CẢ phát biểu đúng.",
+      "options": [
+        "RoPE xoay Q và K (không xoay V) theo góc tỷ lệ vị trí, nên q_m·k_n chỉ phụ thuộc vào hiệu m − n",
+        "Learned absolute position embedding (BERT, GPT-2) ngoại suy tốt sang độ dài lớn hơn `max_position_embeddings` mà không cần huấn luyện thêm",
+        "ALiBi bỏ position embedding, cộng vào attention score một bias âm tỷ lệ với khoảng cách, slope riêng mỗi head",
+        "Sinusoidal PE của Transformer gốc được nhân element-wise với token embedding (sau khi scale √d_model) trước layer đầu tiên",
+        "Bỏ hoàn toàn thông tin vị trí thì self-attention không mask là permutation-equivariant"
+      ],
+      "answer": [
+        0,
+        2,
+        4
+      ],
+      "explain": "RoPE (Su et al.) nhân q, k với ma trận xoay R_m, R_n: (R_m q)ᵀ(R_n k) = qᵀR_{n−m}k → phụ thuộc vị trí tương đối; V không xoay vì vị trí chỉ cần ảnh hưởng đến trọng số attention. Bẫy 'RoPE xoay cả V' hay gặp. ALiBi (Press et al. 2022) cộng `−m_h·|i − j|` vào score, slope m_h theo cấp số nhân giữa các head, ngoại suy độ dài tốt. Learned absolute PE không có vector cho vị trí > max (BERT 512) → không ngoại suy được, cần nội suy/fine-tune. Sinusoidal PE được *cộng* vào embedding, không nhân. Không có PE, attention chỉ là hàm trên tập hợp: đổi thứ tự token không đổi kết quả cho từng token (causal mask thì gián tiếp mang thông tin vị trí — một lý do NoPE vẫn chạy được với decoder)."
+    },
+    {
+      "id": "nlp-028",
+      "sub": "Weight tying",
+      "level": 1,
+      "type": "single",
+      "trap": false,
+      "q": "Weight tying trong language model (GPT-2, BERT MLM head, T5) là gì?",
+      "options": [
+        "Dùng chung tham số giữa tất cả các layer Transformer để giảm kích thước mô hình nhưng giữ nguyên độ sâu",
+        "Dùng chung ma trận W_Q và W_K trong mỗi head để tiết kiệm bộ nhớ và làm attention đối xứng",
+        "Output head dùng chung ma trận embedding đầu vào (V × d), tiết kiệm V·d tham số",
+        "Ràng buộc encoder và decoder dùng chung trọng số mọi layer trong mô hình encoder-decoder như T5"
+      ],
+      "answer": 2,
+      "explain": "Weight tying (Press & Wolf 2017; Inan et al. 2017): logits = h·Eᵀ, với E là chính bảng embedding đầu vào. Lợi ích: giảm V·d tham số — với GPT-2 small, 50,257 × 768 ≈ 38.6M (≈ 1/3 trong 124M), và thường cải thiện perplexity vì embedding đầu ra nhận gradient từ mọi vị trí. Dùng chung tham số giữa các layer là cross-layer parameter sharing của ALBERT (kết hợp factorized embedding) — khái niệm khác. Share W_Q và W_K làm attention đối xứng, không phải weight tying. T5 có dùng chung bảng embedding giữa encoder và decoder, nhưng các layer encoder/decoder có trọng số riêng. Nhiều LLM lớn (LLaMA) không tie vì tỷ lệ tham số tiết kiệm nhỏ ở quy mô lớn và untied cho chất lượng tốt hơn chút."
+    },
+    {
+      "id": "nlp-029",
+      "sub": "BERT / RoBERTa",
+      "level": 2,
+      "type": "multi",
+      "trap": true,
+      "q": "Về pre-training BERT và RoBERTa, chọn TẤT CẢ phát biểu đúng.",
+      "options": [
+        "Loss MLM được tính trên toàn bộ token của chuỗi, nhờ đó mỗi chuỗi cho tín hiệu học dày hơn, không chỉ 15% vị trí",
+        "Chọn 15% token; trong đó 80% → [MASK], 10% → token ngẫu nhiên, 10% giữ nguyên",
+        "RoBERTa giữ NSP nhưng chuyển từ static masking sang dynamic masking và tăng dữ liệu lên 160GB",
+        "Thay ngẫu nhiên/giữ nguyên 20% token được chọn để giảm lệch pha pre-train (có [MASK]) và fine-tune (không có)",
+        "Với chuỗi 512 token, kỳ vọng khoảng 61 token bị thay bằng [MASK]"
+      ],
+      "answer": [
+        1,
+        3,
+        4
+      ],
+      "explain": "BERT chọn 15% vị trí làm mục tiêu dự đoán; tại đó 80% → [MASK], 10% → token ngẫu nhiên, 10% → giữ nguyên. Kỳ vọng số [MASK] = 512 × 0.15 × 0.8 = 61.44. Lý do 10/10: [MASK] không bao giờ xuất hiện khi fine-tune; nếu mô hình chỉ thấy [MASK] ở vị trí cần dự đoán, nó không cần xây biểu diễn tốt cho token thật — giữ nguyên/random buộc mô hình duy trì biểu diễn ngữ cảnh cho mọi token. Bẫy 1: loss chỉ tính trên 15% vị trí được chọn (các vị trí khác có label -100), đây là điểm kém hiệu quả mẫu mà ELECTRA cải thiện. Bẫy 2: RoBERTa BỎ NSP (thấy NSP không giúp, thậm chí hại), dùng dynamic masking (mask mới mỗi lần thấy chuỗi), nhiều dữ liệu hơn (160GB), batch lớn hơn, byte-level BPE 50K."
+    },
+    {
+      "id": "nlp-030",
+      "sub": "T5",
+      "level": 3,
+      "type": "single",
+      "trap": false,
+      "q": "Mục tiêu **span corruption** của T5 hoạt động thế nào? Ví dụ câu gốc `Thank you for inviting me to your party last week.`",
+      "options": [
+        "Mỗi token được chọn (15%) thay độc lập bằng [MASK] như BERT; decoder sinh lại toàn bộ câu gốc `Thank you for inviting me to your party last week.`",
+        "Xóa ~15% token theo span (dài TB 3), mỗi span thay bằng một sentinel; target chỉ gồm sentinel + token bị xóa: `<X> for inviting <Y> last <Z>`",
+        "Xóa 50% token thành các span độ dài 1, mỗi span thay bằng sentinel; target là toàn bộ câu gốc theo đúng thứ tự giống BART",
+        "Xáo trộn thứ tự các span độ dài trung bình 3 trong câu; target là câu gốc `Thank you for inviting me...`, không dùng sentinel"
+      ],
+      "answer": 1,
+      "explain": "Raffel et al. (2020) so sánh nhiều objective và chọn span corruption: corruption rate 15%, mean span length 3, mỗi span liên tiếp bị xóa thay bằng một sentinel duy nhất (`<extra_id_0>`, `<extra_id_1>`...). Ví dụ input `Thank you <X> me to your party <Y> week.` → target `<X> for inviting <Y> last <Z>`. Target chỉ chứa các span bị xóa, phân cách bởi sentinel tương ứng và kết thúc bằng một sentinel cuối → target ngắn hơn nhiều so với tái tạo cả câu, tiết kiệm compute decoder. Phương án mask từng token như BERT và sinh lại cả câu là baseline 'BERT-style' mà T5 thấy kém hiệu quả hơn. Sinh lại toàn bộ câu gốc là kiểu denoising của BART (text infilling + sentence permutation). Xáo trộn thứ tự là sentence permutation của BART, không phải T5."
+    },
+    {
+      "id": "nlp-031",
+      "sub": "ELECTRA",
+      "level": 3,
+      "type": "single",
+      "trap": false,
+      "q": "Vì sao ELECTRA đạt chất lượng downstream tốt hơn BERT ở cùng ngân sách compute pre-train?",
+      "options": [
+        "Discriminator nhận tín hiệu loss ở MỌI token (đã bị thay hay chưa), thay vì chỉ ~15% vị trí bị mask như MLM",
+        "Generator và discriminator được huấn luyện đối kháng kiểu GAN, generator học cách đánh lừa nên tạo mẫu ngày càng khó hơn",
+        "ELECTRA dùng causal LM thay MLM cho discriminator nên không còn lệch pha do token [MASK] giữa pre-train và fine-tune",
+        "ELECTRA dùng chuỗi dài hơn (2048 token thay vì 512) nên mỗi bước pre-train học được nhiều ngữ cảnh hơn BERT"
+      ],
+      "answer": 0,
+      "explain": "ELECTRA (Clark et al. 2020) — Replaced Token Detection: một generator nhỏ (MLM) điền vào các vị trí bị mask; discriminator nhìn chuỗi đã bị thay và dự đoán nhị phân cho từng token 'original' hay 'replaced'. Loss có ở 100% vị trí thay vì 15% → tín hiệu học dày hơn, hiệu quả mẫu cao hơn; discriminator cũng không thấy [MASK] nên giảm lệch pha pre-train/fine-tune. Bẫy: dù giống GAN về hình thức (generator 'đánh lừa' discriminator), generator được huấn luyện bằng maximum likelihood (MLM), KHÔNG đối kháng (tác giả thử adversarial và thấy kém hơn). ELECTRA không dùng causal LM và không dùng chuỗi dài hơn BERT (vẫn 512). Sau pre-train chỉ giữ discriminator để fine-tune."
+    },
+    {
+      "id": "nlp-032",
+      "sub": "Kiến trúc",
+      "level": 1,
+      "type": "single",
+      "trap": false,
+      "q": "Ghép kiến trúc với tác vụ nào là hợp lý nhất (theo thiết kế gốc)?",
+      "options": [
+        "Encoder-only cho sinh văn bản dài tự do nhờ attention hai chiều; decoder-only cho NER và phân loại token",
+        "Encoder-decoder không dùng được cho phân loại vì đầu ra luôn là một chuỗi token, không có head phân lớp",
+        "Decoder-only không thể làm dịch máy vì không có encoder riêng để mã hóa hai chiều câu nguồn",
+        "Encoder-only: phân loại/NER/embedding; decoder-only: sinh tự hồi quy; encoder-decoder: dịch, tóm tắt"
+      ],
+      "answer": 3,
+      "explain": "Encoder-only (BERT, RoBERTa) dùng bidirectional attention → biểu diễn mỗi token có cả ngữ cảnh trái và phải, lý tưởng cho hiểu văn bản, NER, embedding; không có cơ chế sinh tự hồi quy tự nhiên. Decoder-only (GPT, LLaMA) dùng causal mask, huấn luyện next-token prediction → sinh văn bản. Encoder-decoder (T5, BART, mô hình MT) mã hóa nguồn hai chiều rồi sinh đích có cross-attention. Hai phương án 'không thể' là bẫy tuyệt đối hóa: T5 làm phân loại bằng cách sinh chuỗi nhãn ('positive') theo khung text-to-text; decoder-only làm dịch rất tốt bằng cách nối nguồn và đích trong một prompt (GPT-4, các LLM hiện đại)."
+    },
+    {
+      "id": "nlp-033",
+      "sub": "NER",
+      "level": 2,
+      "type": "multi",
+      "trap": false,
+      "q": "Về bài toán NER với BERT, chọn TẤT CẢ phát biểu đúng.",
+      "options": [
+        "Token-level accuracy là metric chuẩn để báo cáo NER vì phản ánh đúng số token gán nhãn đúng",
+        "Trong lược đồ BIO (IOB2), chuỗi nhãn `O I-PER` không hợp lệ về mặt cấu trúc",
+        "Từ bị tách nhiều subword: gán nhãn cho subword đầu, đặt -100 cho subword còn lại để loss bỏ qua",
+        "Thêm CRF lên trên BERT luôn làm giảm F1, vì BERT đã có biểu diễn ngữ cảnh hai chiều và CRF chỉ thêm nhiễu",
+        "Lược đồ BIOES/BILOU bổ sung nhãn cho token kết thúc thực thể và thực thể chỉ có một token"
+      ],
+      "answer": [
+        1,
+        2,
+        4
+      ],
+      "explain": "IOB2: mỗi thực thể bắt đầu bằng B-X, các token sau là I-X; I-X chỉ hợp lệ sau B-X hoặc I-X cùng loại → `O I-PER` không hợp lệ (decoder phải sửa hoặc CRF học transition để tránh). Với tokenizer subword, align nhãn bằng `word_ids()`: subword đầu nhận nhãn của từ, các subword sau nhận -100 (`ignore_index` của CrossEntropyLoss) hoặc nhãn I-. BIOES (E = end, S = single) cho biên rõ hơn, đôi khi tăng F1 nhẹ. Token accuracy bị thổi phồng vì đa số token là O — mô hình gán toàn O vẫn đạt ~85–90% → luôn dùng entity-level F1 (seqeval). CRF trên BERT không 'luôn' giảm F1: thường tăng nhẹ hoặc ngang, đặc biệt khi ít dữ liệu, vì ràng buộc chuỗi nhãn hợp lệ."
+    },
+    {
+      "id": "nlp-034",
+      "sub": "CRF",
+      "level": 2,
+      "type": "single",
+      "trap": false,
+      "q": "Lớp linear-chain CRF đặt trên BiLSTM/BERT khác lớp softmax độc lập cho từng token ở điểm nào?",
+      "options": [
+        "CRF chấm điểm cả chuỗi nhãn (emission + transition), chuẩn hóa trên mọi chuỗi nhãn và giải mã bằng Viterbi",
+        "CRF là mô hình sinh (generative) như HMM: mô hình hóa P(x, y) rồi suy ra P(y|x), nên cần ít dữ liệu nhãn hơn",
+        "CRF vẫn dự đoán từng token độc lập nhưng dùng cửa sổ đặc trưng rộng hơn softmax (vd ±2 token lân cận)",
+        "CRF không cần huấn luyện, chỉ áp luật cứng (vd cấm O → I-X) để sửa chuỗi nhãn không hợp lệ sau softmax"
+      ],
+      "answer": 0,
+      "explain": "Linear-chain CRF: score(x, y) = Σ_t emission(y_t | x, t) + Σ_t transition(y_{t−1}, y_t); `P(y|x) = exp(score) / Z(x)`, với Z tổng trên mọi chuỗi nhãn, tính bằng forward algorithm trong O(n·L²). Training tối đa log-likelihood; inference dùng Viterbi tìm chuỗi tốt nhất. Ma trận transition học được rằng O → I-PER có điểm rất thấp, nên đầu ra nhất quán. Softmax từng token dự đoán độc lập, có thể ra chuỗi không hợp lệ. CRF là mô hình phân biệt (discriminative) P(y|x) trực tiếp — HMM mới là mô hình sinh. Transition được học, không phải luật cứng (dù có thể kết hợp constrained decoding)."
+    },
+    {
+      "id": "nlp-035",
+      "sub": "NER metrics",
+      "level": 3,
+      "type": "numeric",
+      "trap": true,
+      "q": "Câu 9 token, nhãn BIO:\n\n```\ngold: B-PER I-PER O O B-LOC O B-ORG I-ORG I-ORG\npred: B-PER I-PER O O B-ORG O B-ORG I-ORG O\n```\n\nTính **entity-level F1** (strict, kiểu seqeval: thực thể đúng khi trùng cả biên lẫn loại). Làm tròn 3 chữ số thập phân.",
+      "answer": 0.333,
+      "tolerance": 0.005,
+      "explain": "Gold entities: PER[0–1], LOC[4], ORG[6–8] → 3 thực thể. Pred entities: PER[0–1], ORG[4], ORG[6–7] → 3 thực thể. Chỉ PER[0–1] khớp hoàn toàn; ORG[4] sai loại (gold là LOC); ORG[6–7] sai biên (gold là 6–8). TP = 1 → Precision = 1/3, Recall = 1/3, F1 = 0.333. Bẫy: token-level accuracy = 7/9 ≈ 0.778 (chỉ sai token 4 và 8) — trông tốt hơn nhiều nhưng sai biên một token làm hỏng cả thực thể ORG. Đây là lý do NER báo cáo entity-level F1. Một số metric 'partial match' (MUC, SemEval) cho điểm một phần với biên chồng lấn, nhưng chuẩn CoNLL là strict."
+    },
+    {
+      "id": "nlp-036",
+      "sub": "Extractive QA",
+      "level": 2,
+      "type": "single",
+      "trap": false,
+      "q": "Fine-tune BERT (max 512 token) cho extractive QA kiểu SQuAD, nhưng nhiều context dài ~2000 token. Cách xử lý chuẩn là gì?",
+      "options": [
+        "Cắt lấy 512 token đầu của context (`truncation='only_second'`), vì đáp án SQuAD thường nằm ở đầu đoạn",
+        "Tăng `max_position_embeddings` lên 2048, khởi tạo phần position mới bằng 0 và chạy luôn không cần huấn luyện thêm",
+        "Thay head start/end bằng decoder sinh đáp án từng token, vì decoder không bị giới hạn độ dài 512 của encoder",
+        "Chia context thành cửa sổ chồng lấn (doc_stride) ghép với câu hỏi, dự đoán start/end từng cửa sổ, chọn span tốt nhất"
+      ],
+      "answer": 3,
+      "explain": "Extractive QA: thêm 2 vector học được, tính start logit và end logit cho mỗi token context; đáp án là span (i, j) với j ≥ i, độ dài ≤ max_answer_length, tối đa start_i + end_j. Với context dài, sliding window với stride chồng lấn (`return_overflowing_tokens=True`, `stride=128` trong HF) đảm bảo đáp án không bị cắt đôi ở biên; khi train, cửa sổ không chứa đáp án được gán start = end = 0 ([CLS]), như cách SQuAD 2.0 xử lý câu không có đáp án. Cắt 512 token đầu làm mất đáp án ở phần sau. Position embedding mới chưa được huấn luyện → kết quả rác. Đổi sang decoder là đổi bài toán thành abstractive/generative, không phải cách xử lý chuẩn cho mô hình extractive."
+    },
+    {
+      "id": "nlp-037",
+      "sub": "Perplexity",
+      "level": 3,
+      "type": "numeric",
+      "trap": true,
+      "q": "Model A (tokenizer 32K) có validation loss trung bình **2.0 nats/token**. Trên tập validation, trung bình mỗi từ được tách thành **1.3 token**. Để so sánh công bằng với model B dùng tokenizer khác, tính **word-level perplexity** của model A. Làm tròn 2 chữ số thập phân.",
+      "answer": 13.46,
+      "tolerance": 0.05,
+      "explain": "Perplexity = exp(cross-entropy trung bình, tính bằng nats). Token-level PPL = e^2.0 ≈ 7.39. Tổng log-likelihood của tập không đổi khi đổi đơn vị chuẩn hóa: CE theo từ = CE theo token × số token/từ = 2.0 × 1.3 = 2.6 nats/từ → word-level PPL = e^2.6 ≈ 13.46. Bẫy 1: so token-level PPL của hai tokenizer khác nhau là sai — tokenizer tách vụn hơn (nhiều token/từ) có PPL mỗi token thấp hơn vì mỗi token dễ đoán hơn. Bẫy 2: nếu loss tính bằng log2 (bits) thì PPL = 2^CE. Thay thế khác: bits-per-byte (BPB) = CE_nats × tokens/bytes / ln 2, dùng cho so sánh giữa các tokenizer trong các báo cáo LLM."
+    },
+    {
+      "id": "nlp-038",
+      "sub": "BLEU",
+      "level": 2,
+      "type": "numeric",
+      "trap": false,
+      "q": "Câu dịch ứng viên dài **c = 8** token, câu tham chiếu dài **r = 10** token. Số n-gram khớp (đã clipping) / tổng n-gram của ứng viên: 1-gram **6/8**, 2-gram **3/7**, 3-gram **2/6**, 4-gram **1/5**. Tính BLEU-4 (trọng số đều 1/4, có brevity penalty, không smoothing), thang 0–1, làm tròn 3 chữ số thập phân.",
+      "answer": 0.298,
+      "tolerance": 0.002,
+      "explain": "Trung bình nhân của precision: exp((ln 0.75 + ln 0.4286 + ln 0.3333 + ln 0.2) / 4) = (0.75 × 0.4286 × 0.3333 × 0.2)^(1/4) = (0.02143)^(1/4) ≈ 0.3826. Vì c = 8 < r = 10, BP = exp(1 − 10/8) = exp(−0.25) ≈ 0.7788. BLEU = 0.7788 × 0.3826 ≈ 0.298 (thường báo 29.8). Bẫy: BP = exp(1 − c/r) là sai chiều (sẽ ra exp(0.2) > 1); BP = 1 khi c > r — BLEU không phạt câu dài vì precision đã tự phạt. 'Clipping' nghĩa là mỗi n-gram chỉ được tính tối đa bằng số lần xuất hiện trong reference, chống gian lận 'the the the'. Nếu một p_n = 0 thì BLEU câu = 0 → cần smoothing cho sentence BLEU."
+    },
+    {
+      "id": "nlp-039",
+      "sub": "Metrics sinh văn bản",
+      "level": 3,
+      "type": "multi",
+      "trap": true,
+      "q": "Chọn TẤT CẢ phát biểu đúng về các metric đánh giá sinh văn bản.",
+      "options": [
+        "BLEU dựa trên modified (clipped) n-gram precision kết hợp brevity penalty; không có thành phần recall trực tiếp",
+        "Corpus BLEU bằng trung bình cộng sentence BLEU của từng câu, mỗi câu có trọng số theo độ dài reference",
+        "ROUGE-L dựa trên longest common subsequence, không yêu cầu các từ khớp phải liền kề nhau",
+        "METEOR khớp unigram có xét stemming và từ đồng nghĩa, đặt trọng số recall cao hơn precision và phạt mức phân mảnh",
+        "BERTScore khớp token theo cosine của contextual embedding, nên nhận ra paraphrase mà BLEU bỏ lỡ",
+        "BLEU cao luôn đồng nghĩa với bản dịch trôi chảy và đúng nghĩa, vì BLEU-4 đã xét cả n-gram dài tới 4 từ"
+      ],
+      "answer": [
+        0,
+        2,
+        3,
+        4
+      ],
+      "explain": "BLEU: precision n-gram (clipped) cho n = 1..4, trung bình nhân, nhân BP để bù cho việc thiếu recall. Corpus BLEU cộng dồn count n-gram và độ dài trên cả corpus rồi mới tính — khác (và ổn định hơn) trung bình sentence BLEU; đây là bẫy hay gặp khi tự cài đặt. ROUGE-L dùng LCS: các từ khớp giữ đúng thứ tự nhưng có thể cách quãng; F dựa trên LCS/|cand| và LCS/|ref|. METEOR (Banerjee & Lavie 2005): alignment unigram qua exact/stem/synonym, F_mean = 10PR/(R + 9P), penalty = 0.5·(chunks/matches)³. BERTScore: greedy matching cosine giữa token embedding (vd RoBERTa-large), cho P/R/F1, có thể dùng idf weighting và baseline rescaling. BLEU tương quan với con người ở mức corpus nhưng yếu ở mức câu, không đo được trôi chảy hay đúng nghĩa khi diễn đạt khác — nên hiện nay dùng thêm chrF, COMET, đánh giá người."
+    },
+    {
+      "id": "nlp-040",
+      "sub": "ROUGE",
+      "level": 2,
+      "type": "numeric",
+      "trap": false,
+      "q": "Reference (7 token): `the model learns rich representations from data`\nCandidate (5 token): `rich representations the model learns`\n\nTính **ROUGE-L F1** (P = LCS/|candidate|, R = LCS/|reference|, F1 = 2PR/(P+R)). Làm tròn 3 chữ số thập phân.",
+      "answer": 0.5,
+      "tolerance": 0.005,
+      "explain": "Mọi unigram của candidate đều có trong reference → ROUGE-1: P = 5/5, R = 5/7, F1 ≈ 0.833. Nhưng LCS phải giữ đúng thứ tự: `the model learns` (độ dài 3) xuất hiện theo thứ tự ở cả hai; `rich representations` cũng khớp nhưng trong reference đứng SAU `learns`, còn trong candidate đứng TRƯỚC `the` → không thể ghép cả hai cụm vào một subsequence. LCS = 3. P = 3/5 = 0.6, R = 3/7 ≈ 0.4286, F1 = 2·0.6·0.4286/(0.6 + 0.4286) = 0.5. Bài học: ROUGE-1 không nhạy với thứ tự, ROUGE-L có nhạy (ở mức subsequence), ROUGE-2 cũng phạt việc đảo cụm. Lưu ý ROUGE truyền thống chủ yếu báo recall cho tóm tắt; package `rouge-score` báo cả P/R/F."
+    },
+    {
+      "id": "nlp-041",
+      "sub": "SQuAD EM/F1",
+      "level": 3,
+      "type": "numeric",
+      "trap": true,
+      "q": "Gold answer (SQuAD): `the Eiffel Tower in Paris`. Mô hình dự đoán: `Paris, the Eiffel tower`. Dùng script đánh giá chính thức của SQuAD (lowercase, bỏ dấu câu, bỏ mạo từ a/an/the, tách theo khoảng trắng, F1 trên token chung). Tính **F1**, làm tròn 3 chữ số thập phân.",
+      "answer": 0.857,
+      "tolerance": 0.005,
+      "explain": "Chuẩn hóa gold: `eiffel tower in paris` → 4 token. Chuẩn hóa dự đoán: bỏ dấu phẩy, lowercase, bỏ `the` → `paris eiffel tower` → 3 token. F1 SQuAD tính trên *túi token* (Counter intersection), không xét thứ tự: chung = {paris, eiffel, tower} = 3. Precision = 3/3 = 1, Recall = 3/4 = 0.75, F1 = 2·1·0.75/1.75 ≈ 0.857. EM = 0 vì chuỗi đã chuẩn hóa khác nhau. Bẫy: nghĩ đảo thứ tự sẽ bị phạt, hoặc quên bỏ `the` (khi đó gold 5 token, pred 4 token → F1 khác), hoặc nghĩ chữ hoa/thường ảnh hưởng. Khi có nhiều gold answer, lấy max F1/EM trên các gold rồi trung bình trên câu hỏi."
+    },
+    {
+      "id": "nlp-042",
+      "sub": "Sentence embedding",
+      "level": 2,
+      "type": "multi",
+      "trap": false,
+      "q": "Về sentence embedding và Sentence-BERT, chọn TẤT CẢ phát biểu đúng.",
+      "options": [
+        "Bi-encoder (SBERT) mã hóa từng câu độc lập thành vector, cho phép tính trước embedding của corpus và tìm kiếm bằng ANN",
+        "Lấy vector [CLS] của BERT pre-trained chưa fine-tune thường cho kết quả STS tốt hơn trung bình vector GloVe",
+        "Cross-encoder xử lý cặp câu trong một forward pass: chính xác hơn nhưng phải chạy cho từng cặp, hợp làm reranker",
+        "Với objective phân loại NLI, SBERT ghép vector đặc trưng (u, v, |u − v|) rồi đưa vào softmax classifier",
+        "MultipleNegativesRankingLoss bắt buộc phải có nhãn negative gán tay cho từng cặp, không dùng được in-batch negatives"
+      ],
+      "answer": [
+        0,
+        2,
+        3
+      ],
+      "explain": "SBERT (Reimers & Gurevych 2019) dùng mạng siamese, mean pooling, fine-tune trên NLI với objective softmax trên [u; v; |u − v|] (u*v không cải thiện trong thí nghiệm của họ), hoặc regression cosine trên STS. Bi-encoder: embedding độc lập → precompute + ANN, tìm trong hàng triệu câu cực nhanh; cross-encoder: full attention giữa hai câu, chính xác hơn nhưng O(số cặp) forward → dùng làm reranker cho top-k. Bẫy: paper SBERT cho thấy [CLS] BERT chưa fine-tune trên STS còn kém hơn average GloVe (do anisotropy, và [CLS] được train cho NSP). MultipleNegativesRankingLoss (InfoNCE) chính là dùng in-batch negatives — positive của các anchor khác trong batch làm negative; hard negative chỉ là tùy chọn thêm, batch lớn thường tốt hơn."
+    },
+    {
+      "id": "nlp-043",
+      "sub": "Cosine & anisotropy",
+      "level": 3,
+      "type": "numeric",
+      "trap": false,
+      "q": "Hai câu không liên quan có embedding (minh họa 3 chiều) u = [5, 6, 4], v = [6, 5, 4]; cosine thô ≈ 0.987 (hiện tượng anisotropy). Vector trung bình của toàn corpus μ = [4, 5, 4]. Tính cosine similarity sau khi **mean-centering** (u − μ, v − μ). Làm tròn 3 chữ số thập phân.",
+      "answer": 0.707,
+      "tolerance": 0.005,
+      "explain": "u' = u − μ = [1, 1, 0]; v' = v − μ = [2, 0, 0]. u'·v' = 2; ‖u'‖ = √2 ≈ 1.414; ‖v'‖ = 2. cos = 2 / (1.414 × 2) = 1/√2 ≈ 0.707. Kiểm tra cos thô: u·v = 30 + 30 + 16 = 76, ‖u‖ = ‖v‖ = √77 → 76/77 ≈ 0.987. Bài học: embedding của LM pre-trained có một thành phần chung lớn (nằm trong hình nón hẹp — anisotropy, Ethayarajh 2019), khiến cosine giữa mọi cặp đều cao, khó phân biệt. Trừ mean (và whitening — BERT-whitening) loại bỏ thành phần chung, làm cosine phân tán hơn. Contrastive fine-tuning (SimCSE, SBERT) cải thiện tính 'uniformity' tương tự. Đồng thời nhớ: ngưỡng cosine (vd 0.8) không chuyển được giữa các model khác nhau."
+    },
+    {
+      "id": "nlp-044",
+      "sub": "Contrastive learning",
+      "level": 3,
+      "type": "single",
+      "trap": false,
+      "q": "Unsupervised SimCSE tạo cặp positive cho contrastive learning như thế nào?",
+      "options": [
+        "Back-translation: dịch câu sang tiếng Đức rồi dịch ngược để có một paraphrase làm positive, câu khác trong batch là negative",
+        "Xóa ngẫu nhiên 15% từ trong câu và dùng câu bị xóa làm positive; các câu khác trong batch làm negative",
+        "Dùng câu kế tiếp trong cùng văn bản làm positive (như NSP), các câu ở tài liệu khác làm negative",
+        "Cùng một câu qua encoder hai lần với dropout khác nhau làm positive; câu khác trong batch là negative"
+      ],
+      "answer": 3,
+      "explain": "SimCSE (Gao et al. 2021): dropout chuẩn của Transformer (p = 0.1) đóng vai trò data augmentation tối thiểu — cùng câu, hai lần forward cho hai embedding hơi khác nhau, làm positive pair. Loss InfoNCE với in-batch negatives: `−log(exp(sim(h_i, h_i⁺)/τ) / Σ_j exp(sim(h_i, h_j⁺)/τ))`, τ = 0.05. Tác giả so sánh và thấy các augmentation rời rạc như xóa từ, thay từ đồng nghĩa, crop đều kém hơn dropout. Back-translation và next-sentence là các cách tạo positive khác, không phải SimCSE. Supervised SimCSE dùng NLI: entailment = positive, contradiction = hard negative. τ nhỏ làm phân phối sắc hơn, tập trung phạt hard negative."
+    },
+    {
+      "id": "nlp-045",
+      "sub": "Zero/few-shot",
+      "level": 3,
+      "type": "multi",
+      "trap": false,
+      "q": "Về zero-shot và few-shot text classification, chọn TẤT CẢ phát biểu đúng.",
+      "options": [
+        "Zero-shot dựa trên NLI biến mỗi nhãn thành hypothesis (`This example is about {label}.`), điểm = xác suất entailment",
+        "Few-shot prompting với LLM cập nhật nhẹ trọng số bằng vài bước gradient trên các ví dụ demo trong prompt (meta-learning)",
+        "NLI zero-shot có chi phí tăng tuyến tính theo số nhãn, vì mỗi nhãn cần một forward pass riêng",
+        "Few-shot ICL nhạy với thứ tự và tỷ lệ nhãn của demo (recency, majority-label bias); contextual calibration giúp giảm",
+        "Zero-shot với LLM luôn tốt hơn fine-tune một encoder nhỏ khi đã có vài nghìn mẫu gán nhãn chất lượng"
+      ],
+      "answer": [
+        0,
+        2,
+        3
+      ],
+      "explain": "Yin et al. (2019) đề xuất dùng mô hình NLI cho zero-shot: premise = văn bản, hypothesis = template chứa nhãn; điểm = P(entailment) (chuẩn hóa softmax giữa các nhãn cho single-label, hoặc entailment vs contradiction cho multi-label). Vì mỗi nhãn là một cặp riêng, 50 nhãn = 50 forward → chi phí tuyến tính, đáng cân nhắc khi production. Zhao et al. (2021, 'Calibrate Before Use') cho thấy ICL nhạy với thứ tự demo (recency bias), nhãn chiếm đa số (majority-label bias), token phổ biến; contextual calibration ước lượng bias bằng input rỗng 'N/A' rồi hiệu chỉnh. Bẫy: in-context learning KHÔNG cập nhật trọng số (kể cả 'cập nhật nhẹ') — chỉ điều kiện hóa qua prompt. Với vài nghìn nhãn tốt, fine-tune encoder nhỏ (hoặc SetFit) thường ngang hoặc hơn LLM zero-shot về accuracy, và rẻ hơn rất nhiều về latency/cost — 'luôn' là sai."
+    }
+  ]
+}

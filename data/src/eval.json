@@ -1,0 +1,782 @@
+{
+  "id": "eval",
+  "name": "LLM Evaluation, Observability & LLMOps",
+  "icon": "📊",
+  "order": 6,
+  "notes": [
+    {
+      "title": "Vì sao eval LLM khó & bản đồ phương pháp",
+      "md": "**Khó vì:** output mở (nhiều đáp án đúng), non-deterministic (kể cả `temperature=0`), chất lượng đa chiều (đúng, đủ, an toàn, giọng văn, format), phân phối input production thay đổi, provider đổi model sau alias.\n\n| Nhóm | Ví dụ | Khi dùng | Hạn chế |\n|---|---|---|---|\n| Reference-based | EM, token F1, BLEU/ROUGE, BERTScore | QA ngắn, extraction, dịch | Phạt paraphrase đúng, không hiểu phủ định |\n| Rule/assertion | JSON schema, regex, unit test (pass@k) | Format, code, tool-call | Chỉ kiểm tra được cái định nghĩa được |\n| Reference-free | LLM-as-judge rubric, faithfulness với context | Task mở, RAG | Bias của judge, tốn cost |\n| Human eval | Chuyên gia chấm, pairwise | Gold standard, kiểm định judge | Đắt, chậm, cần guideline + IAA |\n| Online | A/B, feedback, implicit signals | Tác động KPI thật | Chậm, selection bias |\n\n**Nguyên tắc:** metric phải bám KPI sản phẩm. Báo cáo kèm CI và breakdown theo segment. Tách quality / cost / latency / robustness."
+    },
+    {
+      "title": "Metric phân loại: P/R/F1, macro/micro, mAP",
+      "md": "- Precision = TP/(TP+FP). Recall = TP/(TP+FN). F1 = 2PR/(P+R) = 2TP/(2TP+FP+FN).\n- **Accuracy paradox:** 5% positive thì model “luôn âm tính” vẫn đạt 95% accuracy. Hãy dùng P/R/F1, PR-AUC cho lớp hiếm.\n- **Micro** (gộp TP/FP/FN toàn cục): với bài đơn nhãn thì micro-P = micro-R = micro-F1 = accuracy.\n- **Macro:** trung bình đều F1 từng lớp, nhạy với lớp hiếm.\n- **Weighted:** trọng số theo support, nghiêng về lớp phổ biến, nên gần accuracy.\n- Đọc **confusion matrix**: hàng = thật, cột = dự đoán. Tổng cột → precision, tổng hàng → recall.\n- **AP** = diện tích dưới đường PR của một lớp/truy vấn. **mAP** = trung bình AP qua các lớp (detection, theo ngưỡng IoU, vd. mAP@0.5 hoặc @[.5:.95]) hoặc qua các truy vấn (retrieval).\n- Chọn ngưỡng theo chi phí lỗi: guardrail an toàn ưu tiên recall, auto-block ưu tiên precision. Dùng Fβ (β > 1 nghiêng về recall)."
+    },
+    {
+      "title": "LLM-as-judge: thiết kế, G-Eval, bias",
+      "md": "**Kiểu:** pointwise (chấm thang, hợp với monitoring), pairwise (A vs B, hợp để chọn phiên bản), reference-guided (có đáp án chuẩn: toán, fact).\n\n**Rubric tốt:** tiêu chí tách riêng, có mô tả từng mức (anchor), yêu cầu lý do trước điểm, output JSON. Thang nhị phân hoặc 3 mức thường ổn định hơn 1–10.\n\n**G-Eval:** tiêu chí → LLM tự sinh evaluation steps (CoT) → form-filling. Điểm = Σ p(sᵢ)·sᵢ theo xác suất token điểm, cho điểm liên tục và ít hoà hơn. Cần logprobs (hoặc sample nhiều lần).\n\n**Bias (Zheng et al. 2023):** position, verbosity, self-enhancement, yếu khi chấm toán/suy luận.\n- Giảm bias: chạy 2 thứ tự, chỉ tính thắng khi nhất quán. Rubric “độ dài không phải tiêu chí”. Judge khác họ với model được chấm hoặc panel nhiều judge. Reference/CoT cho toán. Calibrate trên nhãn người.\n\n**Kiểm định judge** (bắt buộc trước khi dùng làm gate): 100–300 mẫu có nhãn người, gồm cả mẫu lỗi.\n- Nhị phân: Cohen's κ = (pₒ − pₑ)/(1 − pₑ), kèm precision/recall theo từng lớp (cẩn thận prevalence paradox).\n- Ordinal: Spearman/Kendall (thứ hạng), weighted kappa (giá trị tuyệt đối).\n- Thang Landis–Koch: < 0.2 slight, 0.21–0.4 fair, 0.41–0.6 moderate, 0.61–0.8 substantial, > 0.8 almost perfect."
+    },
+    {
+      "title": "Benchmark & contamination",
+      "md": "| Benchmark | Nội dung | Chấm |\n|---|---|---|\n| MMLU | 57 subject, trắc nghiệm 4 đáp án | Accuracy |\n| GSM8K | ~8.5K bài toán grade-school nhiều bước | Đáp số cuối |\n| HumanEval | 164 bài viết hàm Python | Unit test, pass@k |\n| MT-Bench | 80 câu multi-turn, 8 nhóm | GPT-4 judge thang 1–10 |\n| Chatbot Arena | Vote pairwise ẩn danh của người dùng | Bradley–Terry (trước đây Elo online) |\n\n- **pass@k không chệch:** 1 − C(n−c, k)/C(n, k), với n mẫu và c mẫu đúng. Không dùng 1 − (1 − c/n)^k vì bị chệch.\n- **Elo:** E_A = 1/(1 + 10^((R_B − R_A)/400)), R'_A = R_A + K(S_A − E_A). Chênh 100 điểm thì E ≈ 0.64 cho bên mạnh hơn.\n- Elo online phụ thuộc thứ tự trận. Model tĩnh thì nên fit BT bằng MLE, CI lấy bằng bootstrap.\n- **Contamination:** test lọt vào train. Phát hiện: n-gram overlap, perturb/paraphrase làm điểm tụt, so trước/sau cutoff. Giảm: private/held-out, benchmark động, tách dev/test cho eval nội bộ.\n- Benchmark công khai ≠ hiệu năng trên domain của bạn. Luôn có eval set riêng."
+    },
+    {
+      "title": "Thiết kế eval set & thống kê so sánh",
+      "md": "**Golden dataset:** sample từ production (ẩn PII), stratify theo intent và độ khó, có edge case, câu ngoài phạm vi, adversarial/red-team (prompt injection, jailbreak). Version hoá data và guideline gán nhãn. Đo IAA giữa các annotator.\n\n**CI cho accuracy (Wald):** p ± 1.96·√(p(1−p)/n). Ví dụ p = 0.85, n = 400 cho ±3.5 điểm %. Muốn CI hẹp một nửa thì cần n gấp 4. Khi p gần 0/1 hoặc n nhỏ, dùng Wilson.\n\n**Cỡ mẫu:** n = 1.96²·p(1−p)/E². Trường hợp xấu nhất p = 0.5, E = ±2 điểm % thì n = 2401. Áp dụng cho **từng** segment muốn báo cáo riêng.\n\n**So sánh 2 hệ thống trên cùng tập (paired):**\n- McNemar: χ² = (|b − c| − 1)²/(b + c), với b, c là số cặp bất đồng. Ngưỡng 3.841 (α = 0.05, df = 1). b + c nhỏ thì dùng exact binomial.\n- Paired bootstrap: resample **cùng** chỉ số item cho A và B, tính Δ, lấy percentile 2.5–97.5. CI không chứa 0 thì có ý nghĩa.\n- Hai CI riêng chồng lấn ≠ không có ý nghĩa.\n- So nhiều biến thể thì cẩn thận multiple comparisons (Bonferroni/Holm).\n\n**Báo cáo thử nghiệm:** giả thuyết, setup (model snapshot, prompt version, dataset version, seed/temperature), metric chính và guardrail, Δ ± CI, p-value, breakdown theo segment, cost/latency, ví dụ lỗi, khuyến nghị."
+    },
+    {
+      "title": "Hallucination, faithfulness & RAG metrics",
+      "md": "- **Faithfulness/groundedness:** mọi claim có được context hỗ trợ không. Cách đo: claim decomposition + verify (LLM hoặc NLI). RAGAS faithfulness = claim được hỗ trợ / tổng claim.\n- **NLI-based:** premise = context, hypothesis = claim, phân loại entail/neutral/contradict.\n- **SelfCheckGPT:** không có nguồn thì sample nhiều lần, nội dung không nhất quán giữa các lần là dấu hiệu bịa.\n- **Answer relevancy (RAGAS):** sinh câu hỏi ngược từ câu trả lời, tính cosine với câu hỏi gốc. **Không** dùng ground truth, **không** đo tính đúng.\n- **Context precision/recall:** đánh giá retriever (context recall cần reference).\n- **Factual correctness** (so với reference) khác **faithfulness** (so với context): câu trả lời có thể faithful với một context sai.\n- Không dùng perplexity hay BLEU để đo hallucination."
+    },
+    {
+      "title": "Regression testing trong CI & online eval",
+      "md": "**Trong CI (Pytest + GitLab CI):**\n1. Lớp deterministic: JSON schema, field bắt buộc, không lộ system prompt, tool-call đúng tên/tham số. Gate cứng.\n2. Lớp chất lượng: chạy golden set, metric tổng hợp ≥ baseline − margin (margin lấy từ noise đo được khi chạy baseline nhiều lần).\n3. Case quan trọng: chạy lặp k lần, yêu cầu tỷ lệ pass ≥ ngưỡng.\n4. Ghim model snapshot + prompt version + dataset version. Cache response để rẻ. Lưu kết quả làm experiment để xem xu hướng.\n- **Flaky:** không skip, chuyển sang assertion ngữ nghĩa hoặc chạy lặp. `temperature=0` ≠ deterministic (float non-associativity, dynamic batching, MoE, provider đổi model). `seed` chỉ best-effort.\n\n**Online:** shadow, canary, A/B (random theo user, tính MDE và cỡ mẫu trước, không peeking, có guardrail: p95 latency, cost/request, error rate, safety). Explicit feedback (thumbs, selection bias) kết hợp implicit signals (rephrase, bỏ dở, escalate, copy, thời gian giải quyết). Đưa lỗi production vào golden set để khép vòng."
+    },
+    {
+      "title": "Observability: Langfuse & OpenTelemetry",
+      "md": "**Langfuse data model:**\n- **Trace:** một request/tương tác. Chứa các **observation** lồng nhau.\n- Observation types: `span` (đơn vị công việc có thời lượng), `generation` (gọi LLM: model, input/output, usage, cost), `event` (sự kiện rời rạc), cùng agent, tool, chain, retriever, embedding, evaluator, guardrail.\n- **Session:** gom nhiều trace theo `sessionId` (hội thoại nhiều lượt). Còn có user, tags, metadata, environment, release/version.\n- **Score:** gắn với đúng một Trace / Observation / Session / DatasetRun. Kiểu numeric / categorical / boolean / text. Source là API / EVAL (LLM-as-judge) / ANNOTATION. Có score config để chuẩn hoá.\n- **Datasets:** item gồm input, expected_output, metadata, có thể link tới trace nguồn. **Experiments/dataset runs:** chạy app trên dataset, mỗi item thành một trace, chấm score, so sánh giữa các run.\n- **Prompt management:** version tự tăng. Label `production` (mặc định khi `get_prompt` không truyền gì) và `latest`. Rollback bằng cách chuyển label, không cần deploy. SDK cache client-side TTL mặc định 60s (stale-while-revalidate). Nên khai báo `fallback`.\n\n**OpenTelemetry GenAI semconv** (trạng thái Development): `gen_ai.operation.name`, `gen_ai.request.model`, `gen_ai.provider.name`, `gen_ai.usage.input_tokens`/`output_tokens`. Tên span có dạng `chat gpt-4o-mini`. Nội dung message là opt-in (PII).\n\n**Thực hành:** redact PII trước khi export, retention policy, tail-based sampling (giữ 100% trace lỗi/chậm/feedback xấu), cost tracking theo token × giá theo model/route/tenant."
+    },
+    {
+      "title": "Latency: percentile, TTFT, throughput",
+      "md": "- Dùng **p50/p95/p99**, không dùng mean: phân phối latency lệch phải, mean bị outlier kéo nhưng không mô tả được đuôi.\n- **Nearest-rank:** rank = ⌈q·n⌉. Numpy mặc định nội suy tuyến tính nên cho kết quả khác. Ghi rõ phương pháp khi báo cáo.\n- **Không trung bình các percentile** (giữa replica hay giữa các khoảng thời gian). Hãy gộp histogram hoặc sketch (t-digest, HDR, DDSketch).\n- LLM latency ≈ TTFT (queue + prefill, tăng theo độ dài prompt) + số output token × TPOT (time per output token).\n- Tối ưu TTFT: prompt caching, rút gọn prompt, streaming, model nhỏ hơn. Tối ưu throughput: batching, giới hạn max_tokens.\n- Throughput (tokens/s, req/s) đánh đổi với latency: batch lớn tăng throughput nhưng tăng TTFT.\n- p95 với n nhỏ rất nhiễu. Cần đủ mẫu, và nên báo cáo theo route/model/độ dài input."
+    },
+    {
+      "title": "LLMOps: deploy, routing, độ tin cậy, SLO",
+      "md": "- **Prompt versioning:** prompt là artifact có version, label theo môi trường, gắn version vào trace. Model registry hoặc config ghim snapshot model, tham số, provider.\n- **Deploy:** offline eval → **shadow** (nhân bản request, user không thấy, chi phí ×2, tắt side effect) → **canary** (x% user) → A/B → rollout. Blue-green để rollback nhanh.\n- **Multi-provider routing & fallback:** route theo cost, latency, task. Fallback khi lỗi hoặc rate limit. Mỗi provider cần prompt và regression riêng.\n- **Retry:** chỉ với 429/5xx/timeout. Exponential backoff + **jitter** (full jitter: Uniform(0, min(cap, base·2^i))). Tôn trọng `Retry-After`. Đặt deadline tổng. Chú ý idempotency.\n- **Circuit breaker:** closed → open (fail-fast/fallback) → half-open (thử) → closed.\n- **Rate limit:** token bucket theo RPM/TPM, queue, ưu tiên theo tenant.\n- **SLO/SLA:** SLI là số đo, SLO là mục tiêu nội bộ, SLA là cam kết hợp đồng. Error budget = (1 − SLO)·thời gian. Ví dụ 99.5% trong 30 ngày cho 216 phút.\n- **Drift:** data drift (P(X) đổi), concept drift (P(Y|X) đổi), model/prompt drift (provider cập nhật model sau alias). Giám sát bằng metric online + judge chạy trên sample production + alert."
+    },
+    {
+      "title": "Cost optimization & caching",
+      "md": "- **Cost** = input_tokens·giá_in + output_tokens·giá_out (+ cache write/read). Theo dõi theo route, model, tenant, feature.\n- **Cascade** (rẻ → đắt): chi phí kỳ vọng = c_rẻ + P(escalate)·c_đắt. Đừng quên request escalate đã trả tiền model rẻ. Latency của request escalate là tổng hai model.\n- **Router** phân loại trước tránh chi phí kép, nhưng phụ thuộc độ chính xác router.\n- **Exact cache:** key = prompt chuẩn hoá. An toàn, hit rate thấp.\n- **Semantic cache:** cosine ≥ ngưỡng. Hit rate cao, nhưng có **false hit** (khác số tiền, tài khoản, phủ định). Phân vùng theo user/tenant, không cache nội dung cá nhân hoặc thời gian thực, đo false-hit rate.\n- **Provider prompt caching:** cache **tiền tố** giống hệt. Đặt phần tĩnh (system, tools, few-shot) trước. Giảm cost input và TTFT, không đổi output. Có giá ghi/đọc riêng và TTL.\n- **Token optimization:** rút gọn system prompt, chọn lọc context RAG (rerank, top-k nhỏ), giới hạn `max_tokens`, structured output ngắn gọn, tóm tắt lịch sử hội thoại.\n- Mọi tối ưu cost phải kèm eval chất lượng: chỉ báo cáo “tiết kiệm X% ở mức chất lượng không đổi (Δ ± CI)”."
+    }
+  ],
+  "questions": [
+    {
+      "id": "eval-001",
+      "sub": "Reference-based metrics",
+      "level": 1,
+      "type": "single",
+      "trap": false,
+      "q": "Team đánh giá chatbot CSKH bằng ROUGE-L so với câu trả lời mẫu. Câu trả lời **A** diễn đạt khác hẳn nhưng đúng ý. Câu **B** chép gần nguyên văn câu mẫu, chỉ đổi “được hoàn tiền” thành “không được hoàn tiền”. Nhận định nào đúng nhất?",
+      "options": [
+        "ROUGE-L chấm A cao hơn B vì nó so khớp ngữ nghĩa bằng embedding của hai câu",
+        "Hai câu có điểm gần bằng nhau vì ROUGE-L chuẩn hoá theo độ dài câu trả lời",
+        "B được điểm cao hơn A dù sai nghiêm trọng, vì ROUGE-L chỉ đo trùng lặp từ (LCS)",
+        "ROUGE-L chỉ sai khi câu trả lời dài trên 512 token, với câu ngắn nó tương quan tốt với người chấm"
+      ],
+      "answer": 2,
+      "explain": "ROUGE-L đo độ dài chuỗi con chung dài nhất (LCS) giữa output và reference, tức là trùng lặp bề mặt ở mức token. B chỉ thêm một từ “không” nên LCS gần như trọn vẹn, điểm rất cao, dù nghĩa bị đảo ngược. A dùng từ khác nên ít token trùng, điểm thấp, dù đúng ý. Đây là lý do BLEU/ROUGE kém tương quan với đánh giá của người trên task open-ended: một câu hỏi có nhiều cách trả lời đúng, và một thay đổi nhỏ trên bề mặt có thể đảo ngược ý nghĩa. ROUGE không dùng embedding (đó là BERTScore), và vấn đề này không liên quan độ dài 512 token. Với LLM, nên dùng LLM-as-judge có rubric, NLI/claim-check, hoặc assertion theo task thay cho n-gram overlap."
+    },
+    {
+      "id": "eval-002",
+      "sub": "EM & token F1",
+      "level": 2,
+      "type": "single",
+      "trap": true,
+      "q": "Đánh giá QA kiểu SQuAD. Bước chuẩn hoá gồm: lowercase, bỏ dấu câu, bỏ mạo từ a/an/the. Gold: `Eiffel Tower`. Prediction: `The Eiffel Tower in Paris`. Exact Match (EM) và token-level F1 lần lượt là bao nhiêu?",
+      "options": [
+        "EM = 1 vì gold nằm trọn trong prediction, F1 ≈ 0.667",
+        "EM = 0, F1 ≈ 0.667",
+        "EM = 0, F1 = 0.5 vì precision = 2/4",
+        "EM = 0, F1 = 1.0 vì recall = 2/2"
+      ],
+      "answer": 1,
+      "explain": "Sau chuẩn hoá: prediction = `eiffel tower in paris` (4 token), gold = `eiffel tower` (2 token). EM yêu cầu hai chuỗi giống hệt nhau, ở đây khác nhau nên EM = 0. Chứa gold bên trong không tính là match, đó là bẫy của phương án cho EM = 1. Token F1: số token chung = 2, nên precision = 2/4 = 0.5 và recall = 2/2 = 1.0. F1 = 2·0.5·1/(0.5+1) ≈ 0.667. Các phương án F1 = 0.5 và F1 = 1.0 lấy nhầm riêng precision hoặc riêng recall làm F1. Bài học: token F1 cho điểm một phần cho câu dài dòng, còn EM quá khắt khe. Cả hai đều chỉ là metric bề mặt."
+    },
+    {
+      "id": "eval-003",
+      "sub": "Non-determinism",
+      "level": 3,
+      "type": "multi",
+      "trap": true,
+      "q": "Pipeline gọi LLM với `temperature = 0` nhưng thỉnh thoảng output vẫn khác nhau giữa các lần chạy với cùng input. Những giải thích nào là **đúng**? (chọn tất cả)",
+      "options": [
+        "Phép cộng float không có tính kết hợp; batch size thay đổi theo tải có thể làm logits lệch và đổi token argmax",
+        "Với temperature = 0, API luôn trả output giống hệt, nên snapshot test so khớp chuỗi tuyệt đối là đủ tin cậy",
+        "Provider có thể cập nhật model hoặc hạ tầng phía sau cùng một alias (tên model không ghim snapshot), nên output đổi dù code không đổi",
+        "Tham số `seed` (khi được hỗ trợ) chỉ là best-effort. OpenAI trả kèm `system_fingerprint` để báo khi cấu hình backend thay đổi",
+        "Non-determinism chỉ xuất hiện khi top-p < 1, nên đặt top_p = 1 cùng temperature = 0 sẽ loại bỏ hoàn toàn"
+      ],
+      "answer": [
+        0,
+        2,
+        3
+      ],
+      "explain": "Temperature 0 về lý thuyết là greedy decoding, nhưng logits được tính trên GPU với kernel song song. Phép cộng float không kết hợp, nên batch khác nhau (do dynamic batching theo tải) cho ra số hơi khác. Khi hai token top-1 và top-2 gần hoà, chúng có thể đổi chỗ, và từ đó cả phần sinh tiếp theo khác đi. MoE routing cũng nhạy với batch. Alias model không ghim snapshot có thể bị provider trỏ sang bản mới. `seed` của OpenAI được mô tả là best-effort, kèm `system_fingerprint` để phát hiện backend đổi. Phương án cho rằng temperature 0 luôn trả output giống hệt là sai: snapshot so chuỗi tuyệt đối sẽ gây flaky test. Phương án về top_p cũng sai: top_p không phải nguồn gốc vấn đề. Hệ quả: regression test cần dùng ngưỡng, chạy lặp hoặc assertion ngữ nghĩa thay vì so khớp chuỗi."
+    },
+    {
+      "id": "eval-004",
+      "sub": "LLM-as-judge: kiểu chấm",
+      "level": 1,
+      "type": "single",
+      "trap": false,
+      "q": "Bạn cần chọn giữa prompt v1 và v2 cho task viết lại email. Task không có đáp án chuẩn duy nhất, và mục tiêu là quyết định “cái nào tốt hơn”. Kiểu LLM-as-judge nào phù hợp nhất?",
+      "options": [
+        "Reference-guided grading: so mỗi output với một email mẫu duy nhất rồi chấm theo mức trùng khớp với mẫu",
+        "Pointwise thang 1–10 không rubric cho từng output rồi lấy trung bình, vì điểm tuyệt đối luôn ổn định hơn",
+        "Exact match giữa output của v1 và v2. Nếu khác nhau thì coi v2 tốt hơn vì nó là bản mới",
+        "Pairwise: judge xem hai output cùng input, chọn bên tốt hơn hoặc hoà, chạy cả hai thứ tự"
+      ],
+      "answer": 3,
+      "explain": "Khi câu hỏi là “A hay B tốt hơn” và không có đáp án duy nhất, pairwise comparison cho tín hiệu phân biệt tốt nhất. So sánh tương đối dễ hơn và nhất quán hơn chấm điểm tuyệt đối, kể cả với người chấm. Pointwise (chấm từng output theo thang) hợp với monitoring liên tục và scale tốt. Tuy vậy, pointwise không rubric thì điểm hay dồn về giữa và kém phân biệt. Reference-guided hợp khi có đáp án đúng rõ ràng (toán, tra cứu fact). Với viết lại email, ép giống một mẫu sẽ phạt những cách viết hay khác. Exact match giữa hai output thì vô nghĩa. Pairwise luôn phải chạy hai thứ tự (A–B và B–A) vì judge có position bias."
+    },
+    {
+      "id": "eval-005",
+      "sub": "LLM-as-judge: bias",
+      "level": 2,
+      "type": "multi",
+      "trap": false,
+      "q": "Theo các nghiên cứu về LLM-as-a-judge (vd. Zheng et al. 2023, “Judging LLM-as-a-Judge with MT-Bench and Chatbot Arena”), những hạn chế nào **đã được ghi nhận** ở judge LLM? (chọn tất cả)",
+      "options": [
+        "Position bias: ưu tiên câu trả lời ở một vị trí nhất định (thường là vị trí đầu) trong so sánh pairwise",
+        "Judge hoàn toàn không bị ảnh hưởng bởi cách mô tả thang điểm trong prompt, nên rubric là không cần thiết",
+        "Verbosity bias: ưu tiên câu trả lời dài, nhiều chi tiết hơn dù không chính xác hay hữu ích hơn",
+        "Self-enhancement (self-preference) bias: ưu tiên output do chính model đó hoặc cùng họ model sinh ra",
+        "Năng lực chấm toán/suy luận hạn chế: judge có thể chấm sai bài mà chính nó không giải đúng"
+      ],
+      "answer": [
+        0,
+        2,
+        3,
+        4
+      ],
+      "explain": "Bài báo của Zheng et al. (2023) nêu rõ bốn hạn chế: position bias, verbosity bias, self-enhancement bias, và khả năng chấm toán/suy luận hạn chế. Cách giảm thiểu: chạy hai thứ tự rồi chỉ tính thắng khi nhất quán, rubric yêu cầu “độ dài không phải tiêu chí”, dùng judge khác họ với model được chấm (hoặc nhiều judge rồi vote), và reference-guided/CoT cho bài toán. Phương án cho rằng rubric không cần thiết là sai: judge rất nhạy với prompt và thang điểm. Rubric rõ ràng, có ví dụ cho từng mức (anchors), giúp tăng mức đồng thuận với người. Bài báo cũng ghi nhận judge GPT-4 đạt mức đồng thuận với người trên 80%, ngang mức người–người. Dù vậy, vẫn phải kiểm định judge trên nhãn người của chính task của bạn trước khi tin."
+    },
+    {
+      "id": "eval-006",
+      "sub": "LLM-as-judge: swap order",
+      "level": 3,
+      "type": "single",
+      "trap": false,
+      "q": "Pairwise judge chạy mỗi cặp (A, B) hai lần: thứ tự A–B rồi B–A. Với một mẫu, lần 1 judge chọn “Response 1” (tức A), lần 2 judge cũng chọn “Response 1” (tức B). Cách xử lý hợp lý nhất?",
+      "options": [
+        "Coi là không nhất quán: tính hoà (hoặc loại), và theo dõi tỷ lệ inconsistency của judge",
+        "Giữ kết quả lần 1 vì lần chạy đầu phản ánh đánh giá “tự nhiên” nhất của judge, lần 2 chỉ để tham khảo",
+        "Tính A thắng vì A là output của hệ thống baseline, nên khi không rõ thì nghiêng về baseline cho an toàn",
+        "Tăng temperature của judge lên 1.0 rồi chạy lại đến khi hai lần cho cùng kết quả, sau đó lấy kết quả đó"
+      ],
+      "answer": 0,
+      "explain": "Judge chọn cùng một vị trí ở cả hai thứ tự, tức là nó đang bám theo vị trí chứ không theo nội dung. Đây là dấu hiệu rõ của position bias. Thực hành phổ biến (như cách làm của MT-Bench) là chỉ công nhận thắng khi kết quả nhất quán ở cả hai thứ tự, còn lại tính hoà. Tỷ lệ inconsistency cao cho thấy judge yếu hoặc hai output gần ngang nhau, và nên báo cáo con số này. Nếu tỷ lệ cao, cần sửa rubric, đổi sang judge mạnh hơn, hoặc dùng nhiều judge. Giữ lần 1 chính là giữ nguyên bias. Nghiêng về baseline là quy tắc tuỳ tiện. Tăng temperature rồi chạy đến khi khớp là cherry-pick, làm sai lệch thống kê."
+    },
+    {
+      "id": "eval-007",
+      "sub": "G-Eval",
+      "level": 3,
+      "type": "single",
+      "trap": false,
+      "q": "G-Eval (Liu et al., 2023) khác cách làm LLM-as-judge kiểu “hỏi điểm 1–5 rồi parse con số” ở điểm cốt lõi nào?",
+      "options": [
+        "G-Eval fine-tune một model nhỏ trên điểm chấm của người để thay GPT-4 làm judge với chi phí thấp hơn",
+        "G-Eval bắt buộc có câu trả lời tham chiếu và tính điểm bằng BERTScore giữa output và reference",
+        "LLM tự sinh các bước đánh giá (CoT), rồi lấy điểm = Σ p(sᵢ)·sᵢ theo xác suất token điểm",
+        "G-Eval chấm pairwise giữa nhiều output của các hệ thống rồi xếp hạng chúng bằng hệ số Elo"
+      ],
+      "answer": 2,
+      "explain": "G-Eval gồm ba phần: (1) mô tả task và tiêu chí, (2) để LLM tự sinh evaluation steps theo kiểu chain-of-thought, (3) form-filling để ra điểm. Điểm mới là không lấy con số được sinh ra mà tính kỳ vọng: score = Σ p(sᵢ)·sᵢ, với p(sᵢ) là xác suất của token điểm sᵢ (vd. “1”…“5”). Nếu không có logprobs, có thể ước lượng bằng cách sample nhiều lần. Lý do: judge hay dồn về một vài số nguyên (vd. 3), gây nhiều điểm hoà và kém phân biệt. Điểm liên tục theo xác suất mịn hơn và tương quan với người tốt hơn. Bài báo đo bằng Spearman/Kendall với điểm người trên SummEval và Topical-Chat. G-Eval không fine-tune, không bắt buộc reference, không dùng BERTScore và không phải pairwise/Elo."
+    },
+    {
+      "id": "eval-008",
+      "sub": "Cohen's kappa",
+      "level": 2,
+      "type": "numeric",
+      "trap": false,
+      "q": "Kiểm định judge LLM so với nhãn người trên 100 mẫu (pass/fail):\n\n| | Người: pass | Người: fail |\n|---|---|---|\n| **Judge: pass** | 60 | 15 |\n| **Judge: fail** | 10 | 15 |\n\nTính **Cohen's kappa** κ = (pₒ − pₑ)/(1 − pₑ). Làm tròn 3 chữ số thập phân.",
+      "answer": 0.375,
+      "tolerance": 0.005,
+      "unit": "",
+      "explain": "pₒ (observed agreement) = (60 + 15)/100 = 0.75. Biên: judge pass = 75/100 = 0.75, người pass = 70/100 = 0.70. pₑ (đồng thuận ngẫu nhiên) = 0.75·0.70 + 0.25·0.30 = 0.525 + 0.075 = 0.60. κ = (0.75 − 0.60)/(1 − 0.60) = 0.15/0.40 = 0.375. Theo thang Landis–Koch, 0.21–0.40 là “fair”, tức khá yếu, dù agreement thô 75% nghe có vẻ ổn. Kappa trừ đi phần đồng thuận do may mắn, vốn lớn khi cả hai bên đều hay nói “pass”. Cần xem thêm ô judge pass – người fail (15 mẫu): judge đang bỏ lọt lỗi, cần sửa rubric."
+    },
+    {
+      "id": "eval-009",
+      "sub": "Cohen's kappa: prevalence",
+      "level": 3,
+      "type": "single",
+      "trap": true,
+      "q": "Judge LLM được so với nhãn người trên 100 mẫu: cả hai pass 94, judge pass – người fail 3, judge fail – người pass 2, cả hai fail 1. Agreement thô = 95%. Nhận định nào đúng?",
+      "options": [
+        "Judge đạt chuẩn production vì agreement 95% vượt xa ngưỡng 80% thường được dùng làm mốc",
+        "κ chỉ ≈ 0.26 vì pₑ ≈ 0.93. Judge chỉ bắt được 1/4 mẫu người đánh fail",
+        "κ ≈ 0.95 vì khi n ≥ 100, Cohen's kappa hội tụ về đúng bằng agreement thô",
+        "κ âm, chứng tỏ judge đánh ngược với người và nên đảo nhãn đầu ra của judge"
+      ],
+      "answer": 1,
+      "explain": "pₒ = (94 + 1)/100 = 0.95. Judge pass = 97%, người pass = 96%. pₑ = 0.97·0.96 + 0.03·0.04 = 0.9312 + 0.0012 = 0.9324. κ = (0.95 − 0.9324)/(1 − 0.9324) ≈ 0.26. Đây là “prevalence paradox”: khi một lớp chiếm áp đảo, agreement thô cao gần như tự nhiên. Một judge luôn nói “pass” cũng đạt 96% agreement. Người đánh fail 4 mẫu (3 + 1), judge chỉ bắt được 1, nên recall lớp fail = 25%. Đó mới là thứ quan trọng khi dùng judge làm gate. Khắc phục: oversample mẫu lỗi khi kiểm định judge, báo cáo kappa kèm precision/recall theo từng lớp. κ không hội tụ về agreement, và ở đây κ dương nên không phải đánh ngược."
+    },
+    {
+      "id": "eval-010",
+      "sub": "Judge–human correlation",
+      "level": 2,
+      "type": "single",
+      "trap": false,
+      "q": "Judge và chuyên gia cùng chấm 200 câu trả lời theo thang 1–5. Judge chấm khắt khe hơn đều đặn khoảng 1 điểm, nhưng thứ tự xếp hạng gần như giống chuyên gia. Bạn muốn biết judge có **xếp thứ tự chất lượng** đúng không (để so sánh hệ thống). Chỉ số nào phù hợp nhất, và nó cho kết quả ra sao?",
+      "options": [
+        "Exact-match agreement. Kết quả sẽ cao vì hai bên dùng cùng thang 1–5 và cùng rubric",
+        "Pearson trên điểm thô. Kết quả sẽ thấp vì có độ lệch hằng số 1 điểm giữa hai bên",
+        "Cohen's kappa không trọng số. Phù hợp nhất vì điểm 1–5 là dữ liệu categorical thuần",
+        "Spearman/Kendall τ. Kết quả cao vì độ lệch hằng số không đổi thứ hạng"
+      ],
+      "answer": 3,
+      "explain": "Mục tiêu là đúng thứ tự, nên tương quan hạng (Spearman ρ, Kendall τ) là lựa chọn tự nhiên cho thang ordinal. Độ lệch hằng số không đổi thứ hạng nên ρ vẫn cao. Exact-match sẽ **thấp** chứ không cao, vì hầu như mọi cặp đều lệch 1 điểm. Bẫy ở phương án Pearson: Pearson bất biến với phép dịch tuyến tính, nên độ lệch hằng số **không** làm Pearson thấp. Tuy vậy Pearson giả định quan hệ tuyến tính và nhạy với outlier, nên với thang ordinal ngắn vẫn kém phù hợp hơn Spearman. Kappa không trọng số coi lệch 4↔5 nặng như 1↔5, và sẽ thấp do lệch điểm. Nếu cần đồng thuận về giá trị tuyệt đối, dùng weighted kappa (quadratic) hoặc calibrate judge."
+    },
+    {
+      "id": "eval-011",
+      "sub": "HumanEval pass@k",
+      "level": 3,
+      "type": "numeric",
+      "trap": true,
+      "q": "Trên một bài HumanEval, bạn sinh n = 10 mẫu code, trong đó c = 3 mẫu pass toàn bộ unit test. Dùng ước lượng **không chệch** của Chen et al. (2021):\n\n`pass@k = 1 − C(n−c, k) / C(n, k)`\n\nTính **pass@5** cho bài này. Làm tròn 4 chữ số thập phân.",
+      "answer": 0.9167,
+      "tolerance": 0.0005,
+      "unit": "",
+      "explain": "C(n−c, k) = C(7, 5) = 21, là số cách chọn 5 mẫu toàn sai. C(n, k) = C(10, 5) = 252. pass@5 = 1 − 21/252 = 1 − 0.08333 = 0.9167. Ý nghĩa: xác suất ít nhất một trong 5 mẫu (rút không hoàn lại từ 10) là đúng. Bẫy: dùng công thức “ngây thơ” 1 − (1 − c/n)^k = 1 − 0.7⁵ ≈ 0.8319. Công thức này bị chệch vì coi như rút có hoàn lại với p ước lượng từ c/n. Chen et al. khuyến nghị sinh n > k mẫu (vd. n = 200) rồi dùng ước lượng tổ hợp để giảm phương sai. Điểm pass@k của benchmark là trung bình qua các bài (HumanEval có 164 bài)."
+    },
+    {
+      "id": "eval-012",
+      "sub": "Benchmarks",
+      "level": 1,
+      "type": "multi",
+      "trap": false,
+      "q": "Phát biểu nào về các benchmark phổ biến là **đúng**? (chọn tất cả)",
+      "options": [
+        "MT-Bench chấm bằng BLEU giữa câu trả lời và đáp án mẫu do chuyên gia viết cho từng câu",
+        "MMLU gồm câu hỏi trắc nghiệm 4 lựa chọn trải trên 57 môn/lĩnh vực",
+        "GSM8K là bộ bài toán đố cấp phổ thông cần suy luận nhiều bước, chấm theo đáp số cuối",
+        "HumanEval gồm 164 bài lập trình Python, chấm bằng unit test và báo cáo pass@k",
+        "Điểm MMLU cao đảm bảo model sẽ tốt cho chatbot CSKH tiếng Việt của doanh nghiệp bạn"
+      ],
+      "answer": [
+        1,
+        2,
+        3
+      ],
+      "explain": "MMLU: 57 subject, trắc nghiệm 4 đáp án, đo kiến thức tổng quát. GSM8K: khoảng 8.5K bài toán grade-school, giải trong vài bước, chấm theo đáp số cuối. HumanEval: 164 bài viết hàm Python có docstring, chấm bằng unit test, báo cáo pass@k. MT-Bench gồm 80 câu hỏi multi-turn thuộc 8 nhóm, chấm bằng LLM-as-judge (GPT-4) theo thang 1–10, không dùng BLEU. Benchmark công khai chỉ đo năng lực chung, có thể bị contamination, và không thay được eval set riêng theo domain, ngôn ngữ và KPI của sản phẩm. Vì vậy phương án “MMLU cao đảm bảo tốt cho chatbot CSKH” sai."
+    },
+    {
+      "id": "eval-013",
+      "sub": "Elo rating",
+      "level": 2,
+      "type": "numeric",
+      "trap": false,
+      "q": "Leaderboard pairwise dùng Elo với K = 32. Model A (1500) đấu model B (1600), và **A thắng**. Biết E_A = 1/(1 + 10^((R_B − R_A)/400)) và R'_A = R_A + K·(S_A − E_A). Tính rating mới của A. Làm tròn 2 chữ số thập phân.",
+      "answer": 1520.48,
+      "tolerance": 0.05,
+      "unit": "điểm",
+      "explain": "E_A = 1/(1 + 10^(100/400)) = 1/(1 + 10^0.25) = 1/(1 + 1.7783) ≈ 0.3599. A thắng nên S_A = 1. R'_A = 1500 + 32·(1 − 0.3599) = 1500 + 32·0.6401 ≈ 1520.48. B mất đúng số điểm đó: R'_B ≈ 1579.52, vì Elo là zero-sum khi cả hai cùng K. Thắng đối thủ mạnh hơn (E nhỏ) được cộng nhiều điểm. Thắng đối thủ yếu hơn được cộng ít. Lưu ý: kết quả Elo online phụ thuộc thứ tự các trận và giá trị K. Đó là lý do Chatbot Arena chuyển sang fit Bradley–Terry trên toàn bộ dữ liệu."
+    },
+    {
+      "id": "eval-014",
+      "sub": "Chatbot Arena",
+      "level": 3,
+      "type": "single",
+      "trap": false,
+      "q": "Vì sao Chatbot Arena (LMSYS) chuyển từ cập nhật Elo online sang ước lượng **Bradley–Terry (MLE)** trên toàn bộ dữ liệu vote?",
+      "options": [
+        "Elo online phụ thuộc thứ tự trận và K; với model tĩnh, fit BT trên toàn bộ vote ổn định hơn",
+        "Vì Elo chỉ định nghĩa được cho cờ vua với hai người chơi, không áp dụng được cho dữ liệu so sánh pairwise",
+        "Vì Bradley–Terry không cần vote của người dùng mà dùng GPT-4 làm judge, nên rẻ và nhanh hơn rất nhiều",
+        "Vì Elo không cho phép kết quả hoà, trong khi Bradley–Terry bắt buộc mỗi trận phải có đúng một bên thắng"
+      ],
+      "answer": 0,
+      "explain": "Elo được thiết kế cho người chơi có phong độ thay đổi theo thời gian, nên nó cập nhật tuần tự và ưu tiên trận gần đây. Hệ quả là kết quả phụ thuộc thứ tự trận và K. Một model LLM (snapshot cố định) có năng lực không đổi, nên cách hợp lý là fit mô hình Bradley–Terry P(i thắng j) = 1/(1 + e^(β_j − β_i)) bằng MLE trên tất cả vote. Cách này không phụ thuộc thứ tự và ước lượng ổn định hơn. Khoảng tin cậy lấy bằng bootstrap. Arena vẫn hiển thị điểm theo thang giống Elo cho dễ đọc. Elo vẫn xử lý được hoà (S = 0.5), và Arena vẫn dựa trên vote của người. Bài học cho eval nội bộ: khi so pairwise nhiều hệ thống, nên fit BT kèm CI thay vì cộng dồn Elo."
+    },
+    {
+      "id": "eval-015",
+      "sub": "Contamination",
+      "level": 2,
+      "type": "multi",
+      "trap": false,
+      "q": "Model mới có điểm tăng vọt trên một benchmark công khai. Cách nào giúp **phát hiện hoặc giảm** rủi ro data contamination? (chọn tất cả)",
+      "options": [
+        "Thêm few-shot example lấy từ chính test set để model hiểu format hơn rồi báo cáo điểm như bình thường",
+        "So sánh điểm trên bản gốc với bản viết lại hoặc perturb (đổi số, đổi tên, paraphrase). Tụt mạnh là dấu hiệu học thuộc",
+        "Contamination chỉ là vấn đề của pre-training. Dữ liệu fine-tune hay RLHF không thể làm lộ test set",
+        "Dùng bộ test private/held-out, hoặc câu hỏi được tạo sau training cutoff của model"
+      ],
+      "answer": [
+        1,
+        3
+      ],
+      "explain": "Contamination xảy ra khi test set (hoặc bản gần giống) lọt vào dữ liệu train. Khi đó model “nhớ” đáp án, và điểm phản ánh trí nhớ chứ không phải năng lực. Cách phát hiện: kiểm tra n-gram overlap khi truy cập được dữ liệu train, đo hiệu năng trên bản perturb/paraphrase (học thuộc thì tụt mạnh), so điểm theo câu hỏi trước và sau cutoff. Cách giảm: dùng benchmark private, động, hoặc tạo mới liên tục. Đưa ví dụ test vào few-shot chính là tự gây leakage. Fine-tune hay RLHF hoàn toàn có thể làm lộ test set nếu dữ liệu tổng hợp hoặc dữ liệu crawl chứa benchmark. Với eval nội bộ cũng vậy: đừng dùng golden set để tune prompt rồi báo cáo trên chính tập đó. Hãy tách dev set và test set."
+    },
+    {
+      "id": "eval-016",
+      "sub": "Golden dataset design",
+      "level": 1,
+      "type": "multi",
+      "trap": false,
+      "q": "Thực hành nào **đúng** khi xây golden dataset cho trợ lý CSKH? (chọn tất cả)",
+      "options": [
+        "Chỉ dùng câu hỏi do chính model đang được đánh giá sinh ra và để nó tự gán nhãn, để tiết kiệm chi phí",
+        "Phân tầng (stratify) theo intent và độ khó để mỗi nhóm quan trọng có đủ mẫu đo riêng, không chỉ một con số tổng",
+        "Lấy mẫu từ traffic production thật (đã ẩn danh PII), bổ sung edge case và mẫu adversarial/red-team",
+        "Khi phát hiện nhãn golden sai thì không được sửa, vì sửa sẽ làm mất khả năng so sánh với lịch sử",
+        "Version hoá dataset và guideline gán nhãn như code, ghi version vào mỗi báo cáo thử nghiệm"
+      ],
+      "answer": [
+        1,
+        2,
+        4
+      ],
+      "explain": "Golden set tốt cần đại diện cho phân phối thật (sample từ production, có xử lý PII). Nó cũng cần phủ rủi ro: edge case, câu mơ hồ, câu ngoài phạm vi, prompt injection/jailbreak. Stratify theo intent giúp phát hiện regression cục bộ mà accuracy tổng che mất. Có thể oversample nhóm hiếm, miễn là báo cáo theo từng nhóm hoặc reweight khi tính số tổng. Để model tự sinh và tự gán nhãn tạo ra vòng lặp self-preference, đánh giá lạc quan giả. Nhãn sai phải sửa, nhưng theo version (v1.2 → v1.3) và chạy lại baseline trên version mới để so sánh công bằng. Guideline gán nhãn rõ ràng cùng việc đo inter-annotator agreement là nền tảng của mọi metric phía sau."
+    },
+    {
+      "id": "eval-017",
+      "sub": "Khoảng tin cậy accuracy",
+      "level": 1,
+      "type": "numeric",
+      "trap": false,
+      "q": "Hệ thống đạt accuracy 85% trên eval set gồm 400 mẫu độc lập. Dùng xấp xỉ chuẩn (Wald), tính **nửa độ rộng** của khoảng tin cậy 95%: 1.96·√(p(1−p)/n). Trả lời theo **điểm phần trăm** (vd. 3.20 nghĩa là ±3.20%). Làm tròn 2 chữ số thập phân.",
+      "answer": 3.5,
+      "tolerance": 0.02,
+      "unit": "điểm %",
+      "explain": "Sai số chuẩn SE = √(0.85·0.15/400) = √(0.1275/400) = √0.00031875 ≈ 0.017854. Nửa độ rộng = 1.96·0.017854 ≈ 0.03499, tức ±3.50 điểm phần trăm. CI 95% ≈ [81.5%, 88.5%]. Nghĩa là nếu phiên bản mới đạt 87% trên một tập khác cùng cỡ, chưa thể nói nó tốt hơn. Muốn thu hẹp CI một nửa thì phải tăng n lên khoảng 4 lần, vì SE ∝ 1/√n. Khi p gần 0 hoặc 1, hoặc n nhỏ, Wald kém chính xác, nên dùng Wilson interval hoặc bootstrap. Báo cáo thử nghiệm luôn nên kèm CI, không chỉ một con số."
+    },
+    {
+      "id": "eval-018",
+      "sub": "Kích thước mẫu",
+      "level": 2,
+      "type": "numeric",
+      "trap": false,
+      "q": "Bạn dự kiến accuracy khoảng 90% và muốn nửa độ rộng CI 95% không quá **±2 điểm phần trăm**. Dùng n = 1.96²·p(1−p)/E². Cần **tối thiểu** bao nhiêu mẫu? Làm tròn **lên** số nguyên.",
+      "answer": 865,
+      "tolerance": 0,
+      "unit": "mẫu",
+      "explain": "n = 1.96²·0.9·0.1/0.02² = 3.8416·0.09/0.0004 = 0.345744/0.0004 = 864.36. Làm tròn lên được 865 mẫu, vì làm tròn xuống thì không đạt được độ chính xác yêu cầu. Nếu chưa biết p, dùng trường hợp xấu nhất p = 0.5 (p(1−p) lớn nhất = 0.25): n = 3.8416·0.25/0.0004 = 2401. Lưu ý: con số này áp dụng cho **từng** nhóm muốn báo cáo riêng. Stratify 10 intent mà mỗi intent cần ±2 điểm % thì tổng số mẫu tăng rất nhiều. Khi so sánh hai hệ thống trên cùng tập, paired test cần ít mẫu hơn hai mẫu độc lập vì nó loại được phương sai giữa các item."
+    },
+    {
+      "id": "eval-019",
+      "sub": "So sánh hai hệ thống",
+      "level": 3,
+      "type": "single",
+      "trap": true,
+      "q": "Hệ thống A đạt 82%, B đạt 85% trên **cùng** 300 câu hỏi. CI 95% của từng hệ thống (khoảng ±4.3 điểm %) chồng lấn nhau. Kết luận nào đúng?",
+      "options": [
+        "Không có khác biệt có ý nghĩa thống kê, vì hai khoảng tin cậy riêng của A và B chồng lấn nhau",
+        "B chắc chắn tốt hơn vì 85% > 82% trên tới 300 mẫu, không cần thêm kiểm định nào nữa",
+        "Chưa kết luận được. Dữ liệu là paired nên cần McNemar hoặc paired bootstrap trên hiệu số",
+        "Phải dùng unpaired two-sample t-test giữa hai vector điểm, vì hai hệ thống chạy độc lập với nhau"
+      ],
+      "answer": 2,
+      "explain": "Bẫy kinh điển: hai CI riêng chồng lấn **không** có nghĩa là khác biệt không có ý nghĩa. Kiểm tra chồng lấn CI là phép thử quá bảo thủ. Ở đây hai hệ thống chấm trên cùng item, nên dữ liệu là paired. Phần lớn phương sai đến từ độ khó của item, và phần này triệt tiêu khi xét hiệu số. McNemar chỉ dùng các cặp bất đồng (A đúng B sai và ngược lại). Paired bootstrap resample item rồi tính Δ. Cả hai thường cho kết luận mạnh hơn hẳn so với so CI rời. Unpaired t-test bỏ phí cấu trúc cặp. Báo cáo tốt nên có Δ, CI của Δ, p-value, số cặp bất đồng, và breakdown theo intent."
+    },
+    {
+      "id": "eval-020",
+      "sub": "McNemar test",
+      "level": 3,
+      "type": "numeric",
+      "trap": false,
+      "q": "So sánh hai prompt trên cùng 200 câu. Số câu A đúng – B sai: b = 30. Số câu A sai – B đúng: c = 14. Tính thống kê McNemar **có hiệu chỉnh liên tục**: χ² = (|b − c| − 1)²/(b + c). Làm tròn 2 chữ số thập phân.",
+      "answer": 5.11,
+      "tolerance": 0.01,
+      "unit": "",
+      "explain": "|b − c| = 16. (16 − 1)² = 225. b + c = 44. χ² = 225/44 ≈ 5.11. Giá trị tới hạn của χ² với 1 bậc tự do ở mức α = 0.05 là 3.841. Vì 5.11 > 3.841 nên p < 0.05: A tốt hơn B có ý nghĩa thống kê (p ≈ 0.024). Các câu cả hai cùng đúng hoặc cùng sai không đóng góp gì cho test. Nếu không hiệu chỉnh liên tục thì χ² = 256/44 ≈ 5.82. Khi b + c nhỏ (khoảng dưới 25), nên dùng exact binomial test trên b với Binomial(b + c, 0.5)."
+    },
+    {
+      "id": "eval-021",
+      "sub": "Paired bootstrap",
+      "level": 3,
+      "type": "single",
+      "trap": false,
+      "q": "Cách làm **paired bootstrap** đúng để có CI 95% cho chênh lệch accuracy giữa hệ thống B và A (cùng test set n item)?",
+      "options": [
+        "Resample độc lập kết quả của A và kết quả của B, mỗi bên một tập chỉ số riêng, tính hiệu accuracy, lặp 10.000 lần",
+        "Chỉ resample các item mà A và B cho kết quả đúng–sai giống nhau, bỏ các item bất đồng vì chúng là nhiễu",
+        "Chạy lại B 1.000 lần trên cùng test set với temperature 0, rồi lấy phân phối accuracy thu được làm CI",
+        "Resample có hoàn lại một tập chỉ số item dùng chung cho A và B, tính Δ, lấy percentile 2.5–97.5"
+      ],
+      "answer": 3,
+      "explain": "Bootstrap mô phỏng việc rút lại test set từ cùng một phân phối câu hỏi. “Paired” nghĩa là mỗi lần resample dùng **cùng** tập chỉ số item cho cả hai hệ thống. Nhờ vậy, tương quan do độ khó item được giữ lại, và phương sai của Δ nhỏ hơn đáng kể. Nếu CI của Δ không chứa 0, khác biệt có ý nghĩa ở mức khoảng 5%. Resample độc lập phá vỡ cấu trúc cặp, làm CI rộng giả tạo. Bỏ các item bất đồng là bỏ đúng phần chứa thông tin, vì đó là chỗ hai hệ thống khác nhau. Chạy lại cùng tập nhiều lần chỉ đo nhiễu sinh (non-determinism), không đo bất định do mẫu câu hỏi. Đó là một nguồn biến thiên khác, có thể báo cáo riêng."
+    },
+    {
+      "id": "eval-022",
+      "sub": "Regression testing trong CI",
+      "level": 2,
+      "type": "multi",
+      "trap": false,
+      "q": "Bạn đưa golden-label regression test cho prompt/model vào GitLab CI (Pytest). Thực hành nào **nên** áp dụng? (chọn tất cả)",
+      "options": [
+        "Tách các assertion deterministic (JSON schema hợp lệ, đủ field bắt buộc, không lộ system prompt) thành test pass/fail cứng",
+        "So khớp chuỗi tuyệt đối (exact snapshot) với output LLM và dùng nó làm gate cứng cho merge request",
+        "Gate theo ngưỡng metric tổng hợp trên golden set (vd. accuracy ≥ baseline − margin), không theo từng mẫu riêng lẻ",
+        "Ghim phiên bản model (snapshot) và version prompt trong config, để regression có thể tái lập",
+        "Test nào flaky thì đánh dấu skip vĩnh viễn để pipeline luôn xanh và không chặn merge",
+        "Với case quan trọng, chạy lặp k lần và đánh giá tỷ lệ pass thay vì kết luận từ một lần chạy"
+      ],
+      "answer": [
+        0,
+        2,
+        3,
+        5
+      ],
+      "explain": "Output LLM không hoàn toàn deterministic, nên gate CI cần tách hai lớp. Lớp (1) là kiểm tra cấu trúc/hợp đồng: fail là lỗi thật, gate cứng. Lớp (2) là chất lượng: đo bằng metric tổng hợp có ngưỡng và margin dựa trên độ dao động đo được (vd. chạy baseline nhiều lần để biết noise). Exact snapshot gây flaky liên tục và chặn cả những thay đổi vô hại. Skip vĩnh viễn che mất regression thật. Cách đúng là phân loại test flaky, chuyển sang assertion ngữ nghĩa hoặc chạy lặp. Ghim model snapshot và version prompt giúp phân biệt “mình làm hỏng” với “provider đổi model”. Nên lưu kết quả mỗi lần chạy (vd. dạng experiment trong Langfuse) để so sánh xu hướng và để cache cho rẻ."
+    },
+    {
+      "id": "eval-023",
+      "sub": "Caching",
+      "level": 3,
+      "type": "single",
+      "trap": true,
+      "q": "Bạn thêm **semantic cache** (embedding + ngưỡng cosine 0.92) trước LLM cho bot ngân hàng. Hit rate lên 35% nhưng bắt đầu có khiếu nại. Rủi ro nào là **đặc trưng** của semantic cache so với exact cache?",
+      "options": [
+        "Mọi request hit đều có TTFT tăng mạnh, vì semantic cache phải gọi lại LLM để xác minh kết quả trước khi trả",
+        "Câu gần nghĩa nhưng khác chi tiết then chốt (số tiền, tài khoản, phủ định) vẫn vượt ngưỡng, nên trả lời sai",
+        "Semantic cache không dùng được với tiếng Việt vì các embedding model đều không hỗ trợ tiếng Việt có dấu",
+        "Exact cache và semantic cache có cùng tỷ lệ false hit, chỉ khác nhau về chi phí lưu trữ vector"
+      ],
+      "answer": 1,
+      "explain": "Exact cache chỉ hit khi key (prompt đã chuẩn hoá) giống hệt, nên gần như không có false hit, nhưng hit rate thấp. Semantic cache tăng hit rate bằng độ gần embedding. Đổi lại, nó có **false hit**: “chuyển 5 triệu sang tài khoản A” và “… tài khoản B” có cosine rất cao. Với domain nhạy cảm, cần: không cache câu có tham số cá nhân hoặc thời gian thực, phân vùng cache theo user/tenant, đặt ngưỡng theo intent, và đo false-hit rate trên các cặp được gán nhãn trước khi bật. Hit của semantic cache chỉ tốn một lần embed + vector lookup, nhanh hơn gọi LLM rất nhiều. Provider prompt caching là chuyện khác: nó cache tiền tố prompt phía provider để giảm cost/latency của phần input, và không đổi output."
+    },
+    {
+      "id": "eval-024",
+      "sub": "Offline vs online eval",
+      "level": 1,
+      "type": "single",
+      "trap": false,
+      "q": "Phát biểu nào mô tả đúng quan hệ giữa **offline eval** và **online eval**?",
+      "options": [
+        "Offline bắt regression nhanh, rẻ trên tập cố định; online đo tác động KPI trên traffic thật; hai loại bổ sung nhau",
+        "Online eval thay thế hoàn toàn offline eval, vì traffic thật luôn đại diện tốt hơn mọi golden set được dựng thủ công",
+        "Offline eval chỉ dùng cho model ML truyền thống, không áp dụng được cho LLM vì output mở và không có nhãn",
+        "Nếu metric offline tăng thì KPI online chắc chắn tăng theo, nên không cần chạy A/B test trên production"
+      ],
+      "answer": 0,
+      "explain": "Offline eval (golden set, benchmark nội bộ, LLM-as-judge trên dataset) là lớp phòng thủ đầu tiên. Nó nhanh, rẻ, tái lập được, và chạy trong CI cho mọi thay đổi prompt/model. Nhưng nó chỉ là proxy, có thể lệch so với hành vi người dùng thật. Online eval (A/B test, canary, explicit feedback, implicit signals như rephrase, bỏ dở, escalate) đo tác động thật lên KPI sản phẩm. Dù vậy, online eval chậm, tốn traffic và có rủi ro cho người dùng. Offline tăng không đảm bảo online tăng, vì có thể metric offline không tương quan với KPI. Online cũng không thay offline được, vì không thể đem mọi thay đổi ra thử trên người dùng. LLM vẫn eval offline được bằng judge, rubric và assertion."
+    },
+    {
+      "id": "eval-025",
+      "sub": "A/B test & guardrail metrics",
+      "level": 2,
+      "type": "multi",
+      "trap": true,
+      "q": "Bạn A/B test prompt mới cho trợ lý, primary metric là tỷ lệ task completion. Thực hành nào là **đúng**? (chọn tất cả)",
+      "options": [
+        "Xem kết quả mỗi giờ và dừng ngay khi p-value < 0.05 lần đầu, để rút ngắn thời gian thử nghiệm",
+        "Định nghĩa trước guardrail metrics (p95 latency, cost/request, safety) và điều kiện dừng",
+        "Random hoá theo user (hoặc session) thay vì theo request, để một người dùng không thấy lẫn lộn hai biến thể",
+        "Chỉ so tỷ lệ thumbs-up, vì đó là tín hiệu trực tiếp nhất và không bị thiên lệch từ người dùng",
+        "Tính trước cỡ mẫu và thời gian chạy dựa trên MDE (minimum detectable effect) mong muốn"
+      ],
+      "answer": [
+        1,
+        2,
+        4
+      ],
+      "explain": "Guardrail metrics bảo đảm không “thắng” primary metric bằng cách làm hỏng thứ khác, ví dụ prompt dài hơn làm tăng latency và cost. Random theo user/session tránh trải nghiệm lẫn lộn và vi phạm giả định độc lập. Sai lầm dễ mắc nhất là **peeking**: xem liên tục rồi dừng ngay khi p < 0.05 làm tỷ lệ false positive tăng vọt. Nếu cần theo dõi liên tục, dùng sequential testing (vd. alpha spending). Thumbs-up/down chỉ đến từ một nhóm nhỏ tự chọn, nên bị selection bias. Cần kết hợp với implicit signals và metric tính trên toàn bộ phiên. Tính MDE và cỡ mẫu trước giúp tránh thử nghiệm “underpowered” rồi kết luận nhầm là “không khác biệt”."
+    },
+    {
+      "id": "eval-026",
+      "sub": "User feedback & implicit signals",
+      "level": 3,
+      "type": "single",
+      "trap": true,
+      "q": "Sau khi đổi prompt, tỷ lệ thumbs-down giảm từ 12% xuống 6% (tính trên số lượt có feedback). Nhưng tỷ lệ phiên có feedback giảm từ 8% xuống 3%, và tỷ lệ user hỏi lại cùng ý (rephrase) tăng. Kết luận hợp lý nhất?",
+      "options": [
+        "Prompt mới tốt hơn rõ rệt vì tỷ lệ thumbs-down giảm một nửa, có thể rollout 100% ngay hôm nay",
+        "Rephrase tăng là tín hiệu tốt, cho thấy người dùng tương tác sâu hơn và gắn bó hơn với bot",
+        "Không kết luận được gì, vì explicit feedback luôn vô giá trị khi đánh giá các hệ thống LLM",
+        "Chưa thể kết luận: feedback rate tụt gây selection bias, và implicit signal (rephrase) đang xấu đi"
+      ],
+      "answer": 3,
+      "explain": "Tỷ lệ thumbs-down được tính trên tập người **chọn** để lại feedback. Khi tỷ lệ phiên có feedback tụt từ 8% xuống 3%, tập này thay đổi thành phần (có thể do UI đổi, hoặc người không hài lòng bỏ đi luôn), nên so sánh trực tiếp không còn hợp lệ. Rephrase tăng là implicit signal xấu: người dùng phải hỏi lại vì câu trả lời không giải quyết được vấn đề. Cần theo dõi thêm các tín hiệu như tỷ lệ escalate sang nhân viên, bỏ dở, copy câu trả lời, thời gian đến lúc giải quyết xong. Explicit feedback vẫn có giá trị, nhất là để lấy mẫu lỗi đưa vào golden set, nhưng không nên là metric quyết định duy nhất. Cách đúng là A/B có ngẫu nhiên hoá, metric chuẩn hoá theo toàn bộ phiên, kèm guardrail."
+    },
+    {
+      "id": "eval-027",
+      "sub": "Macro-F1",
+      "level": 2,
+      "type": "numeric",
+      "trap": false,
+      "q": "Phân loại 3 intent (hàng = nhãn thật, cột = dự đoán):\n\n| | Pred A | Pred B | Pred C |\n|---|---|---|---|\n| **True A** | 50 | 5 | 5 |\n| **True B** | 10 | 20 | 0 |\n| **True C** | 5 | 0 | 5 |\n\nTính **macro-F1**. Làm tròn 3 chữ số thập phân.",
+      "answer": 0.676,
+      "tolerance": 0.002,
+      "unit": "",
+      "explain": "Tổng cột (số lần dự đoán): A = 65, B = 25, C = 10. Tổng hàng (support): A = 60, B = 30, C = 10. Lớp A: P = 50/65, R = 50/60, F1 = 2·TP/(pred + true) = 100/125 = 0.800. Lớp B: F1 = 40/(25 + 30) ≈ 0.727. Lớp C: P = R = 5/10, F1 = 0.500. Macro-F1 = (0.800 + 0.727 + 0.500)/3 ≈ 0.676. So sánh: micro-F1 = accuracy = 75/100 = 0.750, weighted-F1 = (60·0.8 + 30·0.727 + 10·0.5)/100 ≈ 0.748. Macro thấp hơn hẳn vì lớp hiếm C kém kéo trung bình xuống. Đó là tín hiệu mà accuracy che mất. Mẹo tính nhanh: F1 = 2TP/(2TP + FP + FN)."
+    },
+    {
+      "id": "eval-028",
+      "sub": "Micro vs macro vs weighted",
+      "level": 2,
+      "type": "single",
+      "trap": true,
+      "q": "Với bài phân loại intent **đơn nhãn** (mỗi mẫu có đúng một nhãn), nhiều lớp, phát biểu nào **đúng**?",
+      "options": [
+        "Macro-F1 luôn lớn hơn hoặc bằng micro-F1, vì nó cho mỗi lớp trọng số bằng nhau",
+        "Weighted-F1 cho lớp hiếm trọng số lớn hơn để bù cho tình trạng mất cân bằng dữ liệu",
+        "Micro-F1 bằng accuracy; macro-F1 trung bình đều F1 các lớp nên nhạy với lớp hiếm",
+        "Micro-precision và micro-recall thường khác nhau đáng kể khi dữ liệu mất cân bằng giữa các lớp"
+      ],
+      "answer": 2,
+      "explain": "Trong bài đơn nhãn, mỗi lỗi vừa là một FP (cho lớp được dự đoán) vừa là một FN (cho lớp thật). Do đó tổng FP = tổng FN, và micro-P = micro-R = micro-F1 = accuracy. Phương án cho rằng micro-precision và micro-recall khác nhau sai vì lý do này. Macro-F1 lấy trung bình đều F1 các lớp, nên một lớp hiếm làm kém kéo macro xuống. Macro có thể lớn hơn hoặc nhỏ hơn micro, không có chiều cố định. Weighted-F1 dùng trọng số theo support, tức ưu tiên lớp **phổ biến**, nên thường gần accuracy. Chọn metric theo mục tiêu: lớp hiếm quan trọng (vd. intent “khiếu nại”, “huỷ dịch vụ”) thì báo cáo macro và per-class. Nếu quan tâm trải nghiệm trung bình trên traffic thì dùng micro/accuracy."
+    },
+    {
+      "id": "eval-029",
+      "sub": "Accuracy paradox",
+      "level": 2,
+      "type": "single",
+      "trap": true,
+      "q": "1000 hội thoại, trong đó 50 thực sự độc hại. Bộ lọc gắn cờ 80 hội thoại, 40 trong số đó đúng là độc hại. Bộ số nào đúng (accuracy / precision / recall / F1)?",
+      "options": [
+        "0.95 / 0.50 / 0.80 / ≈0.615",
+        "0.95 / 0.80 / 0.50 / ≈0.615",
+        "0.92 / 0.50 / 0.80 / 0.650",
+        "0.96 / 0.50 / 0.80 / ≈0.615"
+      ],
+      "answer": 0,
+      "explain": "TP = 40, FP = 80 − 40 = 40, FN = 50 − 40 = 10, TN = 1000 − 40 − 40 − 10 = 910. Accuracy = (40 + 910)/1000 = 0.95. Precision = 40/80 = 0.50. Recall = 40/50 = 0.80. F1 = 2·0.5·0.8/1.3 ≈ 0.615. Bộ số 0.95 / 0.80 / 0.50 đảo precision và recall, một bẫy phổ biến. Điểm mấu chốt: một bộ lọc “không bao giờ gắn cờ” cũng đạt accuracy 0.95, nên accuracy vô nghĩa với dữ liệu mất cân bằng. Hãy báo cáo precision/recall/F1 của lớp quan tâm, confusion matrix, hoặc PR-AUC. Chọn ngưỡng theo chi phí: guardrail an toàn thường ưu tiên recall, còn auto-block gây phiền user thì cần precision cao."
+    },
+    {
+      "id": "eval-030",
+      "sub": "Drift",
+      "level": 2,
+      "type": "single",
+      "trap": false,
+      "q": "Không đổi code hay prompt, nhưng từ tuần này tỷ lệ lỗi parse JSON của pipeline extraction tăng từ 0.5% lên 4%. Phân phối input (độ dài, ngôn ngữ, intent) không đổi. Bạn gọi model qua **alias** trỏ tới bản mới nhất, không ghim snapshot có ngày. Giải thích và hành động hợp lý nhất?",
+      "options": [
+        "Data drift: phân phối input đã thay đổi, cần thu thập thêm dữ liệu mới và fine-tune lại model extraction",
+        "Model drift: provider đổi model sau alias; ghim snapshot và chạy regression trên golden set trước khi đổi",
+        "Concept drift: định nghĩa đúng/sai của nhãn đã thay đổi theo nghiệp vụ, cần gán nhãn lại toàn bộ golden set",
+        "Lỗi ngẫu nhiên do temperature, chỉ cần tăng số lần retry lên 10 là giải quyết dứt điểm"
+      ],
+      "answer": 1,
+      "explain": "Phân biệt ba loại drift. Data drift là P(X) đổi, tức input khác đi. Concept drift là P(Y|X) đổi, tức với cùng input, đáp án đúng thay đổi (vd. chính sách mới). Model/prompt drift là hành vi của model với cùng prompt thay đổi do provider cập nhật. Input không đổi, nghiệp vụ không đổi, alias không ghim, và lỗi tăng đột ngột: dấu hiệu khớp nhất là model drift. Hành động: ghim snapshot cụ thể, coi việc nâng version là một release có regression suite và canary, bật structured output/JSON schema nếu provider hỗ trợ, validate và retry có giới hạn, và đặt alert trên tỷ lệ lỗi parse. Retry 10 lần chỉ che triệu chứng và làm tăng cost/latency."
+    },
+    {
+      "id": "eval-031",
+      "sub": "Hallucination & faithfulness",
+      "level": 2,
+      "type": "multi",
+      "trap": false,
+      "q": "Những cách nào là hợp lý để **đo hallucination/faithfulness** của câu trả lời RAG? (chọn tất cả)",
+      "options": [
+        "Dùng model NLI kiểm tra từng câu/claim của câu trả lời có được context entail hay không",
+        "Perplexity của câu trả lời thấp nghĩa là câu trả lời trung thực với context",
+        "Sample nhiều câu trả lời và đo độ nhất quán giữa chúng (SelfCheckGPT) khi không có nguồn",
+        "BLEU giữa câu trả lời và context càng cao thì câu trả lời càng ít hallucination",
+        "Tách câu trả lời thành claim nguyên tử, xác minh từng claim; điểm = claim được hỗ trợ / tổng claim"
+      ],
+      "answer": [
+        0,
+        2,
+        4
+      ],
+      "explain": "Faithfulness (groundedness) hỏi: mọi điều câu trả lời khẳng định có được nguồn hỗ trợ không. Cách phổ biến là claim decomposition + verification bằng LLM hoặc NLI. RAGAS faithfulness = số claim được context hỗ trợ / tổng số claim (0–1). NLI-based kiểm tra quan hệ entailment/contradiction giữa context (premise) và claim (hypothesis). Khi không có nguồn, SelfCheckGPT dựa trên trực giác: điều model thật sự “biết” thì nhất quán giữa các lần sample, còn điều bịa ra thì dao động. Perplexity thấp chỉ cho thấy văn bản trôi chảy, và hallucination thường rất trôi chảy. BLEU với context đo việc chép chữ: câu trả lời paraphrase đúng bị phạt, còn câu chép nhưng ghép sai vẫn điểm cao."
+    },
+    {
+      "id": "eval-032",
+      "sub": "RAGAS metrics",
+      "level": 3,
+      "type": "single",
+      "trap": true,
+      "q": "Trong RAGAS, một câu trả lời đạt **answer relevancy = 0.95** nhưng **faithfulness = 0.40**. Diễn giải nào đúng?",
+      "options": [
+        "Câu trả lời vừa đúng trọng tâm vừa đúng sự thật. Faithfulness thấp chỉ vì retriever lấy thiếu context",
+        "Answer relevancy cao chứng tỏ câu trả lời khớp với ground truth, nên có thể bỏ qua faithfulness",
+        "Hai metric mâu thuẫn nhau, nên chắc chắn một trong hai đã bị tính sai và cần chạy lại pipeline",
+        "Câu trả lời bám đúng ý câu hỏi, nhưng chỉ ~40% claim có căn cứ trong context: nguy cơ hallucination"
+      ],
+      "answer": 3,
+      "explain": "RAGAS answer relevancy (response relevancy) **không dùng ground truth** và **không đo tính đúng sự thật**. Nó cho LLM sinh vài câu hỏi ngược từ câu trả lời, rồi tính cosine similarity trung bình giữa embedding của các câu hỏi đó và câu hỏi gốc. Nó chỉ trả lời câu hỏi: câu trả lời có nhắm đúng vào câu hỏi không. Faithfulness = claim được context hỗ trợ / tổng số claim. 0.40 nghĩa là phần lớn nội dung không có căn cứ trong context. Đó có thể là hallucination, hoặc kiến thức nội tại của model không kiểm chứng được. Hai metric đo hai chiều khác nhau nên không mâu thuẫn. Nếu nghi retriever thiếu, xem context recall/precision (cần reference). Đừng mặc định câu trả lời là đúng."
+    },
+    {
+      "id": "eval-033",
+      "sub": "Langfuse data model",
+      "level": 2,
+      "type": "multi",
+      "trap": false,
+      "q": "Phát biểu nào về data model của **Langfuse** là **đúng**? (chọn tất cả)",
+      "options": [
+        "Session là một loại observation đặc biệt nằm bên trong trace, dùng để đo thời gian của phiên",
+        "Một trace đại diện cho một request/tương tác. Bên trong là các observation có thể lồng nhau (span, generation, event, …)",
+        "Generation là loại observation cho lời gọi model, ghi model, input/output, token usage và cost",
+        "Score chỉ đến được từ LLM-as-judge chạy trong Langfuse, không ghi được từ code qua SDK hay API",
+        "Một score gắn với đúng một trong: trace, observation, session, dataset run; kiểu numeric/categorical/boolean/text"
+      ],
+      "answer": [
+        1,
+        2,
+        4
+      ],
+      "explain": "Trong Langfuse, trace là một request hoặc thao tác (vd. một lượt hỏi–đáp). Observation là các bước bên trong và có thể lồng nhau. Các loại observation gồm span (đơn vị công việc có thời lượng), generation (lời gọi LLM kèm model, usage, cost), event (sự kiện rời rạc), và các loại mới hơn như agent, tool, retriever, embedding, evaluator, guardrail. Session **gom nhiều trace** có cùng sessionId (vd. một cuộc hội thoại nhiều lượt), nó không phải observation. Score tham chiếu đúng một trong Trace, Observation, Session hoặc DatasetRun. Trường `source` của score là API, EVAL hoặc ANNOTATION, nghĩa là score có thể ghi từ code qua SDK/API, từ LLM-as-a-judge evaluator, hoặc từ annotation thủ công. Đây là nền để gắn feedback người dùng và golden-label score vào cùng trace."
+    },
+    {
+      "id": "eval-034",
+      "sub": "Langfuse prompt management",
+      "level": 2,
+      "type": "single",
+      "trap": true,
+      "q": "Code dùng Langfuse Prompt Management gọi `langfuse.get_prompt(\"support-agent\")`, không truyền label hay version. Bản v7 vừa được gắn label `production` và gây lỗi. Cách rollback nhanh nhất, đúng với cơ chế của Langfuse?",
+      "options": [
+        "Xoá v7 khỏi Langfuse, vì `get_prompt` mặc định luôn lấy version mới nhất (label `latest`)",
+        "Sửa code để hard-code nội dung prompt v6, rồi deploy lại ứng dụng qua pipeline CI/CD",
+        "Gắn lại label `production` cho v6; không cần deploy, có hiệu lực sau chu kỳ cache của SDK",
+        "Tạo v8 có nội dung giống v6, vì Langfuse không cho phép di chuyển label giữa các version đã tạo"
+      ],
+      "answer": 2,
+      "explain": "Langfuse tự đánh số version và cho gắn label. Hai label đặc biệt: `latest` luôn trỏ version mới nhất, `production` là bản được phục vụ **mặc định** khi gọi `get_prompt` không truyền label/version. Rollback chính là chuyển label `production` về version cũ, không cần deploy code. Đó là lợi ích lớn nhất của việc tách prompt khỏi code. Bẫy là phương án xoá v7: mặc định là `production` chứ không phải `latest`. SDK cache prompt client-side với TTL mặc định 60 giây theo cơ chế stale-while-revalidate, nên thay đổi lan tới các instance sau tối đa khoảng một chu kỳ cache. Nên truyền `fallback` prompt khi gọi để chống trường hợp cache trống mà Langfuse API không truy cập được. Label còn dùng cho staging, A/B (prod-a/prod-b) và tenant."
+    },
+    {
+      "id": "eval-035",
+      "sub": "Langfuse datasets & experiments",
+      "level": 2,
+      "type": "single",
+      "trap": false,
+      "q": "Bạn muốn biến lỗi production thành regression test bằng Langfuse. Quy trình nào khớp với data model **Datasets/Experiments** của Langfuse?",
+      "options": [
+        "Thêm trace lỗi làm dataset item có expected_output, chạy experiment theo từng version, chấm score và so sánh run",
+        "Export trace ra CSV rồi chạy Pytest offline, vì dataset của Langfuse chỉ lưu input chứ không lưu expected output",
+        "Tạo một session mới cho mỗi lỗi, và Langfuse sẽ tự sinh expected output từ completion cũ của trace đó",
+        "Gắn tag `regression` lên trace, mỗi lần deploy Langfuse tự replay toàn bộ traffic có tag đó với model mới"
+      ],
+      "answer": 0,
+      "explain": "Dataset trong Langfuse là tập item, mỗi item có input, expected_output và metadata (đều tuỳ chọn). Item có thể liên kết ngược tới trace hoặc observation nguồn ở production. Workflow được tài liệu khuyến nghị: chọn các trace production làm sai, đưa vào dataset, và để chuyên gia sửa expected output. Experiment (dataset run) chạy app trên từng item. Mỗi lần chạy tạo một trace gắn với run, sau đó evaluator (rule-based hoặc LLM-as-judge) ghi score, và UI cho so sánh các run giữa các version prompt/model. Langfuse không tự sinh expected output hay tự replay traffic khi deploy. Việc kích hoạt run nằm trong CI của bạn (vd. job GitLab CI gọi SDK chạy experiment rồi gate theo score)."
+    },
+    {
+      "id": "eval-036",
+      "sub": "OpenTelemetry GenAI",
+      "level": 3,
+      "type": "multi",
+      "trap": true,
+      "q": "Về **OpenTelemetry GenAI semantic conventions** cho span gọi LLM, phát biểu nào **đúng**? (chọn tất cả)",
+      "options": [
+        "Nội dung prompt/completion (vd. `gen_ai.input.messages`) được ghi mặc định vào mọi span để tiện debug",
+        "Thuộc tính token usage là `gen_ai.usage.input_tokens` và `gen_ai.usage.output_tokens`",
+        "Các convention này đã ở trạng thái Stable từ lâu, nên tên attribute được cam kết không thay đổi",
+        "Dùng chuẩn OTel giúp gửi trace tới backend nhận OTLP (vd. Langfuse) mà không bị khoá vào SDK của một vendor",
+        "Tên span khuyến nghị có dạng `{gen_ai.operation.name} {gen_ai.request.model}`, ví dụ `chat gpt-4o-mini`"
+      ],
+      "answer": [
+        1,
+        3,
+        4
+      ],
+      "explain": "GenAI semantic conventions định nghĩa các attribute chuẩn: `gen_ai.operation.name` (chat, …), `gen_ai.request.model`, `gen_ai.provider.name` (thay cho `gen_ai.system` cũ), `gen_ai.usage.input_tokens`/`output_tokens`. Tên span khuyến nghị là `{operation} {model}`. Chuẩn này vẫn ở trạng thái **Development**, và tên attribute đã từng đổi (system → provider.name), nên cần ghim phiên bản instrumentation. Nội dung message là **opt-in** vì có thể chứa PII hoặc dữ liệu nhạy cảm. Bật nó lên đồng nghĩa với việc phải có chính sách redact/mask và retention. Lợi ích chính của OTel là trung lập vendor: Langfuse có endpoint OTLP nên nhận được span từ instrumentation chuẩn, có thể song song với backend APM khác."
+    },
+    {
+      "id": "eval-037",
+      "sub": "Trace sampling & PII",
+      "level": 3,
+      "type": "single",
+      "trap": false,
+      "q": "Hệ thống có 5 triệu trace/ngày và chi phí lưu observability quá cao. Yêu cầu: giữ **100%** trace lỗi, trace có latency > p99 và trace bị user thumbs-down, phần còn lại giữ khoảng 5%. Chiến lược sampling phù hợp?",
+      "options": [
+        "Head-based sampling 5% ngay lúc tạo trace, vì quyết định càng sớm thì càng rẻ và càng đơn giản để vận hành",
+        "Tail-based: đợi trace hoàn tất rồi giữ theo thuộc tính (lỗi, chậm, feedback) cộng 5% ngẫu nhiên",
+        "Không sample, mà giảm chi phí bằng cách ngừng ghi token usage và cost trên mọi generation",
+        "Sample 5% theo hash của user_id, để toàn bộ trace của cùng một user luôn được giữ lại đầy đủ"
+      ],
+      "answer": 1,
+      "explain": "Head-based sampling quyết định khi trace bắt đầu, lúc đó chưa biết trace có lỗi hay chậm không. Vì vậy nó không thể bảo đảm giữ 100% trace lỗi/chậm. Tail-based sampling quyết định sau khi trace hoàn tất, dựa trên thuộc tính, nên đáp ứng được yêu cầu. Đổi lại, nó tốn bộ nhớ buffer và cần collector xử lý tập trung. Feedback người dùng thường đến sau vài phút, nên cách thực tế là luôn giữ metadata nhẹ (trace_id, latency, cost, model) cho mọi request và chỉ giữ payload đầy đủ khi trace được chọn. Hoặc ghi score feedback riêng rồi giữ lại trace theo nó. Bỏ token usage làm mất khả năng theo dõi cost. Sample theo user không đáp ứng được yêu cầu về lỗi. Song song đó, mask/redact PII trước khi export và đặt retention phù hợp."
+    },
+    {
+      "id": "eval-038",
+      "sub": "Latency percentile",
+      "level": 1,
+      "type": "numeric",
+      "trap": true,
+      "q": "20 request có latency (ms), đã sắp xếp:\n\n`120, 130, 135, 140, 150, 155, 160, 170, 180, 190, 200, 210, 220, 240, 260, 300, 350, 420, 900, 2500`\n\nTính **p95** theo phương pháp **nearest-rank** (rank = ⌈0.95·n⌉, lấy giá trị ở vị trí đó). Đơn vị ms.",
+      "answer": 900,
+      "tolerance": 0,
+      "unit": "ms",
+      "explain": "n = 20, rank = ⌈0.95·20⌉ = ⌈19⌉ = 19. Giá trị thứ 19 là 900 ms. So sánh: mean = 356.5 ms, median = 195 ms. Mean bị kéo lên bởi một outlier 2500 ms nhưng vẫn không cho biết đuôi phân phối tệ đến đâu. Đó là lý do SLO latency dùng percentile (p50 cho trải nghiệm điển hình, p95/p99 cho đuôi). Bẫy: các công cụ khác nhau dùng định nghĩa percentile khác nhau. `numpy.percentile` mặc định nội suy tuyến tính sẽ ra 900 + 0.05·(2500 − 900) = 980 ms. Vì vậy báo cáo phải ghi rõ phương pháp. Với n = 20, p95 rất nhiễu vì chỉ dựa trên 1–2 điểm. Cần đủ mẫu thì percentile đuôi mới đáng tin."
+    },
+    {
+      "id": "eval-039",
+      "sub": "Latency percentile aggregation",
+      "level": 3,
+      "type": "single",
+      "trap": true,
+      "q": "4 replica báo p95 latency lần lượt là 400, 450, 500 và 2000 ms. Mỗi replica nhận lượng traffic khác nhau. Phát biểu nào đúng về **p95 toàn hệ thống**?",
+      "options": [
+        "p95 toàn hệ thống bằng trung bình 4 giá trị, tức 837.5 ms, vì các replica cùng phục vụ một service",
+        "p95 toàn hệ thống bằng giá trị lớn nhất, tức 2000 ms, vì percentile luôn lấy theo replica tệ nhất",
+        "p95 toàn hệ thống bằng trung vị của 4 giá trị, tức 475 ms, vì trung vị bền vững với outlier",
+        "Không suy ra chính xác được: percentile không trung bình được, phải gộp raw data hoặc histogram"
+      ],
+      "answer": 3,
+      "explain": "Percentile là thống kê thứ tự, không có tính cộng. p95 của hợp các tập không phải là hàm của các p95 thành phần, mà phụ thuộc toàn bộ phân phối và lượng traffic mỗi replica. Ví dụ: replica 2000 ms chỉ nhận 1% traffic thì p95 toàn cục có thể gần 500 ms. Nếu nó nhận 40% traffic thì p95 toàn cục có thể trên 1000 ms. Cách đúng: xuất histogram có bucket cố định (vd. Prometheus histogram) hoặc sketch có thể merge (t-digest, HDR, DDSketch), gộp lại rồi tính percentile. Trung bình các percentile là lỗi phổ biến trên dashboard. Trung bình theo thời gian của p95 từng phút cũng sai tương tự. Với LLM, nên tách TTFT và tổng latency (phụ thuộc số output token), vì gộp chung che mất nguyên nhân."
+    },
+    {
+      "id": "eval-040",
+      "sub": "Model cascade cost",
+      "level": 2,
+      "type": "numeric",
+      "trap": true,
+      "q": "Model cascade: **mọi** request đi qua model rẻ trước ($0.002/request). Nếu confidence check không đạt (30% request), request được **escalate** sang model đắt ($0.03/request). Model đắt chỉ chạy khi escalate. Bỏ qua chi phí của bước confidence check. Tính chi phí kỳ vọng cho **1000 request** (USD), làm tròn 2 chữ số thập phân.",
+      "answer": 11.0,
+      "tolerance": 0.01,
+      "unit": "USD",
+      "explain": "Chi phí kỳ vọng mỗi request = chi phí model rẻ (luôn trả) + P(escalate)·chi phí model đắt = 0.002 + 0.3·0.03 = 0.002 + 0.009 = 0.011 USD. Với 1000 request: $11.00. Gọi thẳng model đắt cho mọi request thì tốn $30.00, tức cascade tiết kiệm khoảng 63%. Bẫy: tính 0.7·0.002 + 0.3·0.03 = $10.40, quên rằng request bị escalate **đã trả** tiền model rẻ. Latency cũng tương tự: request escalate phải chịu tổng latency của cả hai model, nên p95 có thể tăng. Router phân loại trước (không chạy model rẻ cho request khó) tránh được chi phí kép, nhưng phụ thuộc độ chính xác của router. Phải đo chất lượng cascade trên golden set, vì confidence check sai thì chất lượng tụt."
+    },
+    {
+      "id": "eval-041",
+      "sub": "Provider prompt caching",
+      "level": 3,
+      "type": "numeric",
+      "trap": false,
+      "q": "Mỗi request gồm system prompt cố định 8.000 token, phần user 500 token và output 300 token. Giá: input $3/1M token, output $15/1M token. Với prompt caching: lần **ghi** cache tính 1.25× giá input, lần **đọc** cache tính 0.1× giá input. 100 request liên tiếp trong TTL: request đầu ghi cache 8.000 token, 99 request sau đọc cache. Phần user và output tính giá thường. Tính **% chi phí tiết kiệm** so với không cache. Làm tròn 2 chữ số thập phân.",
+      "answer": 71.08,
+      "tolerance": 0.05,
+      "unit": "%",
+      "explain": "Không cache: input = 100·8.500·3/1M = $2.55, output = 100·300·15/1M = $0.45, tổng $3.00. Có cache: request đầu ghi 8.000·3.75/1M = $0.03. 99 request đọc: 99·8.000·0.3/1M = $0.2376. Phần user: 100·500·3/1M = $0.15. Output vẫn $0.45. Tổng = 0.03 + 0.2376 + 0.15 + 0.45 = $0.8676. Tiết kiệm = 1 − 0.8676/3.00 ≈ 71.08%. Nhận xét: output không được giảm, nên tiết kiệm bị chặn bởi tỷ trọng output. Cache chỉ hit khi **tiền tố** giống hệt, nên phần tĩnh (system prompt, tool definitions, few-shot) phải đặt trước, phần động (user, timestamp) đặt sau. Prompt caching còn giảm TTFT vì không phải prefill lại tiền tố."
+    },
+    {
+      "id": "eval-042",
+      "sub": "Retry & backoff",
+      "level": 2,
+      "type": "numeric",
+      "trap": false,
+      "q": "Client retry tối đa 5 lần khi gặp 429/5xx. Lần retry thứ i (i = 0..4) chờ theo **full jitter**: sleep ~ Uniform(0, min(cap, base·2^i)), với base = 0.5 s, cap = 8 s. Tính **tổng thời gian chờ kỳ vọng** nếu cả 5 lần retry đều xảy ra (giây, làm tròn 2 chữ số thập phân).",
+      "answer": 7.75,
+      "tolerance": 0.01,
+      "unit": "giây",
+      "explain": "Trần thời gian chờ từng lần: min(8, 0.5·2^i) = 0.5, 1, 2, 4, 8 giây. Tổng = 15.5 s, cũng là tổng thời gian chờ nếu không có jitter. Kỳ vọng của Uniform(0, x) là x/2, nên tổng kỳ vọng = 15.5/2 = 7.75 s. Jitter phân tán các lần retry của nhiều client theo thời gian, tránh thundering herd (mọi client cùng retry đúng một thời điểm sau sự cố, làm provider quá tải tiếp). Thực hành thêm: tôn trọng header `Retry-After` nếu có, chỉ retry lỗi tạm thời (429, 5xx, timeout, không retry 400/401), đặt deadline tổng, và kết hợp circuit breaker cùng fallback provider khi lỗi kéo dài."
+    },
+    {
+      "id": "eval-043",
+      "sub": "Routing, fallback & circuit breaker",
+      "level": 2,
+      "type": "multi",
+      "trap": false,
+      "q": "Về độ tin cậy khi gọi nhiều LLM provider, phát biểu nào **đúng**? (chọn tất cả)",
+      "options": [
+        "Nhận 429 kèm header `Retry-After` thì nên bỏ qua header và retry ngay để giảm latency cho người dùng",
+        "Retry với exponential backoff + jitter cho lỗi tạm thời (429, 5xx, timeout). Không retry lỗi 400/401 do request sai hoặc thiếu quyền",
+        "Jitter làm tăng hiện tượng thundering herd, vì các client retry vào những thời điểm ngẫu nhiên khó dự đoán",
+        "Circuit breaker có 3 trạng thái: closed, open (fail-fast hoặc fallback), half-open (thử vài request)",
+        "Fallback sang provider hoặc model khác cần được eval trước trên golden set, vì cùng prompt có thể cho chất lượng và format khác"
+      ],
+      "answer": [
+        1,
+        3,
+        4
+      ],
+      "explain": "Retry chỉ có ý nghĩa với lỗi tạm thời. Lỗi 400 (request sai, vượt context) hay 401/403 thì retry bao nhiêu cũng vô ích. `Retry-After` là tín hiệu rate limit của provider, nên phải tôn trọng. Bỏ qua nó dễ bị chặn lâu hơn. Jitter **giảm** thundering herd vì nó phân tán thời điểm retry. Circuit breaker ngăn việc tiếp tục gọi provider đang sập: sau ngưỡng lỗi thì chuyển sang open, fail-fast hoặc chuyển sang fallback. Hết thời gian chờ thì sang half-open để thử, thành công thì về closed. Fallback giữa các provider không miễn phí về chất lượng: tokenizer, độ dài context, format tool-calling và hành vi với cùng prompt đều khác. Vì vậy prompt cho từng provider nên được version riêng và chạy regression riêng. Theo dõi trên observability: tỷ lệ fallback, lỗi theo provider, và cost theo route."
+    },
+    {
+      "id": "eval-044",
+      "sub": "Canary & shadow deployment",
+      "level": 1,
+      "type": "single",
+      "trap": false,
+      "q": "Bạn muốn thử model mới trên traffic thật nhưng **không để người dùng thấy** output của nó, chỉ để so latency, cost và chất lượng (chấm bằng judge) với model hiện tại. Đó là chiến lược nào?",
+      "options": [
+        "Canary release 5%: chuyển 5% người dùng sang model mới và theo dõi metric của nhóm đó",
+        "Blue-green: chuyển toàn bộ traffic sang môi trường mới, giữ môi trường cũ để rollback nhanh",
+        "Shadow (dark launch): gửi bản sao request tới model mới, chỉ log; user vẫn nhận output cũ",
+        "A/B test 50/50 với primary metric là CSAT, ngẫu nhiên hoá theo người dùng trong hai tuần"
+      ],
+      "answer": 2,
+      "explain": "Shadow deployment gửi bản sao request tới hệ thống mới và chỉ ghi kết quả. Người dùng không bị ảnh hưởng, nên đây là cách an toàn để đo latency, cost, tỷ lệ lỗi và chất lượng (judge offline trên cặp output cũ/mới) trên phân phối thật. Hạn chế: chi phí gọi model tăng gấp đôi trên phần traffic được shadow. Không đo được phản ứng người dùng. Phải tắt side effect (tool call ghi dữ liệu, gửi email) ở nhánh shadow. Canary và A/B đều cho người dùng thật thấy output mới: canary để giảm rủi ro rollout, A/B để đo tác động lên KPI. Blue-green là cơ chế chuyển đổi toàn phần để rollback nhanh. Lộ trình hay dùng: offline eval → shadow → canary → A/B/rollout."
+    },
+    {
+      "id": "eval-045",
+      "sub": "SLO & error budget",
+      "level": 1,
+      "type": "numeric",
+      "trap": false,
+      "q": "Dịch vụ LLM gateway có SLO availability **99.5%** trong cửa sổ 30 ngày. Error budget tương ứng bao nhiêu **phút** downtime (hoặc tương đương)? Làm tròn đến số nguyên.",
+      "answer": 216,
+      "tolerance": 0.5,
+      "unit": "phút",
+      "explain": "Số phút trong 30 ngày = 30·24·60 = 43.200. Error budget = (1 − 0.995)·43.200 = 0.005·43.200 = 216 phút, khoảng 3.6 giờ. SLI là chỉ số đo được (vd. tỷ lệ request thành công, tỷ lệ request có TTFT < 1 s). SLO là mục tiêu nội bộ cho SLI đó. SLA là cam kết hợp đồng với khách hàng, có chế tài, nên thường lỏng hơn SLO. Khi error budget sắp cạn, đội ưu tiên ổn định (dừng rollout rủi ro). Còn budget thì được phép thử nghiệm nhanh hơn. Với LLM, SLO nên gồm cả latency (p95 TTFT), không chỉ availability, và tính cả request bị fallback hoặc timeout."
+    }
+  ]
+}

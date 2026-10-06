@@ -1,0 +1,860 @@
+{
+  "id": "rag",
+  "name": "RAG, Retrieval & Vector DB",
+  "icon": "🔎",
+  "order": 4,
+  "notes": [
+    {
+      "title": "Kiến trúc RAG: naive → advanced → modular → agentic",
+      "md": "| Thế hệ | Đặc điểm | Thành phần điển hình |\n|---|---|---|\n| Naive | index → retrieve top-k → stuff vào prompt → generate | chunk cố định, 1 dense retriever |\n| Advanced | thêm pre-retrieval & post-retrieval | query rewrite/HyDE, hybrid search, rerank, compression |\n| Modular | các khối thay thế được, có routing/fusion | router, nhiều retriever, RRF, memory, module eval |\n| Agentic | LLM/agent **quyết định động**: có retrieve không, dùng tool nào, lặp lại không | router, Self-RAG, CRAG, iterative/multi-hop, web search, tool calling |\n\n- Pipeline offline: **load → parse → clean → chunk → enrich metadata → embed → index**. Online: **query transform → retrieve → fuse → rerank → context build → generate → cite**.\n- Câu hỏi phỏng vấn hay gặp: *Khi nào KHÔNG cần RAG?* (kiến thức ổn định, nhỏ, vừa context → long-context/prompt caching hoặc fine-tune cho style/format); *RAG vs fine-tune?* (RAG cho kiến thức thay đổi/cần trích dẫn/ACL; fine-tune cho hành vi, format, ngôn ngữ domain).\n- Failure modes kinh điển: thiếu nội dung trong corpus, retrieve trượt (top-k không chứa đáp án), có nhưng bị cắt khỏi context (token budget), có trong context nhưng LLM không dùng (lost in the middle/nhiễu), format sai, câu trả lời không đầy đủ, hallucination ngoài context."
+    },
+    {
+      "title": "Ingestion & Chunking",
+      "md": "**Ingestion**: phát hiện trang scan → OCR; giữ bảng dạng Markdown/HTML (không cắt đôi bảng), bỏ header/footer/số trang lặp, chuẩn hóa unicode/khoảng trắng, dedup (exact: hash; near-dup: **MinHash+LSH / SimHash**), metadata (source, page, heading path, ngày hiệu lực, ACL, tenant).\n\n| Chiến lược | Ý tưởng | Lưu ý |\n|---|---|---|\n| Fixed-size + overlap | cắt theo token, cửa sổ trượt | đơn giản, có thể cắt giữa câu |\n| Recursive (LangChain) | thử separator `[\"\\n\\n\", \"\\n\", \" \", \"\"]` | `chunk_size` mặc định đo bằng **ký tự** (`len`), dùng `from_tiktoken_encoder` để đo token |\n| Semantic | cắt ở điểm embedding câu liên tiếp đổi mạnh | tốn embed, ngưỡng khó chỉnh |\n| Structure-aware | theo heading/section/Markdown/HTML | giữ heading path làm metadata |\n| Parent-child / small-to-big | search chunk con, trả chunk cha | parent ở docstore, dedup theo parent_id |\n| Sentence window | embed câu, trả câu ± w câu lân cận | LlamaIndex `SentenceWindowNodeParser` + `MetadataReplacementPostProcessor` |\n| Contextual retrieval | LLM viết 50–100 token ngữ cảnh prepend vào chunk trước khi embed **và** BM25 | Anthropic: giảm 35% (emb) / 49% (+BM25) / 67% (+rerank) lỗi retrieval top-20 |\n\n- Số chunk với cửa sổ trượt: stride `s = c − o`; số chunk = `ceil((L − c)/s) + 1` (với L > c). Cẩn thận off-by-one: `ceil(L/s)` có thể dư 1 chunk nằm trọn trong chunk trước.\n- Chunk to: recall tài liệu ↑ nhưng embedding bị pha loãng, tốn token, có thể **vượt max_seq_length của model → bị truncate âm thầm**. Chunk nhỏ: chính xác nhưng thiếu ngữ cảnh → dùng small-to-big."
+    },
+    {
+      "title": "Embeddings",
+      "md": "- **Bi-encoder**: encode query và doc độc lập → doc tính trước được → ANN. Cross-encoder thì không.\n- Độ đo: nếu ‖v‖ = 1 thì `dot = cosine` và `‖a − b‖² = 2 − 2·cos` ⇒ **cả 3 cho cùng thứ hạng**. Vector chưa chuẩn hóa: dot thiên vị norm lớn.\n- Mặc định cần nhớ: Chroma `hnsw:space = l2`; Qdrant `Cosine` tự chuẩn hóa vector khi upload; FAISS `IndexFlatIP` chỉ là cosine khi bạn tự `normalize_L2`.\n- **Asymmetric prefix**: E5 `query: ` / `passage: `; BGE thêm instruction cho query; Nomic `search_query: ` / `search_document: `. Quên prefix → recall tụt.\n- **Matryoshka (MRL)**: thông tin dồn vào các chiều ĐẦU; cắt lấy d chiều đầu rồi **chuẩn hóa lại L2** (OpenAI `text-embedding-3-*` có tham số `dimensions`).\n- Bộ nhớ: `N × d × bytes` (float32 = 4, float16 = 2, int8 = 1, binary = 1/8). Ví dụ 10M × 1536 × 4 = 61,44 GB (≈ 57,2 GiB).\n- **Fine-tune**: MultipleNegativesRankingLoss/InfoNCE (in-batch negatives → batch lớn tốt), hard negatives từ BM25/model cũ nhưng coi chừng **false negatives** (lọc bằng cross-encoder, bỏ vài rank đầu).\n- **MTEB**: xem tab Retrieval (nDCG@10; bản tiếng Anh gốc dựa trên các dataset BEIR), đúng ngôn ngữ; luôn đánh giá lại trên dữ liệu domain.\n- Đổi model ⇒ **re-index toàn bộ** (không gian vector khác nhau dù cùng dimension). Cache key = `model_id + version + config (prefix, dims, normalize) + hash(text)`."
+    },
+    {
+      "title": "Sparse retrieval: TF-IDF, BM25, SPLADE",
+      "md": "**BM25** (term t, doc D):\n\n`score = IDF(t) · tf·(k1+1) / (tf + k1·(1 − b + b·|D|/avgdl))`\n\n- Lucene IDF: `IDF = ln(1 + (N − n + 0.5)/(n + 0.5))` (luôn dương; IDF Robertson cổ điển có thể âm khi n > N/2).\n- Mặc định Lucene/Elasticsearch: **k1 = 1.2, b = 0.75**. Lucene 8+ bỏ hệ số (k1+1) ở tử (không đổi thứ hạng).\n- **k1**: độ bão hòa tf (k1 = 0 → chỉ còn có/không có term). **b**: chuẩn hóa độ dài (b = 0 tắt, b = 1 đầy đủ). Doc dài hơn avgdl bị phạt.\n- tf tăng → điểm tăng nhưng **bão hòa** (tiệm cận IDF·(k1+1)), khác TF-IDF tuyến tính.\n- Ví dụ: IDF = 2, tf = 3, dl = 2·avgdl → 2·6,6/5,1 ≈ 2,588; nếu dl = avgdl → 3,143.\n- **SPLADE**: learned sparse — dùng MLM head của BERT, trọng số `log(1 + ReLU(logit))` + max pooling trên vocabulary, có **term expansion**, vẫn chạy trên inverted index (Qdrant sparse vectors, ES `sparse_vector`/ELSER tương tự ý tưởng).\n- Sparse mạnh với: mã sản phẩm, số điều luật, tên riêng, từ hiếm, OOV với dense model."
+    },
+    {
+      "title": "Hybrid search & Fusion",
+      "md": "| Cách | Công thức | Ưu/nhược |\n|---|---|---|\n| RRF | `score(d) = Σ_r 1/(k + rank_r(d))`, rank từ 1 | không cần thang điểm, robust; mất thông tin độ lớn điểm |\n| Min-max weighted | `α·norm(dense) + (1−α)·norm(sparse)` | chỉnh được α; nhạy outlier & kích thước tập ứng viên |\n| DBSF (Qdrant) | chuẩn hóa theo μ ± 3σ rồi cộng | giữ độ lớn điểm, cần phân phối ổn định |\n\n- Hằng số k: paper gốc (Cormack 2009) & **Elasticsearch `rank_constant` = 60**; `rank_window_size` mặc định = `size`. **Qdrant RRF mặc định k = 2** (tham số hóa từ v1.16, weighted RRF từ v1.17). k nhỏ → thưởng mạnh vị trí top của từng list.\n- Ví dụ k = 60: rank 1 & 2 → 1/61 + 1/62 ≈ 0,03252.\n- Không bao giờ cộng thẳng BM25 thô (0…∞) với cosine (−1…1).\n- Qdrant: Query API với `prefetch` (dense + sparse) + `query: {fusion: \"rrf\" | \"dbsf\"}`; prefetch lồng nhau cho multi-stage (vd BQ → rescore → ColBERT).\n- Elasticsearch 8.14+: `retriever: { rrf: { retrievers: [standard (BM25), knn] } }`; hoặc `linear` retriever với normalizer."
+    },
+    {
+      "title": "Reranking",
+      "md": "| Loại | Cách tính | Chi phí | Dùng ở đâu |\n|---|---|---|---|\n| Bi-encoder | cos(E(q), E(d)) | doc tính trước, ANN | first-stage, hàng triệu doc |\n| ColBERT (late interaction) | Σ_q max_d (q_i·d_j) — MaxSim | lưu vector cho MỌI token (ColBERTv2 nén residual) | first-stage/rerank, chính xác hơn bi-encoder |\n| Cross-encoder | 1 forward cho cặp (q, d), full attention | N forward/query | rerank top 50–200 |\n| LLM rerank | pointwise / pairwise O(N²) / listwise | đắt, chậm nhất | top 20–50, query khó |\n\n- **RankGPT listwise**: sliding window (vd window 20, step 10) đi từ cuối lên đầu để doc tốt nổi lên.\n- **Position bias**: LLM thiên vị thứ tự đầu vào → xáo trộn/nhiều lượt/đối xứng hóa khi pairwise.\n- Pointwise khó hiệu chuẩn điểm giữa các query; ngưỡng cắt (score threshold) phải tune trên dev set.\n- Latency budget: cross-encoder base trên GPU vài chục ms cho 50 cặp; LLM rerank có thể vài giây."
+    },
+    {
+      "title": "Query transformation",
+      "md": "- **Rewrite cho hội thoại**: condense lịch sử + câu cuối → câu hỏi độc lập (standalone) trước khi retrieve.\n- **Multi-query**: sinh n paraphrase → retrieve song song → hợp nhất (RRF/union + dedup). Tăng recall, tăng chi phí/latency.\n- **Decomposition**: tách câu multi-hop/so sánh thành sub-question, retrieve từng cái (có thể tuần tự khi câu sau phụ thuộc kết quả câu trước).\n- **Step-back** (Zheng et al., 2023): hỏi câu tổng quát hơn (nguyên lý/khái niệm) để lấy nền tảng.\n- **HyDE** (Gao et al., 2022): LLM viết tài liệu giả định → embed tài liệu đó → tìm doc thật (doc-doc similarity). Rủi ro: domain hiếm/thuật ngữ nội bộ LLM không biết → doc giả lệch hướng; tốn 1 lần gọi LLM.\n- **Self-query / metadata extraction**: LLM trích filter có cấu trúc (năm, phòng ban) từ câu hỏi → filter vector DB.\n- Routing: phân loại query → vector / SQL / graph / web / trả lời trực tiếp."
+    },
+    {
+      "title": "Vector index & quantization",
+      "md": "| Index | Ý tưởng | Tham số | Ghi chú |\n|---|---|---|---|\n| Flat | brute force, exact | — | ground truth để đo recall ANN |\n| IVF | k-means nlist cụm, chỉ quét nprobe cụm | nlist (~4√N–16√N), nprobe | cần train; số phép tính ≈ nlist + N·nprobe/nlist |\n| PQ | chia d thành m subvector, mỗi cái nbits | m, nbits | mã = m·nbits/8 byte/vector; ADC: query không nén, tra bảng |\n| IVF-PQ | IVF + PQ trên residual | nlist, nprobe, m | + 8 byte id/vector trong FAISS; refine bằng vector gốc |\n| HNSW | graph nhiều tầng | M, efConstruction, efSearch | Qdrant mặc định m = 16, ef_construct = 100; ef ≥ k |\n| ScaNN | anisotropic quantization + reorder | — | Google |\n\n- HNSW: ↑efSearch → recall ↑, latency ↑ (đổi lúc query); ↑M → RAM ↑, recall ↑ (rebuild); ↑efConstruction → build chậm, graph tốt hơn.\n- Quantization: **SQ int8 = 4×**, **binary = 32×** so với float32; dùng **oversampling + rescore** bằng vector gốc.\n- PQ ví dụ: 100M × (m = 48, nbits = 4) → 24 byte/vector → 2,4 GB (float32 768-d là 307,2 GB).\n- **Filtering**: post-filter → thiếu kết quả khi filter chặt; pre-filter ngây thơ trên HNSW → graph đứt, recall giảm. Qdrant: payload index (tạo TRƯỚC khi ingest) + filterable HNSW + query planner (cardinality thấp → dùng payload index + exact). Elasticsearch: `filter` trong `knn` là pre-filter, `post_filter` là post-filter."
+    },
+    {
+      "title": "So sánh Vector DB & GraphRAG",
+      "md": "| | FAISS | Qdrant | Chroma | Elasticsearch |\n|---|---|---|---|---|\n| Bản chất | thư viện in-process | vector DB (Rust) server | DB nhẹ, dev/prototype | search engine (Lucene) |\n| Filter metadata | hạn chế (IDSelector) | payload index mạnh | where filter | bool query đầy đủ |\n| Hybrid | tự làm | sparse + prefetch + RRF/DBSF | hạn chế | BM25 + kNN + RRF/linear retriever |\n| Điểm mạnh | tốc độ, GPU, nhiều loại index | filter, quantization, multitenancy | dễ dùng | full-text, aggregations, ops sẵn |\n\n**GraphRAG (Microsoft)**: LLM trích entity/relation/claim → graph → **Leiden** phân cộng đồng phân cấp → LLM viết **community summary**.\n- **Global search**: map-reduce trên community summaries → câu hỏi toàn cục (\"chủ đề chính của corpus\").\n- **Local search**: từ entity liên quan → hàng xóm, relationship, text unit.\n- Indexing rất tốn LLM call; graph tốt khi cần multi-hop, quan hệ, tổng hợp toàn cục; vector tốt cho tra cứu fact cục bộ.\n\n**Neo4j Cypher**: `MATCH (p:Person)-[:WORKS_AT]->(c:Company)-[:SUPPLIES*1..3]->(:Company {name:'Acme'}) RETURN DISTINCT p.name`. Chú ý **chiều mũi tên**, `*1..3` cho đường đi độ dài biến thiên, `DISTINCT` vì nhiều path. Neo4j cũng có vector index (`CREATE VECTOR INDEX ... OPTIONS {indexConfig: {...}}` với dimensions + similarity function, truy vấn qua `db.index.vector.queryNodes`) → kết hợp vector search để tìm entity khởi đầu rồi duyệt graph (GraphRAG kiểu local)."
+    },
+    {
+      "title": "Context optimization",
+      "md": "- **Lost in the Middle** (Liu et al., 2023): hiệu năng theo vị trí thông tin có dạng chữ U — tốt ở đầu/cuối, kém ở giữa. → ít chunk hơn, đặt chunk tốt nhất ở đầu và cuối (LangChain `LongContextReorder`).\n- **Token budget**: `window − max_output − system − history − question` rồi chia cho (chunk + header/metadata). Luôn **trừ phần output**.\n- **Compression**: lọc câu liên quan (LLMChainExtractor/EmbeddingsFilter), LongLLMLingua, tóm tắt; cẩn thận làm mất số liệu cần trích dẫn.\n- **Dedup context**: trùng parent, near-dup giữa các nguồn, overlap giữa chunk liền kề → gộp/merge chunk liền kề.\n- **Citation**: gắn id chunk (`[doc3#p12]`) trong prompt, yêu cầu trích dẫn; kiểm tra citation tồn tại thật (post-validation).\n- Prompt caching: đặt phần tĩnh (system, few-shot) ở đầu, phần động (chunks, question) ở cuối."
+    },
+    {
+      "title": "Evaluation: retrieval & RAG",
+      "md": "| Metric | Công thức | Ghi chú |\n|---|---|---|\n| Precision@k | #relevant trong top-k / k | |\n| Recall@k | #relevant trong top-k / tổng #relevant | cần biết tổng relevant |\n| Hit rate@k | 1 nếu có ≥ 1 relevant trong top-k | trung bình theo query |\n| MRR | trung bình 1/rank đầu tiên đúng (không có → 0) | chia cho TẤT CẢ query |\n| nDCG@k | DCG = Σ rel_i / log2(i+1); chia IDCG | graded relevance; biến thể (2^rel − 1) |\n\n- Ví dụ MRR: rank 1, 3, –, 2, 5 → (1 + 1/3 + 0 + 1/2 + 1/5)/5 ≈ 0,4067.\n- **RAGAS**: Faithfulness = #claim trong answer được context hỗ trợ / #claim (không cần reference); Answer Relevancy = mean cos(câu hỏi sinh ngược từ answer, câu hỏi gốc); Context Precision@K = Σ(Precision@k·v_k) / #relevant trong top K (thưởng khi chunk relevant nằm ở đầu danh sách); Context Recall = #claim của reference được context hỗ trợ / #claim reference (CẦN reference).\n- Chẩn đoán: faithfulness cao + context recall thấp → lỗi retrieval; context recall cao + faithfulness thấp → lỗi generation/hallucination; context precision thấp → nhiễu, cần rerank/giảm k.\n- Bộ test: golden set (query, doc relevant, answer), synthetic test từ LLM nhưng phải review; theo dõi theo slice (loại query, ngôn ngữ, tenant)."
+    },
+    {
+      "title": "Agentic RAG, web ingestion, multi-tenant & cache",
+      "md": "- **Self-RAG**: LM được train sinh reflection token `Retrieve`, `ISREL`, `ISSUP`, `ISUSE` → tự quyết retrieve và tự phê bình.\n- **CRAG**: retrieval evaluator nhẹ (T5) → Correct (refine: decompose-then-recompose), Incorrect (bỏ, web search), Ambiguous (kết hợp).\n- **Adaptive/Router**: phân loại độ khó/loại query → no-retrieval / single-shot / iterative. LangGraph: conditional edges, state, max iterations, grade documents → rewrite query → retrieve lại.\n- Luôn có điều kiện dừng & budget (số vòng, token, thời gian); log trace để debug.\n- **Web ingestion**: robots.txt + rate limit, sitemap `lastmod`, render JS (Playwright) cho SPA, boilerplate removal (trafilatura/readability), canonical URL + bỏ `utm_*`, ETag/Last-Modified + content hash cho incremental, lưu `fetched_at` để ưu tiên độ mới.\n- **Multi-tenant & ACL**: filter tenant/ACL ở tầng retrieval từ identity phía server (không tin prompt); Qdrant `is_tenant` + `payload_m`; cập nhật payload ACL ngay khi quyền đổi (không cần re-embed); cache key phải có tenant/ACL.\n- **Cache**: embedding cache (key gồm model+version+config+hash), result cache, semantic cache (ngưỡng similarity quá thấp → trả nhầm câu trả lời cho câu hỏi khác nghĩa, vd khác mỗi con số/phủ định)."
+    }
+  ],
+  "questions": [
+    {
+      "id": "rag-001",
+      "sub": "Kiến trúc RAG",
+      "level": 1,
+      "type": "single",
+      "trap": false,
+      "q": "Điểm khác biệt **cốt lõi** giữa Agentic RAG và Advanced RAG là gì?",
+      "options": [
+        "Advanced RAG có bước reranking, còn Agentic RAG bỏ reranking để giảm latency vì agent tự chọn được tài liệu đúng ngay từ đầu",
+        "LLM/agent quyết định động: có retrieve không, dùng nguồn/tool nào, có lặp lại sau khi tự đánh giá; Advanced RAG là pipeline cố định",
+        "Agentic RAG bắt buộc dùng knowledge graph (vd Neo4j) thay cho vector index, còn Advanced RAG chỉ dùng vector index + BM25",
+        "Advanced RAG chỉ khác naive RAG ở LLM lớn hơn, còn Agentic RAG chạy nhiều LLM song song rồi majority vote để chọn câu trả lời cuối cùng"
+      ],
+      "answer": 1,
+      "explain": "Advanced RAG thêm các bước pre-retrieval (query rewrite, HyDE) và post-retrieval (rerank, compression) nhưng luồng vẫn **cố định**: query nào cũng đi qua cùng các bước. Agentic RAG đưa quyết định vào vòng lặp của LLM: router chọn nguồn (vector, SQL, graph, web), quyết định có cần retrieve không, chấm chất lượng tài liệu và retrieve lại nếu kém (Self-RAG, CRAG, iterative retrieval). Phương án 'bỏ reranking' sai: agentic vẫn có thể (và thường) dùng reranker. Phương án 'bắt buộc knowledge graph' sai: graph chỉ là một tool có thể có. Phương án 'chỉ dùng LLM lớn hơn/vote' nhầm Advanced RAG với việc đổi model và nhầm agentic với ensemble."
+    },
+    {
+      "id": "rag-002",
+      "sub": "Ingestion",
+      "level": 2,
+      "type": "multi",
+      "trap": false,
+      "q": "Bạn xây pipeline ingest các PDF báo cáo tài chính: nhiều bảng số liệu, một số trang là ảnh scan, mỗi trang có header/footer lặp lại. Chọn **tất cả** thực hành ĐÚNG.",
+      "options": [
+        "Phát hiện trang không có text layer (scan) để chạy OCR; trang có text layer thì extract trực tiếp để tránh lỗi OCR không cần thiết",
+        "Chuyển bảng sang Markdown/HTML giữ cấu trúc hàng–cột (có thể kèm summary của bảng để embed) và không cắt đôi một bảng giữa hai chunk",
+        "Loại bỏ header/footer/số trang lặp lại trước khi chunk để tránh nhiễu embedding và các chunk gần như trùng nhau",
+        "Flatten toàn bộ PDF thành một chuỗi text thuần và bỏ heading để embedding đồng nhất hơn giữa các chunk, giảm nhiễu định dạng",
+        "Lưu metadata (source, page, heading path, kỳ báo cáo) cùng chunk để filter theo kỳ và trích dẫn đúng trang"
+      ],
+      "answer": [
+        0,
+        1,
+        2,
+        4
+      ],
+      "explain": "OCR chọn lọc giúp tiết kiệm chi phí và tránh làm hỏng text đã có sẵn. Bảng là điểm chết của RAG: nếu parser trải bảng thành chuỗi số rời rạc hoặc chunker cắt đôi bảng, LLM không còn biết số nào thuộc cột/hàng nào — giữ Markdown/HTML và (tuỳ chọn) embed một summary của bảng nhưng trả về bảng gốc. Header/footer lặp lại làm mọi chunk có chung một đoạn text, kéo các embedding lại gần nhau và làm hỏng dedup. Metadata (kỳ báo cáo, trang) cho phép filter 'Q3/2024' chính xác và citation. Phương án 'flatten và bỏ heading' sai: heading path là ngữ cảnh quý (có thể prepend vào chunk), bỏ đi làm chunk mất nghĩa ('Doanh thu tăng 12%' — của mảng nào?)."
+    },
+    {
+      "id": "rag-003",
+      "sub": "Ingestion",
+      "level": 2,
+      "type": "single",
+      "trap": false,
+      "q": "Crawl wiki nội bộ thu được hàng nghìn trang **gần như giống nhau** (chỉ khác ngày cập nhật, breadcrumb, footer). Hậu quả là top-k bị chiếm bởi các bản sao. Cách dedup phù hợp nhất ở quy mô lớn?",
+      "options": [
+        "Băm SHA-256 toàn văn bản sau khi lowercase rồi xoá bản trùng hash — chuẩn, O(N) và không có false positive",
+        "Tính cosine giữa embedding của mọi cặp tài liệu (đã có sẵn từ bước embed) rồi xoá một bản trong cặp có cosine > 0.99",
+        "Không cần dedup ở ingestion vì cross-encoder reranker sẽ chấm các bản sao thấp hơn và tự đẩy chúng khỏi top-k",
+        "Chuẩn hoá text rồi dùng MinHash + LSH trên shingles (hoặc SimHash) để bắt near-duplicate theo ngưỡng Jaccard"
+      ],
+      "answer": 3,
+      "explain": "Hash mật mã (SHA-256), kể cả sau khi lowercase, chỉ bắt **trùng tuyệt đối**: khác một ký tự ngày cập nhật là hash khác hoàn toàn — đây là bẫy. So sánh embedding mọi cặp là O(N²), không khả thi với hàng triệu chunk (trừ khi dùng ANN, và ngưỡng 0.99 cũng không chắc bắt được). Reranker chấm từng cặp (query, doc) độc lập nên các bản sao nhận điểm gần như nhau và vẫn chiếm top. MinHash xấp xỉ độ tương đồng Jaccard trên tập shingle, LSH gom ứng viên vào bucket nên gần tuyến tính; SimHash là lựa chọn tương tự (khoảng cách Hamming). Ngoài ra nên dedup thêm ở bước build context (theo parent_id/near-dup) vì nhiều nguồn khác nhau vẫn có thể trùng."
+    },
+    {
+      "id": "rag-004",
+      "sub": "Chunking",
+      "level": 2,
+      "type": "single",
+      "trap": true,
+      "q": "Team dùng đoạn code sau và tin rằng mỗi chunk ≈ 512 token để vừa giới hạn 512 token của embedding model:\n\n```python\nfrom langchain_text_splitters import RecursiveCharacterTextSplitter\nsplitter = RecursiveCharacterTextSplitter(chunk_size=512, chunk_overlap=50)\nchunks = splitter.split_text(doc)\n```\n\nPhát biểu nào ĐÚNG?",
+      "options": [
+        "chunk_size mặc định đo bằng ký tự (length_function=len): ~512 ký tự ≈ 130 token tiếng Anh; đo token thì dùng from_tiktoken_encoder",
+        "chunk_size đo bằng token của tiktoken (cl100k_base) mặc định, nên mọi chunk luôn ≤ 512 token và không bao giờ bị embedding model truncate khi encode",
+        "chunk_size là số câu tối đa; splitter tách câu theo dấu chấm/xuống dòng rồi gom lại, còn overlap 50 nghĩa là lặp lại 50 câu",
+        "chunk_size đo bằng byte UTF-8 nên tiếng Việt có dấu (2–3 byte/ký tự) cho chunk ít ký tự hơn hẳn tiếng Anh cùng cấu hình"
+      ],
+      "answer": 0,
+      "explain": "RecursiveCharacterTextSplitter mặc định dùng `length_function=len` — tức **ký tự**, không phải token. 512 ký tự tiếng Anh chỉ khoảng ~130 token (≈4 ký tự/token), nên chunk nhỏ hơn nhiều so với dự định, mất ngữ cảnh và số vector tăng ~4 lần. Splitter thử lần lượt các separator `[\"\\n\\n\", \"\\n\", \" \", \"\"]` để cắt ở ranh giới tự nhiên, không phải tách theo câu. Muốn đo bằng token: `RecursiveCharacterTextSplitter.from_tiktoken_encoder(...)` hoặc `from_huggingface_tokenizer(tokenizer, ...)` với đúng tokenizer của embedding model. Phương án 'byte UTF-8' sai vì `len()` của Python đếm code point chứ không đếm byte. Ngược lại, nếu đo bằng token của một tokenizer KHÁC model embedding thì chunk vẫn có thể vượt max_seq_length và bị truncate âm thầm."
+    },
+    {
+      "id": "rag-005",
+      "sub": "Chunking",
+      "level": 1,
+      "type": "numeric",
+      "trap": true,
+      "q": "Một tài liệu dài **9.900 token** được chia bằng cửa sổ trượt: chunk_size = 512 token, overlap = 64 token, chunk đầu bắt đầu ở token 0, chunk cuối được phép ngắn hơn 512, và **không** tạo chunk nằm trọn bên trong chunk trước đó. Có bao nhiêu chunk? (số nguyên)",
+      "answer": 22,
+      "tolerance": 0,
+      "unit": "chunk",
+      "explain": "Stride s = 512 − 64 = 448. Chunk thứ i (i từ 0) bắt đầu ở 448·i và kết thúc ở 448·i + 512. Cần chunk cuối phủ tới token 9.900: 448·i + 512 ≥ 9.900 → i ≥ 9.388/448 ≈ 20,96 → i = 21. Vậy có i = 0…21 → **22 chunk** (công thức `ceil((L − c)/s) + 1`). Bẫy off-by-one: lấy `ceil(L/s) = ceil(9.900/448) = 23` sẽ tạo thêm chunk bắt đầu ở 9.856 — nằm trọn trong chunk 21 (9.408–9.920), tức chunk thừa, trùng lặp. Bẫy khác: bỏ qua overlap, `ceil(9.900/512) = 20`. Overlap làm số chunk (và chi phí embed/lưu trữ) tăng khoảng c/s = 512/448 ≈ 1,14 lần."
+    },
+    {
+      "id": "rag-006",
+      "sub": "Chunking",
+      "level": 1,
+      "type": "single",
+      "trap": false,
+      "q": "Giữ nguyên top-k = 5 và embedding model có max_seq_length = 512 token, bạn tăng chunk size từ 256 lên 2.048 token. Hệ quả nào **đúng nhất**?",
+      "options": [
+        "Embedding chính xác hơn vì mỗi vector mang nhiều ngữ cảnh hơn; nhược điểm duy nhất là index tốn thêm dung lượng lưu trữ",
+        "Số vector trong index tăng ~8 lần nên latency ANN tăng theo, trong khi recall gần như không đổi vì top-k vẫn giữ nguyên",
+        "Phần sau token thứ 512 bị truncate âm thầm khi embed; embedding bị pha loãng nhiều chủ đề và prompt tăng ~8 lần token",
+        "Không ảnh hưởng nhiều vì embedding model tự pooling/tóm tắt phần vượt 512 token thành một vector đại diện trước khi encode"
+      ],
+      "answer": 2,
+      "explain": "Hầu hết bi-encoder có max_seq_length (thường 512): phần vượt quá bị **cắt bỏ** mà không báo lỗi — nội dung ở 3/4 cuối chunk không hề được biểu diễn trong vector, nên query hỏi về phần đó sẽ trượt. Kể cả model hỗ trợ context dài, một vector cho 2.048 token phải 'trung bình hoá' nhiều ý → kém đặc hiệu. Top-5 chunk 2.048 token = ~10K token/prompt (gấp 8 lần), tăng chi phí và nhiễu (lost in the middle). Phương án 'số vector tăng 8 lần' ngược: chunk to hơn → **ít** vector hơn. Phương án 'model tự tóm tắt' sai: encoder không tóm tắt, chỉ truncate. Giải pháp thường dùng: chunk nhỏ để search + trả chunk cha (small-to-big)."
+    },
+    {
+      "id": "rag-007",
+      "sub": "Chunking",
+      "level": 2,
+      "type": "multi",
+      "trap": false,
+      "q": "Chọn **tất cả** phát biểu ĐÚNG về nhóm kỹ thuật small-to-big retrieval.",
+      "options": [
+        "Parent-child: embed và tìm kiếm trên chunk con nhỏ (khớp chính xác), nhưng trả về chunk cha lớn hơn cho LLM (đủ ngữ cảnh)",
+        "Sentence window (LlamaIndex): embed từng câu, lưu các câu lân cận trong metadata, rồi thay bằng 'cửa sổ' câu xung quanh khi đưa vào LLM",
+        "Auto-merging retriever gộp các chunk có embedding gần nhau thành một chunk mới, bất kể chúng đến từ tài liệu nào",
+        "Parent-child bắt buộc embed cả chunk cha lẫn chunk con vào cùng collection để tìm kiếm song song hai cấp",
+        "Khi nhiều chunk con cùng thuộc một cha được retrieve, cần dedup theo parent_id trước khi build prompt"
+      ],
+      "answer": [
+        0,
+        1,
+        4
+      ],
+      "explain": "Parent-child (LangChain ParentDocumentRetriever/MultiVectorRetriever): vector store chỉ chứa chunk con, chunk cha nằm trong docstore và được tra theo parent_id — không cần (và thường không nên) embed chunk cha, nên phương án 'bắt buộc embed cả hai cấp' sai. Sentence window: `SentenceWindowNodeParser` lưu `window` vào metadata, `MetadataReplacementPostProcessor` thay text node bằng window lúc build context. Auto-merging retriever gộp dựa trên **cấu trúc phân cấp** (nếu đủ tỉ lệ node con của cùng một node cha được retrieve thì thay bằng node cha), không gộp theo độ gần embedding giữa các tài liệu khác nhau. Dedup theo parent_id là lỗi thực chiến hay gặp: 3 chunk con cùng cha → cùng một đoạn cha bị lặp 3 lần trong prompt, đốt token và đẩy nguồn khác ra ngoài."
+    },
+    {
+      "id": "rag-008",
+      "sub": "Contextual retrieval",
+      "level": 2,
+      "type": "single",
+      "trap": false,
+      "q": "Kỹ thuật **Contextual Retrieval** do Anthropic công bố (2024) làm gì?",
+      "options": [
+        "Bỏ chunking, nhét toàn bộ tài liệu vào long-context model và dùng prompt caching để giảm chi phí cho mỗi câu hỏi lặp lại",
+        "LLM viết ~50–100 token ngữ cảnh cho từng chunk (dựa trên cả tài liệu), prepend trước khi embed và index BM25; dùng prompt caching",
+        "Ghép lịch sử hội thoại vào query trước khi embed để query mang ngữ cảnh, rồi dùng BM25 lọc lại kết quả dense theo từ khoá",
+        "Cho LLM đọc và chấm điểm relevance từng chunk ngay lúc truy vấn thay cho embedding, rồi cache điểm theo cặp (query, chunk) trong Redis để tái sử dụng"
+      ],
+      "answer": 1,
+      "explain": "Vấn đề: chunk 'Doanh thu tăng 3% so với quý trước' mất ngữ cảnh (công ty nào, quý nào). Contextual Retrieval cho LLM đọc cả tài liệu + chunk và viết 1–2 câu định vị chunk, prepend vào chunk rồi mới embed (Contextual Embeddings) và index BM25 (Contextual BM25). Vì tài liệu được gửi lặp lại cho mọi chunk của nó, prompt caching giảm mạnh chi phí. Theo bài công bố: giảm tỉ lệ retrieval thất bại (top-20) khoảng 35% với contextual embeddings, 49% khi thêm contextual BM25, và 67% khi thêm reranking. Phương án 'nhét toàn bộ tài liệu' là gợi ý riêng cho knowledge base nhỏ, không phải kỹ thuật này; 'ghép lịch sử hội thoại' là query rewriting; 'LLM chấm điểm lúc truy vấn' là LLM reranking."
+    },
+    {
+      "id": "rag-009",
+      "sub": "Embeddings & similarity",
+      "level": 2,
+      "type": "multi",
+      "trap": true,
+      "q": "Chọn **tất cả** phát biểu ĐÚNG về cosine, dot product và L2 trong vector search.",
+      "options": [
+        "Nếu mọi vector đã chuẩn hoá L2 (‖v‖ = 1) thì xếp hạng theo dot product, cosine và L2 distance là như nhau, vì ‖a − b‖² = 2 − 2·cos(a, b)",
+        "Với vector chưa chuẩn hoá, dot product ưu tiên vector có norm lớn nên thứ hạng có thể khác cosine",
+        "FAISS `IndexFlatIP` luôn cho kết quả giống cosine kể cả khi không chuẩn hoá vector trước khi add, vì index tự chuẩn hoá bên trong",
+        "Cosine similarity luôn bằng 1 − L2 distance với mọi cặp vector, nên chuyển qua lại giữa hai độ đo không cần chuẩn hoá",
+        "Chroma mặc định dùng khoảng cách `l2` (`hnsw:space`), muốn cosine phải cấu hình khi tạo collection"
+      ],
+      "answer": [
+        0,
+        1,
+        4
+      ],
+      "explain": "Với ‖a‖ = ‖b‖ = 1: ‖a − b‖² = ‖a‖² + ‖b‖² − 2a·b = 2 − 2cos ⇒ L2 nhỏ nhất ⇔ cos lớn nhất ⇔ dot lớn nhất, cả ba cho cùng thứ hạng. Khi chưa chuẩn hoá, dot = ‖a‖‖b‖cos nên vector norm lớn được ưu tiên — một số model (vd được train với dot) cố ý dùng điều này, nhưng trộn lẫn sẽ gây xếp hạng lạ. `IndexFlatIP` chỉ là inner product; muốn cosine phải gọi `faiss.normalize_L2` cho cả vector index lẫn query — quên chuẩn hoá query là bug kinh điển. Quan hệ đúng là ‖a − b‖² = 2 − 2cos (bình phương, và chỉ khi đã chuẩn hoá), không phải cos = 1 − L2. Chroma mặc định `l2`; Qdrant khi chọn `Cosine` sẽ tự chuẩn hoá vector lúc upload."
+    },
+    {
+      "id": "rag-010",
+      "sub": "Embeddings & similarity",
+      "level": 2,
+      "type": "single",
+      "trap": true,
+      "q": "Bạn dùng `intfloat/multilingual-e5-large` cho RAG tiếng Việt, encode cả query lẫn passage dưới dạng raw text, không thêm gì. Recall@10 thấp hơn hẳn số liệu benchmark. Nguyên nhân khả dĩ nhất?",
+      "options": [
+        "E5 được train với prefix bất đối xứng `query: ` / `passage: `; bỏ prefix làm embedding lệch khỏi phân phối lúc train",
+        "E5 chỉ tốt khi cắt vector về 256 chiều theo Matryoshka; dùng đủ 1.024 chiều thì nhiễu ở các chiều cuối làm giảm recall",
+        "multilingual-e5 chỉ train trên dữ liệu tiếng Anh; tiếng Việt được hỗ trợ gián tiếp qua dịch máy nên recall thấp là bình thường",
+        "E5 sinh vector không chuẩn hoá được (norm thay đổi theo độ dài input) nên bắt buộc dùng L2 distance thay vì cosine"
+      ],
+      "answer": 0,
+      "explain": "Nhiều embedding model là **asymmetric**: query ngắn và passage dài được phân biệt bằng prefix/instruction lúc train. E5 yêu cầu `query: ...` và `passage: ...` (với tác vụ đối xứng như paraphrase thì dùng `query: ` cho cả hai). Quên prefix không báo lỗi gì nhưng làm giảm chất lượng rõ rệt — lỗi 'im lặng' điển hình. Các model khác cũng có quy ước riêng: BGE thêm instruction cho query, Nomic dùng `search_query: `/`search_document: `. multilingual-e5 được train đa ngôn ngữ (gồm tiếng Việt); vector của nó chuẩn hoá được và thường dùng với cosine; E5 bản này không phải model Matryoshka. Bài học: đọc model card và đưa prefix vào cấu hình (và vào cache key)."
+    },
+    {
+      "id": "rag-011",
+      "sub": "Embeddings & similarity",
+      "level": 3,
+      "type": "single",
+      "trap": true,
+      "q": "Bạn dùng `text-embedding-3-large` (3.072 chiều, đã chuẩn hoá), tự cắt lấy **512 chiều đầu** để tiết kiệm bộ nhớ và lưu vào một index dùng **Dot product**. Thứ hạng kết quả hơi lạ so với khi dùng vector đầy đủ. Vấn đề và cách sửa đúng?",
+      "options": [
+        "Model không hỗ trợ cắt chiều; phải fit PCA trên toàn corpus về 512 chiều và áp cùng phép chiếu cho query thì mới giữ được thông tin",
+        "Phải lấy 512 chiều cuối vì Matryoshka Representation Learning dồn thông tin quan trọng nhất vào phần cuối của vector",
+        "Cắt chiều làm lệch positional encoding của model nên phải re-embed toàn bộ corpus bằng một model gốc có 512 chiều",
+        "Vector cắt không còn norm = 1 nên dot ≠ cosine; cần chuẩn hoá L2 lại (hoặc dùng Cosine), hoặc gọi API với dimensions=512"
+      ],
+      "answer": 3,
+      "explain": "text-embedding-3 được train theo Matryoshka Representation Learning: các chiều **đầu** mang nhiều thông tin nhất nên có thể cắt prefix. Nhưng vector cắt có norm < 1 và norm này khác nhau giữa các vector → dot product bị ảnh hưởng bởi norm, không còn tương đương cosine. Cách đúng: `v = v[:512]; v = v / ‖v‖`, hoặc truyền `dimensions=512` cho API (vector trả về đã chuẩn hoá), hoặc dùng Cosine distance (Qdrant tự chuẩn hoá khi upload). Lấy 512 chiều cuối là sai hướng (nhầm chiều thông tin). PCA không cần thiết với model MRL, và việc cắt vector (hậu xử lý trên output) không liên quan gì tới positional encoding hay tokenizer. Đây là bẫy vì hệ thống vẫn 'chạy' — chỉ chất lượng giảm âm thầm."
+    },
+    {
+      "id": "rag-012",
+      "sub": "Embeddings & similarity",
+      "level": 2,
+      "type": "numeric",
+      "trap": false,
+      "q": "Bạn chuyển embedding từ **3.072 chiều float32** sang **1.024 chiều** (cắt Matryoshka) và lưu bằng **scalar quantization int8**. Bộ nhớ cho vector thô giảm bao nhiêu **lần**? (bỏ qua overhead index, metadata; số nguyên)",
+      "answer": 12,
+      "tolerance": 0,
+      "unit": "lần",
+      "explain": "Trước: 3.072 chiều × 4 byte = 12.288 byte/vector. Sau: 1.024 chiều × 1 byte (int8) = 1.024 byte/vector. Tỉ lệ = 12.288 / 1.024 = **12 lần** (3 lần do giảm chiều × 4 lần do float32 → int8). Bẫy: chỉ tính một yếu tố (3 hoặc 4) hoặc cộng thay vì nhân (3 + 4 = 7). Trên thực tế nên giữ vector float gốc (trên disk) để rescore top ứng viên sau khi tìm bằng vector int8, và đo lại recall vì mỗi bước nén đều làm giảm chất lượng một chút."
+    },
+    {
+      "id": "rag-013",
+      "sub": "Fine-tune embedding",
+      "level": 3,
+      "type": "multi",
+      "trap": false,
+      "q": "Bạn fine-tune một bi-encoder cho domain nội bộ bằng **MultipleNegativesRankingLoss** (InfoNCE) với cặp (query, positive) và hard negatives được mine từ BM25/model cũ. Chọn **tất cả** phát biểu ĐÚNG.",
+      "options": [
+        "Với loss này, positive của các query khác trong cùng batch đóng vai negative (in-batch negatives), nên batch size lớn hơn thường giúp ích",
+        "Hard negative mine từ top-k có thể là false negative (relevant nhưng chưa gán nhãn); nên lọc bằng cross-encoder hoặc bỏ vài rank đầu",
+        "Càng khó càng tốt, nên luôn lấy kết quả rank 1 của retriever cũ (khác positive) làm hard negative cho mọi query trong tập train",
+        "Batch chứa nhiều query trùng hoặc đồng nghĩa có thể tạo false negative trong in-batch negatives",
+        "Sau khi fine-tune có thể giữ nguyên vector đã index bằng model cũ và chỉ encode query bằng model mới, vì hai model có cùng kiến trúc và dimension"
+      ],
+      "answer": [
+        0,
+        1,
+        3
+      ],
+      "explain": "InfoNCE coi mọi passage khác trong batch là negative → batch lớn = nhiều negative 'miễn phí' (vì vậy có CachedMNRL/GradCache để tăng batch khi thiếu VRAM). Hard negatives giúp model học phân biệt tinh, nhưng lấy rank 1 của retriever cũ một cách mù quáng thường gặp false negative (doc đúng nhưng không nằm trong nhãn) → dạy model đẩy xa doc đúng; thực hành phổ biến là lấy trong khoảng rank (vd 10–100) và/hoặc lọc bằng cross-encoder với ngưỡng. Query trùng/đồng nghĩa trong cùng batch khiến positive của nhau bị coi là negative (dùng batch sampler tránh trùng). Sau fine-tune, không gian embedding thay đổi → phải **re-embed toàn bộ corpus**; trộn query model mới với doc model cũ làm retrieval sụp đổ."
+    },
+    {
+      "id": "rag-014",
+      "sub": "Embeddings & similarity",
+      "level": 1,
+      "type": "single",
+      "trap": false,
+      "q": "Bạn cần chọn embedding model cho RAG tiếng Việt domain pháp lý. Cách dùng **MTEB leaderboard** hợp lý nhất?",
+      "options": [
+        "Chọn model có điểm Average cao nhất trên MTEB vì điểm trung bình trên hàng chục dataset đại diện cho chất lượng ở mọi tác vụ",
+        "Chọn model có dimension lớn nhất trong top 10 vì nhiều chiều hơn biểu diễn được nhiều sắc thái hơn nên recall luôn cao hơn",
+        "Lọc task Retrieval (nDCG@10) và đúng ngôn ngữ, shortlist vài model rồi eval lại trên cặp query–tài liệu thật của domain",
+        "Bỏ qua MTEB vì benchmark này chỉ đo classification/clustering/STS; retrieval phải xem ở một benchmark riêng như BEIR"
+      ],
+      "answer": 2,
+      "explain": "MTEB gồm nhiều nhóm task (classification, clustering, STS, reranking, retrieval...); điểm Average trộn tất cả nên model đứng đầu Average chưa chắc đứng đầu Retrieval. Phần Retrieval của MTEB (bản tiếng Anh gốc) được xây chủ yếu từ các dataset của BEIR, metric chính là nDCG@10. Leaderboard cũng có thể bị overfit (model train trên dữ liệu gần với test), và domain pháp lý tiếng Việt khác xa dữ liệu benchmark — nên luôn có bước eval nội bộ (Recall@k, nDCG trên vài trăm query thật). Dimension lớn không đảm bảo tốt hơn mà tăng bộ nhớ/latency. Max sequence length quyết định chunk size tối đa trước khi bị truncate."
+    },
+    {
+      "id": "rag-015",
+      "sub": "Embedding cache",
+      "level": 2,
+      "type": "single",
+      "trap": true,
+      "q": "Bạn cache embedding trong Redis với key = `sha256(text)`. Sau khi nâng cấp embedding model (vẫn 1.024 chiều), hệ thống không báo lỗi nhưng chất lượng retrieval tụt mạnh. Nguyên nhân và cách xử lý đúng?",
+      "options": [
+        "Key thiếu model/version/config nên vector model cũ bị trả lại, trộn với vector model mới; sửa key và re-index toàn bộ corpus",
+        "Redis làm tròn float về float16 khi lưu dạng hash nên vector mất độ chính xác; cần lưu vector dạng JSON string để giữ nguyên",
+        "Hai model cùng 1.024 chiều nên vector tương thích; nguyên nhân thật là TTL cache quá dài khiến nội dung tài liệu cũ được dùng",
+        "Model mới có phân phối similarity khác nên chỉ cần tăng ef_search của HNSW (vd 64 → 256) là recall quay lại như trước"
+      ],
+      "answer": 0,
+      "explain": "Cùng dimension không có nghĩa là cùng không gian: mỗi model (thậm chí mỗi version) học một hệ toạ độ riêng, cos giữa vector model A và B là vô nghĩa. Với key chỉ dựa trên text, query mới (cache miss) được encode bằng model mới, còn text đã cache trả về vector cũ → hỗn hợp, retrieval sai mà không có lỗi nào. Cache key đúng: `emb:{model}:{version}:{prefix/dims/normalize}:{sha256(text)}`, và đổi model đồng nghĩa với re-index toàn bộ (thường build collection mới rồi chuyển alias — blue/green). Redis lưu bytes nhị phân float32 chính xác, không làm tròn. Tăng ef_search chỉ cải thiện độ chính xác ANN trong một không gian, không sửa được vector sai không gian."
+    },
+    {
+      "id": "rag-016",
+      "sub": "BM25",
+      "level": 2,
+      "type": "numeric",
+      "trap": false,
+      "q": "Lucene/Elasticsearch BM25 dùng `IDF = ln(1 + (N − n + 0.5) / (n + 0.5))`. Corpus có N = 1.000 tài liệu, term xuất hiện trong n = 9 tài liệu. Tính IDF (logarit tự nhiên), **làm tròn 3 chữ số thập phân**.",
+      "answer": 4.657,
+      "tolerance": 0.002,
+      "explain": "(N − n + 0.5)/(n + 0.5) = (1000 − 9 + 0.5)/(9 + 0.5) = 991,5/9,5 ≈ 104,368. Cộng 1 → 105,368. ln(105,368) ≈ **4,657**. Bẫy: dùng log10 sẽ ra ≈ 2,023 (sai cơ số); quên '+1' thì ln(104,368) ≈ 4,648 — chênh nhỏ ở đây nhưng với term rất phổ biến (n > N/2) thì IDF Robertson cổ điển `ln((N − n + 0.5)/(n + 0.5))` bị **âm**, nên Lucene cộng 1 để IDF luôn dương. Term hiếm → IDF cao → đóng góp nhiều vào điểm; đó là lý do BM25 bắt tốt mã sản phẩm, số hiệu điều luật."
+    },
+    {
+      "id": "rag-017",
+      "sub": "BM25",
+      "level": 3,
+      "type": "numeric",
+      "trap": false,
+      "q": "Tính điểm BM25 của **một term** trong tài liệu D với: IDF = 2,0; tf = 3; k1 = 1,2; b = 0,75; |D| = 200 token; avgdl = 100 token.\n\n`score = IDF · tf·(k1 + 1) / (tf + k1·(1 − b + b·|D|/avgdl))`\n\nLàm tròn 4 chữ số thập phân.",
+      "answer": 2.5882,
+      "tolerance": 0.001,
+      "explain": "Hệ số độ dài: 1 − b + b·|D|/avgdl = 0,25 + 0,75·2 = 1,75. Mẫu: tf + k1·1,75 = 3 + 2,1 = 5,1. Tử: tf·(k1 + 1) = 3·2,2 = 6,6. Điểm = 2,0 · 6,6/5,1 ≈ **2,5882**. So sánh: nếu |D| = avgdl thì mẫu = 3 + 1,2 = 4,2 → điểm ≈ 3,1429 — tài liệu dài gấp đôi bị phạt ~18%. Khi tf → ∞, điểm tiến tới IDF·(k1 + 1) = 4,4 (bão hoà), khác TF-IDF tăng tuyến tính. Lưu ý: từ Lucene 8 hệ số (k1 + 1) ở tử bị bỏ (không đổi thứ hạng), nên điểm thô trong Elasticsearch sẽ khác công thức sách giáo khoa — đề cho công thức cổ điển."
+    },
+    {
+      "id": "rag-018",
+      "sub": "BM25",
+      "level": 2,
+      "type": "single",
+      "trap": true,
+      "q": "Corpus có độ dài rất chênh lệch (FAQ ~50 từ và hợp đồng ~20.000 từ). Bạn thấy hợp đồng dài chứa đúng thuật ngữ nhiều lần nhưng vẫn bị xếp dưới FAQ ngắn nhắc thuật ngữ đó 1 lần. Phát biểu nào ĐÚNG về tham số BM25?",
+      "options": [
+        "k1 điều khiển chuẩn hoá theo độ dài (mặc định 1.2); đặt k1 = 0 để tắt hoàn toàn việc phạt các tài liệu dài hơn avgdl",
+        "b điều khiển chuẩn hoá theo độ dài (b = 0 tắt, b = 1 đầy đủ) nên giảm b sẽ bớt phạt doc dài; k1 điều khiển bão hoà tf",
+        "b càng lớn thì tài liệu dài càng được ưu tiên vì chúng chứa nhiều lần xuất hiện của term hơn, nên cần tăng b lên 1",
+        "BM25 không phụ thuộc độ dài tài liệu (chỉ phụ thuộc tf và IDF); chỉ TF-IDF kèm cosine similarity mới chuẩn hoá theo độ dài"
+      ],
+      "answer": 1,
+      "explain": "Trong mẫu số `tf + k1·(1 − b + b·|D|/avgdl)`: b quyết định độ dài |D| ảnh hưởng bao nhiêu. Với |D|/avgdl rất lớn (hợp đồng), b = 0,75 phạt nặng; giảm b (vd 0,3) bớt phạt. Đặt k1 = 0 thì tf hoàn toàn mất tác dụng (chỉ còn IDF — mô hình có/không có term) chứ không phải tắt chuẩn hoá độ dài — đây là bẫy nhầm hai tham số. b lớn phạt tài liệu dài **mạnh hơn**, không ưu tiên. Trong thực tế RAG, giải pháp tốt hơn chỉnh b là **chunk** tài liệu dài để các đơn vị index có độ dài tương đương; mặc định Elasticsearch k1 = 1,2, b = 0,75 và có thể đổi qua custom similarity."
+    },
+    {
+      "id": "rag-019",
+      "sub": "Sparse retrieval",
+      "level": 2,
+      "type": "single",
+      "trap": false,
+      "q": "SPLADE khác BM25 ở điểm cốt lõi nào?",
+      "options": [
+        "SPLADE là dense embedding được nén bằng product quantization thành mã thưa để có thể lưu và tra trong inverted index",
+        "SPLADE là BM25 với k1, b học từ dữ liệu cho từng term; không mở rộng thêm từ nào ngoài các term có sẵn trong văn bản",
+        "SPLADE chạy cross-attention giữa query và từng tài liệu lúc search nên chỉ dùng được làm reranker cho top-100 ứng viên từ BM25/dense",
+        "Learned sparse: MLM head của BERT cho trọng số trên toàn vocabulary, có term expansion, nhưng vẫn search bằng inverted index"
+      ],
+      "answer": 3,
+      "explain": "SPLADE đưa văn bản qua BERT, lấy logit MLM trên toàn vocabulary (~30K), áp `log(1 + ReLU(·))` và max pooling theo token → vector rất thưa: mỗi chiều là một từ trong vocab với trọng số học được. Điểm mạnh là **term expansion** (doc về 'ô tô' có thể có trọng số cho 'xe hơi') và trọng số theo ngữ cảnh, khắc phục vocabulary mismatch của BM25, trong khi vẫn search bằng inverted index (Qdrant sparse vectors, Elasticsearch `sparse_vector`). Nó không phải dense+PQ, không phải BM25 với tham số học, và query/doc được encode độc lập (không cross-attention) nên dùng được ở first-stage. Nhược: phải chạy model để encode (trừ biến thể inference-free cho query), vocab gắn với tokenizer (tiếng Việt cần model đa ngữ phù hợp)."
+    },
+    {
+      "id": "rag-020",
+      "sub": "Hybrid search & RRF",
+      "level": 2,
+      "type": "numeric",
+      "trap": false,
+      "q": "Hybrid search hợp nhất hai danh sách bằng Reciprocal Rank Fusion, `score(doc) = Σ 1/(k + rank)`, k = 60, rank bắt đầu từ 1; tài liệu không có trong danh sách thì không được cộng.\n\n| Rank | BM25 | Vector |\n|---|---|---|\n| 1 | D1 | D3 |\n| 2 | D2 | D1 |\n| 3 | D3 | D6 |\n| 4 | D4 | D2 |\n| 5 | D5 | D7 |\n\nTính RRF score của **D3**, làm tròn 5 chữ số thập phân.",
+      "answer": 0.03227,
+      "tolerance": 2e-05,
+      "explain": "D3 đứng rank 3 ở BM25 và rank 1 ở vector: 1/(60 + 3) + 1/(60 + 1) = 0,015873 + 0,016393 ≈ **0,03227**. Để so sánh: D1 = 1/61 + 1/62 ≈ 0,03252 (đứng đầu sau fusion dù không là top-1 của danh sách vector), D2 = 1/62 + 1/64 ≈ 0,03175, D6 = 1/63 ≈ 0,01587. Bài học: RRF thưởng cho **sự đồng thuận** giữa các retriever; với k = 60 khoảng cách giữa rank 1 và rank 3 rất nhỏ. Bẫy: đếm rank từ 0 sẽ ra 1/62 + 1/60 ≈ 0,03280; dùng k = 2 (mặc định của Qdrant) sẽ ra 1/5 + 1/3 ≈ 0,5333 — thang điểm khác hẳn."
+    },
+    {
+      "id": "rag-021",
+      "sub": "Hybrid search & RRF",
+      "level": 3,
+      "type": "single",
+      "trap": true,
+      "q": "Team migrate hybrid search từ Elasticsearch (retriever `rrf`, để tham số mặc định) sang Qdrant Query API (`prefetch` dense + sparse, `fusion: rrf`, mặc định). Với **cùng** hai danh sách kết quả con, thứ tự sau fusion vẫn khác một chút. Giải thích hợp lý nhất?",
+      "options": [
+        "Qdrant RRF cộng trực tiếp điểm cosine và điểm sparse thô thay vì dùng thứ hạng, nên kết quả nhạy với thang điểm từng nhánh",
+        "Elasticsearch chuẩn hoá min-max điểm từng retriever trước khi tính RRF, còn Qdrant dùng rank thô nên thứ tự lệch đi một chút",
+        "k mặc định khác nhau: Elasticsearch rank_constant = 60, Qdrant RRF k = 2; k nhỏ thưởng vị trí top hơn là sự đồng thuận",
+        "Qdrant chỉ đưa top-1 của mỗi prefetch vào fusion, các vị trí còn lại giữ nguyên thứ tự của nhánh dense (prefetch đầu tiên)"
+      ],
+      "answer": 2,
+      "explain": "Elasticsearch: `rank_constant` mặc định 60 (như paper gốc Cormack et al., 2009), `rank_window_size` mặc định bằng `size`. Qdrant: tài liệu ghi rõ k mặc định = 2 (tham số hoá được từ v1.16, weighted RRF từ v1.17). Ví dụ: X rank 1 ở list A, rank 10 ở list B; Y rank 3 ở cả hai. k = 60: X = 1/61 + 1/70 ≈ 0,03068 < Y = 2/63 ≈ 0,03175 → Y thắng. k = 2: X = 1/3 + 1/12 ≈ 0,4167 > Y = 2/5 = 0,4 → X thắng. Cả hai hệ đều dùng thứ hạng chứ không dùng điểm thô, và không có min-max trong RRF. Bài học thực chiến: khi so sánh/migrate, cố định các tham số fusion (k, window/limit của prefetch) rồi đánh giá lại trên dev set."
+    },
+    {
+      "id": "rag-022",
+      "sub": "Hybrid search & RRF",
+      "level": 3,
+      "type": "numeric",
+      "trap": false,
+      "q": "Weighted score fusion với **min-max normalization** trên tập 3 ứng viên, `final = 0,7·norm(BM25) + 0,3·norm(cosine)`:\n\n| Doc | BM25 | Cosine |\n|---|---|---|\n| A | 12 | 0,80 |\n| B | 8 | 0,60 |\n| C | 5 | 0,82 |\n\nTính final score của **A**, làm tròn 4 chữ số thập phân.",
+      "answer": 0.9727,
+      "tolerance": 0.0005,
+      "explain": "Min-max BM25: (x − 5)/(12 − 5) → A = 1, B = 3/7 ≈ 0,4286, C = 0. Min-max cosine: (x − 0,60)/(0,82 − 0,60) → A = 0,20/0,22 ≈ 0,9091, B = 0, C = 1. Final A = 0,7·1 + 0,3·0,9091 ≈ **0,9727**; B = 0,7·0,4286 = 0,3; C = 0,3·1 = 0,3 (B và C hoà). Nhận xét: cosine của A (0,80) và C (0,82) gần như bằng nhau nhưng sau min-max chênh 0,09, trong khi B (0,60) bị ép về 0 — min-max khuếch đại khác biệt nhỏ và phụ thuộc hoàn toàn vào tập ứng viên (thêm/bớt một doc là điểm của mọi doc thay đổi). Bẫy: cộng điểm thô 0,7·12 + 0,3·0,80 sẽ để BM25 áp đảo hoàn toàn."
+    },
+    {
+      "id": "rag-023",
+      "sub": "Hybrid search & RRF",
+      "level": 2,
+      "type": "single",
+      "trap": true,
+      "q": "Chọn phát biểu **SAI** về hybrid search (BM25 + dense).",
+      "options": [
+        "Cộng trực tiếp BM25 thô với cosine theo trọng số là ổn, vì cả hai đều tuân theo 'điểm cao hơn = liên quan hơn'",
+        "RRF chỉ dùng thứ hạng nên không bị ảnh hưởng bởi việc BM25 không có cận trên còn cosine nằm trong [−1, 1]",
+        "Min-max normalization trên tập ứng viên nhạy với outlier và với số lượng ứng viên lấy từ mỗi retriever",
+        "Hybrid có lợi rõ với query chứa mã sản phẩm, số hiệu điều luật, tên riêng hiếm mà dense embedding thường làm mờ hoặc trượt"
+      ],
+      "answer": 0,
+      "explain": "Phát biểu sai là 'cộng trực tiếp điểm thô': BM25 không có cận trên và phụ thuộc query (số term, IDF) — có thể là 5 hoặc 40 — còn cosine thường dao động trong khoảng hẹp (vd 0,6–0,9). Cộng thô thì BM25 áp đảo, trọng số α mất ý nghĩa và thay đổi theo từng query. Ba phát biểu còn lại đúng: RRF dựa trên rank nên miễn nhiễm thang điểm (đổi lại mất thông tin độ lớn); min-max phụ thuộc min/max của tập ứng viên; sparse/lexical bắt exact match cho token hiếm/OOV mà dense embedding thường làm mờ ('Điều 47' và 'Điều 74' có embedding gần nhau)."
+    },
+    {
+      "id": "rag-024",
+      "sub": "Reranking",
+      "level": 1,
+      "type": "single",
+      "trap": true,
+      "q": "Vì sao không dùng cross-encoder để tìm kiếm trực tiếp trên 10 triệu chunk mà chỉ dùng nó để rerank top 50–100 từ retriever?",
+      "options": [
+        "Cross-encoder kém chính xác hơn bi-encoder trên corpus lớn do không được train contrastive, nên chỉ hợp làm bước phụ",
+        "Cross-encoder sinh vector token-level có dimension quá lớn, không lưu được trong các vector database phổ biến như Qdrant hay FAISS",
+        "Cross-encoder giới hạn input dưới 64 token nên không encode được trọn chunk của corpus, chỉ dùng được cho đoạn ngắn",
+        "Cross-encoder cần forward chung cặp (query, doc) nên không tính trước vector doc được; mỗi query phải chạy N lần forward"
+      ],
+      "answer": 3,
+      "explain": "Bi-encoder encode query và doc **độc lập** → vector doc tính trước, search bằng ANN trong vài ms. Cross-encoder nối `[CLS] query [SEP] doc` và cho attention giữa mọi token query–doc → chính xác hơn nhiều (bắt được tương tác tinh), nhưng không có vector doc để index; 10 triệu doc = 10 triệu lần forward cho **mỗi** query. Vì vậy kiến trúc chuẩn là retrieve (bi-encoder/BM25, recall cao) → rerank (cross-encoder, precision cao) trên vài chục–vài trăm ứng viên. Phương án 'kém chính xác hơn' là bẫy đảo ngược; cross-encoder cũng không xuất ra vector embedding để lưu mà xuất ra một điểm liên quan."
+    },
+    {
+      "id": "rag-025",
+      "sub": "Reranking",
+      "level": 3,
+      "type": "single",
+      "trap": false,
+      "q": "Phát biểu nào mô tả đúng **ColBERT** (late interaction)?",
+      "options": [
+        "Ghép query và doc vào một forward như cross-encoder nhưng dùng model nhỏ hơn (BERT-small) và cache KV để giảm latency",
+        "Encode độc lập thành vector theo từng token; điểm = Σ_q max_d sim (MaxSim); doc tính trước được nhưng tốn lưu trữ hơn nhiều",
+        "Mỗi doc là một vector [CLS] duy nhất, còn query được mở rộng thành nhiều vector rồi lấy trung bình điểm với vector doc",
+        "Điểm là cosine giữa vector trung bình các token của query và vector trung bình các token của doc, nên tính trước được cho cả hai phía"
+      ],
+      "answer": 1,
+      "explain": "ColBERT nằm giữa bi-encoder và cross-encoder: tương tác ở mức token nhưng **muộn** (sau khi encode độc lập), score = Σ_i max_j (q_i · d_j). Nhờ encode độc lập, vector token của doc được tính trước và index được → dùng được ở first-stage (PLAID) hoặc rerank. Cái giá: lưu một vector cho **mỗi token** (doc 300 token = 300 vector), nên ColBERTv2 dùng centroid + residual nén vài bit. Qdrant hỗ trợ multivector với MaxSim để rerank trong prefetch. Phương án 'một forward chung' là cross-encoder; 'một vector [CLS] cho doc' là bi-encoder; 'cosine của vector trung bình' là mean pooling — đều mất đi tương tác mức token."
+    },
+    {
+      "id": "rag-026",
+      "sub": "Reranking",
+      "level": 3,
+      "type": "single",
+      "trap": false,
+      "q": "Bạn dùng LLM để rerank 100 ứng viên theo kiểu **listwise** (như RankGPT) với context window giới hạn. Nhận định/thực hành nào ĐÚNG?",
+      "options": [
+        "Pointwise luôn tốt hơn listwise vì điểm tuyệt đối LLM chấm (thang 0–10) được hiệu chuẩn tốt và so sánh được giữa các query",
+        "Pairwise rẻ nhất vì chỉ cần N lần gọi LLM cho N tài liệu, mỗi lần so một tài liệu với tài liệu đứng ngay trước nó",
+        "Sliding window (vd cửa sổ 20, bước 10) từ cuối lên đầu để doc tốt nổi dần lên top; lưu ý position bias theo thứ tự đầu vào",
+        "LLM reranking không có position bias nếu đặt temperature = 0, vì khi đó output là deterministic với cùng một prompt"
+      ],
+      "answer": 2,
+      "explain": "Listwise đưa nhiều doc vào một prompt và yêu cầu LLM xuất hoán vị (vd `[3] > [1] > [7]`). Khi không vừa context, RankGPT dùng sliding window đi từ cuối lên đầu với bước nhỏ hơn cửa sổ, nên doc tốt ở cuối có thể được kéo lên dần qua các cửa sổ chồng nhau. Position bias là vấn đề thật: LLM thiên vị doc ở đầu/cuối prompt; giảm bằng cách khởi đầu từ thứ tự của first-stage, xáo trộn nhiều lượt rồi gộp. temperature = 0 chỉ làm output deterministic, bias vẫn còn nguyên. Pairwise cần O(N²) phép so sánh (hoặc O(N log N) với sort), đắt nhất. Pointwise rẻ, song song được nhưng điểm khó hiệu chuẩn giữa các query."
+    },
+    {
+      "id": "rag-027",
+      "sub": "Query transformation",
+      "level": 2,
+      "type": "multi",
+      "trap": false,
+      "q": "Chọn **tất cả** phát biểu ĐÚNG về query transformation.",
+      "options": [
+        "HyDE: LLM sinh một 'tài liệu giả định' trả lời query, rồi embed tài liệu đó để tìm kiếm (so khớp doc–doc thay vì query–doc)",
+        "Step-back prompting: sinh câu hỏi tổng quát hơn (nguyên lý, khái niệm nền) để retrieve thêm ngữ cảnh nền tảng rồi trả lời câu gốc",
+        "Query decomposition phù hợp với câu so sánh/multi-hop như 'So sánh chính sách nghỉ phép 2023 và 2024'",
+        "HyDE an toàn với domain hiếm vì nội dung LLM bịa ra trong tài liệu giả định không ảnh hưởng tới kết quả retrieval",
+        "Multi-query (sinh nhiều paraphrase) không làm tăng chi phí vì các paraphrase luôn trả về cùng một tập kết quả"
+      ],
+      "answer": [
+        0,
+        1,
+        2
+      ],
+      "explain": "HyDE (Gao et al., 2022) dựa trên quan sát: một câu trả lời giả định (dù sai chi tiết) có 'hình dạng' giống tài liệu thật hơn là câu hỏi ngắn. Nhưng chính vì vậy, ở domain hiếm/thuật ngữ nội bộ mà LLM không biết, tài liệu giả định có thể đi lệch hẳn hướng → retrieval kém hơn; HyDE cũng thêm một lần gọi LLM vào latency. Step-back (Zheng et al., 2023) hỏi câu trừu tượng hơn để có nền tảng. Decomposition tách câu so sánh thành 'chính sách 2023?' và 'chính sách 2024?' để mỗi phần đều được retrieve. Multi-query tốn thêm một lần gọi LLM và n lần retrieve; lợi ích chính là các paraphrase trả về **kết quả khác nhau**, gộp lại (RRF/union + dedup) để tăng recall."
+    },
+    {
+      "id": "rag-028",
+      "sub": "Query transformation",
+      "level": 1,
+      "type": "single",
+      "trap": false,
+      "q": "Hội thoại: User: *'Gói Premium có hỗ trợ SSO không?'* → bot trả lời → User: *'Thế giá của nó bao nhiêu?'*. Retriever đang embed nguyên câu cuối của user. Cách sửa chuẩn là gì?",
+      "options": [
+        "Tăng top-k từ 5 lên 50 và thêm reranker để chắc chắn trong kết quả có chunk nói về giá của gói đang được nhắc tới",
+        "Dùng LLM viết lại câu cuối thành câu hỏi độc lập theo lịch sử ('Giá gói Premium là bao nhiêu?') rồi mới retrieve",
+        "Embed toàn bộ lịch sử hội thoại (gồm cả các câu trả lời dài của bot) thành một query duy nhất để giữ đủ ngữ cảnh",
+        "Bỏ bước retrieval từ lượt thứ hai, để LLM tự trả lời dựa trên lịch sử hội thoại và kiến thức có sẵn trong model"
+      ],
+      "answer": 1,
+      "explain": "Câu 'Thế giá của nó bao nhiêu?' chứa đại từ 'nó' không có nghĩa khi đứng một mình — embedding sẽ khớp với mọi chunk nói về giá. Chuẩn là bước condense/contextualize question (LangChain `create_history_aware_retriever`, LlamaIndex `CondenseQuestionChatEngine`): LLM viết lại thành câu hỏi độc lập. Tăng top-k (kể cả thêm reranker) chỉ đổ thêm nhiễu: reranker cũng chỉ thấy câu hỏi mơ hồ nên không biết 'nó' là gói nào. Embed cả lịch sử làm vector bị pha loãng bởi nội dung cũ (nhất là câu trả lời dài của bot nói về SSO) → lại retrieve về SSO. Bỏ retrieval khiến bot bịa giá. Mẹo thực chiến: chỉ rewrite khi có lịch sử, và log câu đã rewrite để debug."
+    },
+    {
+      "id": "rag-029",
+      "sub": "Vector index & memory",
+      "level": 1,
+      "type": "numeric",
+      "trap": true,
+      "q": "Tính bộ nhớ RAM để lưu **vector thô** (chưa tính overhead index) cho **10 triệu** embedding **1.536 chiều float32**. Đơn vị **GB, 1 GB = 10⁹ byte**, làm tròn 2 chữ số thập phân.",
+      "answer": 61.44,
+      "tolerance": 0.01,
+      "unit": "GB",
+      "explain": "Mỗi vector: 1.536 × 4 byte = 6.144 byte. Tổng: 10⁷ × 6.144 = 6,144 × 10¹⁰ byte = **61,44 GB**. Bẫy đơn vị: theo GiB (2³⁰ byte) sẽ là ≈ 57,22 GiB. Thực tế còn phải cộng overhead: HNSW lưu danh sách láng giềng (tầng 0 khoảng 2·M liên kết/node, mỗi id 4–8 byte), payload/metadata, id; và cần headroom cho optimizer/segment merge. Đây là lý do production hay dùng quantization (int8 → ~15,4 GB, binary → ~1,92 GB) hoặc để vector gốc trên disk/mmap và chỉ giữ vector nén trong RAM."
+    },
+    {
+      "id": "rag-030",
+      "sub": "Vector index & memory",
+      "level": 2,
+      "type": "numeric",
+      "trap": true,
+      "q": "Nén **100 triệu** vector 768 chiều bằng Product Quantization với **m = 48** subvector, **nbits = 4** bit cho mỗi subvector. Tính dung lượng **mã PQ** (không tính codebook, id, cấu trúc IVF). Đơn vị **GB, 1 GB = 10⁹ byte**, làm tròn 2 chữ số thập phân.",
+      "answer": 2.4,
+      "tolerance": 0.01,
+      "unit": "GB",
+      "explain": "Mỗi vector: m × nbits = 48 × 4 = 192 bit = **24 byte**. Tổng: 10⁸ × 24 = 2,4 × 10⁹ byte = **2,40 GB**. So với float32: 768 × 4 = 3.072 byte/vector → 307,2 GB, tức nén 128 lần. Bẫy: coi nbits là số byte (48 × 4 byte = 192 byte → 19,2 GB) hoặc mặc định 8 bit (48 byte → 4,8 GB). Codebook rất nhỏ: m × 2^nbits × (d/m) float = 16 × 768 × 4 byte ≈ 49 KB. Trong FAISS IVF-PQ, mỗi vector còn lưu id 8 byte trong inverted list (+0,8 GB) — nhiều khi lớn ngang mã PQ. nbits = 4 là cấu hình của biến thể 'fast scan' (tra bảng bằng SIMD)."
+    },
+    {
+      "id": "rag-031",
+      "sub": "Vector index & memory",
+      "level": 3,
+      "type": "single",
+      "trap": false,
+      "q": "Trong FAISS IVF-PQ, **ADC** (asymmetric distance computation) lúc search nghĩa là gì?",
+      "options": [
+        "Query giữ float, chỉ database nén PQ; tính trước bảng khoảng cách sub-query → 2^nbits centroid rồi cộng m giá trị tra bảng",
+        "Cả query và database đều được lượng tử hoá thành mã nhị phân rồi so sánh bằng khoảng cách Hamming (XOR + popcount)",
+        "Khoảng cách được tính lại chính xác trên vector gốc cho mọi ứng viên trong nprobe cluster để loại bỏ hoàn toàn sai số do lượng tử hoá PQ gây ra",
+        "Chỉ so sánh query với centroid của cluster IVF chứa vector; mọi vector trong cùng cluster nhận chung một khoảng cách"
+      ],
+      "answer": 0,
+      "explain": "ADC là 'bất đối xứng' vì chỉ một phía (database) bị nén. Với mỗi subspace j, tính sẵn bảng d(q_j, c_jk) cho k = 1…2^nbits (m × 2^nbits phép tính); sau đó khoảng cách xấp xỉ tới mỗi vector chỉ là m lần tra bảng + cộng. Không nén query giúp giảm sai số so với SDC (nén cả hai phía). Trong IVF-PQ, PQ thường mã hoá **residual** (vector − centroid của cluster) để chính xác hơn. Tính lại khoảng cách trên vector gốc là bước **refine/re-rank** tuỳ chọn (IndexRefineFlat) cho top ứng viên, không phải ADC. So sánh Hamming là đặc trưng của binary quantization/LSH."
+    },
+    {
+      "id": "rag-032",
+      "sub": "Vector index & memory",
+      "level": 3,
+      "type": "numeric",
+      "trap": true,
+      "q": "Index `IndexIVFFlat` chứa **8.192.000** vector, **nlist = 4.096**, **nprobe = 16**, coarse quantizer là flat (so với mọi centroid). Giả sử các cluster có kích thước bằng nhau. Một query cần tổng cộng bao nhiêu phép tính khoảng cách (gồm cả bước chọn cluster)? (số nguyên)",
+      "answer": 36096,
+      "tolerance": 0,
+      "unit": "phép tính",
+      "explain": "Bước 1 — coarse quantization: so query với cả 4.096 centroid → 4.096 phép tính. Bước 2 — quét danh sách: mỗi cluster có 8.192.000/4.096 = 2.000 vector, quét 16 cluster → 32.000 phép tính. Tổng = **36.096**, chỉ ≈ 0,44% so với brute force 8.192.000. Bẫy: quên bước so centroid (ra 32.000) — khi nlist rất lớn (vd 65.536) chi phí này đáng kể, nên FAISS hay dùng HNSW làm coarse quantizer. Thực tế cluster không đều nên số phép tính dao động; nprobe tăng → recall tăng, latency tăng tuyến tính. Heuristic nlist ≈ 4√N đến 16√N (√8.192.000 ≈ 2.862)."
+    },
+    {
+      "id": "rag-033",
+      "sub": "Vector index & memory",
+      "level": 2,
+      "type": "multi",
+      "trap": false,
+      "q": "Chọn **tất cả** phát biểu ĐÚNG về tham số HNSW.",
+      "options": [
+        "Tăng efSearch (`hnsw_ef` trong Qdrant) làm recall tăng và latency tăng, và có thể đổi lúc query mà không cần rebuild index",
+        "Nên đặt efSearch nhỏ hơn k (số kết quả cần lấy) để tiết kiệm thời gian, vì HNSW tự bổ sung đủ k kết quả từ tầng 0",
+        "Tăng M làm graph dày hơn: recall tốt hơn nhưng tốn RAM hơn, build chậm hơn, và muốn đổi M phải build lại graph",
+        "HNSW trở thành exact search khi efSearch bằng M, vì khi đó mọi láng giềng ở mọi tầng của graph đều được duyệt",
+        "efConstruction ảnh hưởng tới thời gian build và chất lượng graph, không phải tham số chỉnh theo từng query"
+      ],
+      "answer": [
+        0,
+        2,
+        4
+      ],
+      "explain": "HNSW có ba tham số chính: **M** (số liên kết mỗi node; Qdrant mặc định m = 16) — quyết định độ dày graph và RAM, cố định sau khi build; **efConstruction** (Qdrant `ef_construct` mặc định 100) — độ rộng tìm kiếm lúc chèn, ảnh hưởng chất lượng graph và thời gian build; **efSearch** — độ rộng danh sách ứng viên lúc query, chỉnh động để đổi recall lấy latency. efSearch phải ≥ k vì danh sách ứng viên động có kích thước ef chính là nơi lấy ra top-k (FAISS/hnswlib dùng max(ef, k)). HNSW luôn là ANN: dù ef lớn vẫn có thể bỏ sót do cấu trúc graph; muốn exact phải brute force (Qdrant `exact: true`)."
+    },
+    {
+      "id": "rag-034",
+      "sub": "Filtering",
+      "level": 3,
+      "type": "multi",
+      "trap": true,
+      "q": "Collection 50 triệu chunk; query có filter `tenant_id = X`, trong đó tenant X chỉ chiếm **0,05%** dữ liệu. Chọn **tất cả** phát biểu ĐÚNG.",
+      "options": [
+        "Trong Elasticsearch, `filter` đặt bên trong clause `knn` là post-filter, còn `post_filter` mới là pre-filter",
+        "Post-filtering (lấy top-k từ ANN rồi mới lọc) có thể trả về ít hơn k kết quả, thậm chí 0, dù tenant X có nhiều tài liệu liên quan",
+        "Tăng top-k của ANN lên gấp đôi (vd 100 → 200) là giải pháp dứt điểm cho vấn đề post-filter với tenant nhỏ như X",
+        "Pre-filter ngây thơ trên HNSW (bỏ qua các node không thoả filter khi duyệt) có thể làm graph bị 'đứt' và recall giảm khi filter quá chặt",
+        "Với Qdrant, nên tạo payload index cho `tenant_id` (tốt nhất trước khi ingest) để query planner và filterable HNSW xử lý filter hiệu quả"
+      ],
+      "answer": [
+        1,
+        3,
+        4
+      ],
+      "explain": "Với 0,05% dữ liệu, top-100 của ANN toàn cục kỳ vọng chỉ chứa ~0,05 tài liệu của tenant X → post-filter gần như luôn trả rỗng; nhân đôi top-k không giải quyết được (cần nhân ~2.000 lần). Pre-filter ngây thơ trên HNSW: khi phần lớn node bị loại, đường đi trong graph bị cắt, search kẹt ở vùng cục bộ → recall giảm. Qdrant giải quyết bằng payload index + filterable HNSW (thêm cạnh theo giá trị payload) + query planner: cardinality nhỏ thì dùng payload index lấy tập điểm rồi so khớp trực tiếp. Tài liệu Qdrant khuyến nghị tạo payload index trước khi ingest để graph được tối ưu cho filter. Elasticsearch thì ngược với phát biểu kia: `filter` trong `knn` là **pre-filter** (áp dụng trong lúc tìm láng giềng), còn `post_filter` lọc sau."
+    },
+    {
+      "id": "rag-035",
+      "sub": "Filtering",
+      "level": 3,
+      "type": "single",
+      "trap": false,
+      "q": "Trong Qdrant, một query có filter trên field **đã có payload index**, và filter chỉ khớp rất ít point (cardinality ước lượng dưới ngưỡng liên quan tới `full_scan_threshold`). Qdrant thường xử lý thế nào?",
+      "options": [
+        "Duyệt HNSW toàn collection với hnsw_ef tự tăng theo độ chặt của filter, rồi áp filter lên top-k kết quả trả về (post-filter có bù ứng viên)",
+        "Từ chối query và trả lỗi yêu cầu tăng `hnsw_ef` hoặc bật `exact: true` để có đủ ứng viên thoả điều kiện filter",
+        "Planner dùng payload index lấy tập point thoả filter rồi tính khoảng cách trực tiếp trên tập nhỏ đó (exact), không duyệt HNSW",
+        "Tự tạo một segment tạm chỉ chứa các point thoả filter, build HNSW riêng cho segment đó rồi mới search trên nó"
+      ],
+      "answer": 2,
+      "explain": "Qdrant có query planner ước lượng cardinality của filter dựa trên payload index. Nếu tập thoả filter nhỏ, duyệt HNSW sẽ lãng phí (phần lớn node bị loại) và dễ mất recall, nên planner chọn cách lấy danh sách point từ payload index rồi tính khoảng cách cho từng point (brute force trên tập nhỏ — exact và nhanh). Nếu tập lớn, nó dùng filterable HNSW (graph có thêm cạnh theo payload để không bị đứt). Vì vậy payload index không chỉ để lọc nhanh mà còn để planner ước lượng được cardinality — thiếu payload index thì filter chặt sẽ chậm và kém. Qdrant không post-filter kiểu ngây thơ, không báo lỗi, không tạo segment tạm."
+    },
+    {
+      "id": "rag-036",
+      "sub": "Vector DB",
+      "level": 1,
+      "type": "single",
+      "trap": false,
+      "q": "Khác biệt quan trọng nhất giữa **FAISS** và Qdrant/Elasticsearch khi đưa vào production là gì?",
+      "options": [
+        "FAISS không hỗ trợ GPU nên với hàng trăm triệu vector luôn chậm hơn Qdrant/Elasticsearch vốn được tối ưu để tận dụng GPU sẵn có trên server",
+        "FAISS chỉ hỗ trợ exact search (IndexFlatL2/IndexFlatIP), không có index ANN như IVF hay HNSW nên không scale được",
+        "Qdrant và Elasticsearch không dùng HNSW mà dùng IVF, nên recall thấp hơn FAISS trong mọi cấu hình tìm kiếm",
+        "FAISS là thư viện in-process: không có server/API, payload filtering phong phú, replication hay persistence/CRUD kiểu database"
+      ],
+      "answer": 3,
+      "explain": "FAISS (Meta) là thư viện C++/Python cực mạnh về thuật toán: Flat, IVF, PQ, HNSW, IVF-PQ, và hỗ trợ GPU tốt. Nhưng nó chỉ là một cấu trúc dữ liệu trong bộ nhớ của tiến trình: lưu xuống disk bằng `write_index` thủ công, xoá/cập nhật hạn chế, filter metadata chỉ qua IDSelector, không có cơ chế replication, auth, multi-tenant. Qdrant là vector database (Rust) có payload index, filterable HNSW, quantization, sparse + hybrid query, snapshot, sharding. Elasticsearch là search engine dựa trên Lucene có HNSW cho `dense_vector`, mạnh ở full-text BM25, aggregation, hệ sinh thái vận hành. Chroma tiện cho prototype. Chọn FAISS khi cần nhúng ANN tốc độ cao (batch, offline, GPU) và tự lo phần còn lại."
+    },
+    {
+      "id": "rag-037",
+      "sub": "Multi-tenant & ACL",
+      "level": 3,
+      "type": "multi",
+      "trap": false,
+      "q": "RAG nội bộ đa tenant, mỗi tài liệu có ACL (các nhóm được phép đọc). Chọn **tất cả** thiết kế ĐÚNG/an toàn.",
+      "options": [
+        "Áp ACL như filter ở tầng retrieval (`tenant_id`, `allowed_groups`), giá trị lấy từ identity đã xác thực phía server, không từ prompt",
+        "Retrieve không filter để tối đa recall, rồi dặn LLM trong system prompt không tiết lộ nội dung từ tài liệu user không có quyền",
+        "Semantic cache và result cache phải đưa tenant/ACL vào key, nếu không câu trả lời sinh cho user A có thể bị trả cho user B",
+        "Với nhiều tenant nhỏ trong Qdrant, dùng một collection với payload index `tenant_id` đánh dấu `is_tenant` thay vì tạo hàng nghìn collection",
+        "Khi quyền của tài liệu thay đổi, chỉ cần chờ đợt re-embed định kỳ hằng tháng là ACL sẽ được cập nhật trong index"
+      ],
+      "answer": [
+        0,
+        2,
+        3
+      ],
+      "explain": "Nguyên tắc: dữ liệu user không có quyền **không bao giờ được vào context** — LLM không phải ranh giới bảo mật, prompt injection hoặc một câu hỏi khéo là đủ để lộ. Filter phải dựa vào identity phía server (JWT/session), không tin giá trị tenant mà client hay LLM truyền vào. Cache là kênh rò rỉ hay bị quên: key thiếu tenant/ACL thì câu trả lời có dữ liệu mật của A sẽ được phục vụ cho B. Qdrant khuyến nghị multitenancy bằng một collection + payload index có `is_tenant: true` (tối ưu lưu trữ theo tenant) và có thể cấu hình HNSW theo payload (`payload_m`) để build graph riêng cho từng tenant. ACL thay đổi thì cập nhật payload ngay (set payload), không cần re-embed — vector không đổi; chờ đợt re-embed hằng tháng nghĩa là người bị thu hồi quyền vẫn đọc được cả tháng."
+    },
+    {
+      "id": "rag-038",
+      "sub": "Quantization",
+      "level": 2,
+      "type": "single",
+      "trap": false,
+      "q": "Bạn bật **binary quantization** (1 bit/chiều) cho embedding 1.536 chiều trong vector DB. Thực hành nào ĐÚNG để giữ chất lượng?",
+      "options": [
+        "Oversampling (lấy 2–4× k ứng viên bằng vector nhị phân) rồi rescore bằng vector gốc; đo lại recall trên dữ liệu thật",
+        "Binary quantization chỉ nén 8 lần so với float32 (1 byte/chiều) nên sai số nhỏ, không cần rescoring hay oversampling",
+        "Binary quantization chỉ áp dụng được cho sparse vector; với dense vector 1.536 chiều phải dùng product quantization",
+        "Sau khi bật binary quantization nên xoá vector float gốc khỏi disk vì cả search lẫn rescoring chỉ dùng mã nhị phân"
+      ],
+      "answer": 0,
+      "explain": "Binary quantization giữ dấu của mỗi chiều → 1 bit thay vì 32 bit: nén **32 lần** (1.536 chiều → 192 byte), so sánh bằng XOR + popcount rất nhanh. Đổi lại mất nhiều thông tin, nên chuẩn thực hành là oversampling (lấy k × hệ số ứng viên) rồi **rescore** bằng vector float gốc (thường để trên disk/mmap) — Qdrant có `oversampling` và `rescore` trong search params, Elasticsearch có `bbq_hnsw` với rescore tương tự. Phương án 'xoá vector gốc' làm mất khả năng rescore và không thể đổi cấu hình quantization về sau. BQ hoạt động tốt với model dimension cao, phân phối các chiều cân bằng quanh 0; với một số model recall giảm nhiều, nên luôn đo trên dữ liệu thật."
+    },
+    {
+      "id": "rag-039",
+      "sub": "GraphRAG & Neo4j",
+      "level": 2,
+      "type": "single",
+      "trap": false,
+      "q": "Graph Neo4j có `(:Person)-[:WORKS_AT]->(:Company)` và `(:Company)-[:SUPPLIES]->(:Company)` (A SUPPLIES B nghĩa là A cung cấp cho B). Query Cypher nào trả về tên những người làm ở các công ty là nhà cung cấp — trực tiếp hoặc gián tiếp, tối đa 3 bước — của 'Acme'?",
+      "options": [
+        "`MATCH (p:Person)-[:WORKS_AT]->(c:Company)<-[:SUPPLIES*1..3]-(:Company {name: 'Acme'}) RETURN DISTINCT p.name`",
+        "`MATCH (p:Person)-[:WORKS_AT]->(c:Company)-[:SUPPLIES]->(:Company {name: 'Acme'}) RETURN p.name`",
+        "`MATCH (p:Person)-[:WORKS_AT]->(c:Company)-[:SUPPLIES*1..3]->(:Company {name: 'Acme'}) RETURN DISTINCT p.name`",
+        "`MATCH (p:Person), (a:Company {name: 'Acme'}) WHERE (p)-[:SUPPLIES*1..3]->(a) RETURN p.name`"
+      ],
+      "answer": 2,
+      "explain": "Đường đi cần là Person → WORKS_AT → Company → (SUPPLIES 1 đến 3 bước) → Acme. `*1..3` là quan hệ độ dài biến thiên, bao gồm cả nhà cung cấp gián tiếp; `DISTINCT` cần thiết vì một người có thể nối tới Acme qua nhiều path khác nhau. Query đảo chiều mũi tên `<-[:SUPPLIES*1..3]-` tìm công ty **được Acme cung cấp** (khách hàng của Acme) — lỗi chiều quan hệ rất hay gặp khi LLM sinh Cypher (text-to-Cypher). Query không có `*1..3` chỉ lấy nhà cung cấp trực tiếp. Query còn lại tìm SUPPLIES xuất phát từ Person — không tồn tại trong schema nên luôn rỗng. Đây là kiểu multi-hop mà vector search trên chunk rời rạc rất khó trả lời đúng."
+    },
+    {
+      "id": "rag-040",
+      "sub": "GraphRAG & Neo4j",
+      "level": 3,
+      "type": "multi",
+      "trap": false,
+      "q": "Chọn **tất cả** phát biểu ĐÚNG về Microsoft GraphRAG.",
+      "options": [
+        "Chi phí indexing của GraphRAG thấp hơn vector RAG vì không cần gọi embedding model cho các chunk, chỉ cần trích xuất entity một lần",
+        "Indexing: LLM trích entity/relationship từ text unit, xây graph, phân cộng đồng phân cấp bằng Leiden, rồi LLM viết summary cho từng community",
+        "Global search trả lời câu hỏi toàn cục kiểu 'các chủ đề chính xuyên suốt toàn bộ corpus là gì?' theo cách map-reduce trên các community summary",
+        "GraphRAG luôn tốt hơn vector RAG, kể cả với câu hỏi tra một fact cụ thể nằm gọn trong một đoạn văn, vì graph chứa nhiều quan hệ hơn",
+        "Local search bắt đầu từ các entity liên quan tới query rồi mở rộng sang láng giềng, relationship và text unit gắn với chúng"
+      ],
+      "answer": [
+        1,
+        2,
+        4
+      ],
+      "explain": "GraphRAG (Edge et al., 2024) giải quyết điểm yếu của vector RAG với câu hỏi **query-focused summarization** trên toàn corpus: không có chunk nào chứa câu trả lời 'chủ đề chính là gì', nhưng community summary ở các cấp có thể được map (mỗi summary trả lời một phần) rồi reduce. Local search phù hợp câu hỏi về entity cụ thể: tìm entity khớp query (thường bằng embedding của mô tả entity), lấy láng giềng, relationship, claim, text unit gốc để build context. Indexing rất **tốn kém**: nhiều lần gọi LLM cho mỗi chunk (trích xuất, gleaning) và cho mỗi community summary — đắt hơn vector RAG nhiều; GraphRAG vẫn dùng embedding cho entity/text unit. Với câu hỏi tra fact cục bộ, vector/hybrid RAG thường ngang hoặc tốt hơn với chi phí thấp hơn nhiều."
+    },
+    {
+      "id": "rag-041",
+      "sub": "Context optimization",
+      "level": 2,
+      "type": "single",
+      "trap": false,
+      "q": "Bạn đưa 20 chunk đã rerank vào prompt theo thứ tự relevance giảm dần, nhưng câu trả lời hay bỏ sót thông tin nằm ở các chunk thứ 8–14. Theo nghiên cứu **'Lost in the Middle'** (Liu et al., 2023), cách tối ưu context nào hợp lý?",
+      "options": [
+        "Đặt các chunk quan trọng nhất vào giữa context vì attention của transformer tập trung mạnh nhất ở vùng giữa chuỗi",
+        "Tăng số chunk lên 50 vì model context 128K đã được train long-context nên không còn bị ảnh hưởng bởi vị trí thông tin",
+        "Xáo trộn ngẫu nhiên thứ tự chunk ở mỗi request để loại bỏ hoàn toàn bias theo vị trí, rồi lấy câu trả lời xuất hiện nhiều nhất qua các lần",
+        "Giảm số chunk (top sau rerank/ngưỡng) và đặt chunk quan trọng nhất ở đầu và cuối context, vì phần giữa bị khai thác kém nhất"
+      ],
+      "answer": 3,
+      "explain": "Liu et al. cho thấy độ chính xác theo vị trí của tài liệu chứa đáp án có dạng chữ **U**: cao khi ở đầu (primacy) hoặc cuối (recency), thấp nhất ở giữa — kể cả với model context dài. Hai đòn bẩy: (1) bớt chunk — chất lượng hơn số lượng, rerank + cắt theo ngưỡng; (2) reorder — LangChain `LongContextReorder` xếp xen kẽ để doc tốt nhất ở hai đầu, kém nhất ở giữa. Context window lớn chỉ cho phép đưa nhiều token vào, không đảm bảo model dùng tốt chúng, và còn tăng chi phí/latency. Xáo trộn ngẫu nhiên không loại bias mà chỉ làm kết quả thiếu ổn định. Có thể kết hợp compression (chỉ giữ câu liên quan) để giảm độ dài phần giữa."
+    },
+    {
+      "id": "rag-042",
+      "sub": "Context optimization",
+      "level": 2,
+      "type": "numeric",
+      "trap": false,
+      "q": "Model có context window **16.384** token. Bạn đặt `max_tokens` (output) = **2.048**. Prompt gồm system prompt **1.500** token, lịch sử hội thoại **3.000** token, câu hỏi **200** token. Mỗi chunk dài **700** token và kèm header metadata/citation **50** token. Có thể đưa **tối đa bao nhiêu chunk** vào prompt? (số nguyên)",
+      "answer": 12,
+      "tolerance": 0,
+      "unit": "chunk",
+      "explain": "Ngân sách input = 16.384 − 2.048 (phải chừa cho output) = 14.336. Trừ phần cố định: 14.336 − 1.500 − 3.000 − 200 = 9.636 token cho context. Mỗi chunk tốn 700 + 50 = 750 token → 9.636/750 = 12,85 → làm tròn **xuống** 12 chunk. Bẫy 1: quên chừa output → (16.384 − 4.700)/750 = 15,58 → 15 chunk, request bị lỗi vượt context hoặc output bị cắt. Bẫy 2: quên header metadata → 9.636/700 = 13,77 → 13 chunk. Bẫy 3: làm tròn lên 13. Thực tế nên đếm bằng đúng tokenizer của model, chừa thêm biên an toàn, và khi lịch sử dài thì tóm tắt lịch sử thay vì cắt bớt chunk."
+    },
+    {
+      "id": "rag-043",
+      "sub": "Retrieval evaluation",
+      "level": 1,
+      "type": "numeric",
+      "trap": true,
+      "q": "Đánh giá retriever trên 5 query. Vị trí (rank, bắt đầu từ 1) của tài liệu relevant **đầu tiên** trong top-10 lần lượt là: **1, 3, không có, 2, 5**. Tính **MRR@10**, làm tròn 4 chữ số thập phân.",
+      "answer": 0.4067,
+      "tolerance": 0.001,
+      "explain": "Reciprocal rank từng query: 1/1 = 1; 1/3 ≈ 0,3333; query không có tài liệu relevant trong top-10 → 0; 1/2 = 0,5; 1/5 = 0,2. Tổng = 2,0333. MRR = 2,0333/5 ≈ **0,4067**. Bẫy: bỏ query thất bại khỏi mẫu số (chia 4) sẽ ra 0,5083 — làm hệ thống trông tốt hơn thực tế; query thất bại phải được tính là 0 và vẫn nằm trong mẫu số. MRR chỉ quan tâm tài liệu đúng **đầu tiên**, phù hợp khi chỉ cần một đáp án (QA, navigation); khi cần nhiều tài liệu relevant hoặc có relevance nhiều mức thì dùng Recall@k/nDCG. Hit rate@10 ở đây = 4/5 = 0,8."
+    },
+    {
+      "id": "rag-044",
+      "sub": "Retrieval evaluation",
+      "level": 3,
+      "type": "numeric",
+      "trap": false,
+      "q": "Top-5 kết quả có graded relevance theo thứ tự: **[3, 2, 0, 1, 2]**. Dùng `DCG@5 = Σ rel_i / log2(i + 1)` (i từ 1), IDCG tính bằng cách sắp xếp giảm dần chính 5 giá trị này (giả sử không còn tài liệu relevant nào khác). Tính **nDCG@5**, làm tròn 4 chữ số thập phân.",
+      "answer": 0.9602,
+      "tolerance": 0.001,
+      "explain": "DCG = 3/log2(2) + 2/log2(3) + 0/log2(4) + 1/log2(5) + 2/log2(6) = 3 + 1,2619 + 0 + 0,4307 + 0,7737 ≈ 5,4662. Thứ tự lý tưởng [3, 2, 2, 1, 0]: IDCG = 3 + 2/1,585 + 2/2 + 1/2,3219 + 0 = 3 + 1,2619 + 1 + 0,4307 ≈ 5,6925. nDCG@5 = 5,4662/5,6925 ≈ **0,9602**. Lỗi duy nhất của ranking là doc relevance 2 bị đẩy từ vị trí 3 xuống 5, nên điểm chỉ giảm nhẹ. Bẫy: dùng biến thể gain `2^rel − 1` (phổ biến trong Learning-to-Rank) sẽ ra kết quả khác — luôn ghi rõ công thức khi báo cáo; và đừng quên log2(i + 1) chứ không phải log2(i) (vị trí 1 sẽ chia cho 0)."
+    },
+    {
+      "id": "rag-045",
+      "sub": "RAG evaluation (RAGAS)",
+      "level": 3,
+      "type": "numeric",
+      "trap": false,
+      "q": "RAGAS Context Precision@K = `Σ_k (Precision@k × v_k) / (số chunk relevant trong top K)`, với v_k = 1 nếu chunk ở vị trí k relevant, ngược lại 0. Top-5 context có nhãn relevance: **[1, 0, 1, 0, 1]**. Tính Context Precision@5, làm tròn 4 chữ số thập phân.",
+      "answer": 0.7556,
+      "tolerance": 0.001,
+      "explain": "Chỉ cộng tại các vị trí relevant: k = 1: Precision@1 = 1/1 = 1; k = 3: Precision@3 = 2/3 ≈ 0,6667; k = 5: Precision@5 = 3/5 = 0,6. Tổng = 2,2667; chia cho 3 chunk relevant → **0,7556**. Metric này thưởng khi chunk relevant đứng **đầu** danh sách: cùng 3 chunk relevant nhưng thứ tự [1, 1, 1, 0, 0] cho 1,0, còn [0, 0, 1, 1, 1] chỉ ≈ 0,4778. Bẫy: tính Precision@5 thường (3/5 = 0,6) hoặc lấy trung bình Precision@k cho mọi k kể cả vị trí không relevant. Context precision thấp gợi ý cần reranker hoặc giảm k; đây là dạng Average Precision áp dụng cho context."
+    },
+    {
+      "id": "rag-046",
+      "sub": "RAG evaluation (RAGAS)",
+      "level": 2,
+      "type": "multi",
+      "trap": false,
+      "q": "Trong RAGAS, metric nào **cần reference** (ground-truth answer) để tính?",
+      "options": [
+        "Faithfulness",
+        "Context Recall",
+        "Answer Relevancy (Response Relevancy)",
+        "Answer Correctness"
+      ],
+      "answer": [
+        1,
+        3
+      ],
+      "explain": "Faithfulness = số claim trong câu trả lời được context hỗ trợ / tổng số claim — chỉ cần (answer, context), không cần reference; nó đo hallucination so với context chứ không đo đúng/sai với thực tế. Answer Relevancy: LLM sinh ngược vài câu hỏi từ câu trả lời, tính cosine trung bình với câu hỏi gốc — chỉ cần (question, answer); câu trả lời lan man hoặc thiếu ý sẽ bị điểm thấp. Context Recall = số claim của **reference answer** được context hỗ trợ / tổng claim của reference — bắt buộc có reference, vì phải biết 'cần những thông tin gì'. Answer Correctness so câu trả lời với reference (factual + semantic). Vì vậy khi chưa có golden set, bạn vẫn đo được faithfulness và answer relevancy, nhưng không đo được recall của retrieval theo cách này."
+    },
+    {
+      "id": "rag-047",
+      "sub": "RAG evaluation (RAGAS)",
+      "level": 3,
+      "type": "single",
+      "trap": true,
+      "q": "Kết quả eval một hệ RAG: **Faithfulness 0,95**, **Context Recall 0,40**, Answer Correctness thấp. Kết luận hợp lý nhất?",
+      "options": [
+        "LLM đang hallucinate nặng, cần thay bằng model lớn hơn hoặc giảm temperature trước tiên rồi mới đánh giá lại",
+        "Generator bám sát context (ít bịa) nhưng retriever không lấy đủ thông tin; ưu tiên sửa retrieval trước khi đổi LLM",
+        "Faithfulness cao chứng tỏ câu trả lời đúng, nên Answer Correctness thấp nhiều khả năng do reference answer bị lỗi",
+        "Context Recall thấp nghĩa là context có quá nhiều chunk nhiễu, nên cần giảm top-k để tăng độ chính xác của context"
+      ],
+      "answer": 1,
+      "explain": "Faithfulness 0,95: hầu hết claim trong câu trả lời đều có trong context → LLM **không** bịa. Context Recall 0,40: context chỉ chứa ~40% thông tin mà reference answer cần → thiếu nguyên liệu, nên câu trả lời trung thành với context nhưng thiếu/sai so với đáp án. Đó là lỗi **retrieval**. Bẫy 1: faithfulness cao ≠ đúng (reference không hề lỗi) — có thể trung thành với một context sai hoặc thiếu. Bẫy 2: nhầm context recall (đủ thông tin chưa) với context precision (có bao nhiêu nhiễu); giảm top-k còn làm recall tệ hơn. Hướng sửa: kiểm tra tài liệu có trong corpus không, chunking có cắt mất thông tin không, thêm BM25/hybrid, query rewrite/decomposition, tăng k rồi rerank để giữ precision."
+    },
+    {
+      "id": "rag-048",
+      "sub": "Agentic RAG",
+      "level": 3,
+      "type": "multi",
+      "trap": false,
+      "q": "Chọn **tất cả** phát biểu ĐÚNG về Agentic RAG.",
+      "options": [
+        "Self-RAG train LM sinh reflection token (Retrieve, ISREL, ISSUP, ISUSE) để tự quyết khi nào retrieve và tự đánh giá đoạn retrieve lẫn câu trả lời",
+        "CRAG dùng retrieval evaluator nhẹ chấm tài liệu: Incorrect thì bỏ tài liệu và chuyển sang web search, Ambiguous thì kết hợp cả hai",
+        "Agentic RAG luôn rẻ và nhanh hơn pipeline cố định vì agent có thể bỏ qua bước retrieve với mọi query đơn giản và không cần gọi thêm LLM để định tuyến",
+        "Router (vd conditional edge trong LangGraph) có thể phân loại query để chọn trả lời trực tiếp, vector store, SQL/graph hoặc web search",
+        "Iterative retrieval cần điều kiện dừng (số vòng tối đa, ngưỡng confidence, budget token) để tránh vòng lặp và bùng chi phí"
+      ],
+      "answer": [
+        0,
+        1,
+        3,
+        4
+      ],
+      "explain": "Self-RAG (Asai et al., 2023) train model sinh token đặc biệt: `Retrieve` (có cần retrieve không), `ISREL` (đoạn có liên quan không), `ISSUP` (câu trả lời có được hỗ trợ không), `ISUSE` (mức hữu ích). CRAG (Yan et al., 2024) thêm evaluator (T5-large đã fine-tune) cho 3 hành động: Correct → tinh lọc tri thức (decompose-then-recompose), Incorrect → web search, Ambiguous → kết hợp. Router là mảnh ghép cơ bản nhất của agentic RAG. Phương án 'luôn rẻ và nhanh hơn' sai: mỗi quyết định (route, grade, rewrite, reflect) là thêm một lần gọi LLM; agentic thường **đắt và chậm hơn** để đổi lấy chất lượng với query khó — vì vậy cần điều kiện dừng, giới hạn vòng (LangGraph `recursion_limit`) và trace để debug."
+    },
+    {
+      "id": "rag-049",
+      "sub": "Web ingestion",
+      "level": 2,
+      "type": "multi",
+      "trap": false,
+      "q": "Bạn xây pipeline web ingestion cho RAG (crawl định kỳ vài chục nghìn trang). Chọn **tất cả** thực hành ĐÚNG.",
+      "options": [
+        "Tôn trọng robots.txt, rate limit/crawl-delay và điều khoản site; dùng sitemap.xml (lastmod) để phát hiện trang mới hoặc đã đổi",
+        "Giữ nguyên menu, navbar, footer và cookie banner trong text được index để embedding có thêm ngữ cảnh về website",
+        "Trang SPA render bằng JavaScript cần headless browser (vd Playwright) hoặc gọi API nguồn, vì HTTP GET thường chỉ trả về khung HTML gần như rỗng",
+        "Dùng conditional request (ETag/If-None-Match, Last-Modified/If-Modified-Since) kết hợp content hash để chỉ re-index các trang thực sự thay đổi",
+        "Chuẩn hoá URL (canonical, bỏ tham số tracking như utm_*) để tránh index cùng một trang nhiều lần"
+      ],
+      "answer": [
+        0,
+        2,
+        3,
+        4
+      ],
+      "explain": "robots.txt và rate limit là yêu cầu đạo đức/pháp lý cơ bản; sitemap `lastmod` là tín hiệu rẻ để crawl incremental. Boilerplate (menu, footer, cookie banner) lặp lại trên mọi trang → làm embedding các trang giống nhau, chiếm token và gây near-duplicate; cần loại bằng công cụ trích nội dung chính (trafilatura, readability) — nên phương án 'giữ nguyên navbar/footer' sai. SPA (React/Vue) trả HTML khung + JS; không render thì index được toàn chuỗi rỗng hoặc 'Loading...'. Conditional request trả 304 Not Modified giúp tiết kiệm băng thông; content hash bắt trường hợp server không hỗ trợ ETag hoặc chỉ đổi phần không quan trọng. URL canonical + bỏ `utm_*`, session id giúp dedup. Nên lưu thêm `fetched_at`/`published_at` làm metadata để ưu tiên độ mới (freshness) khi retrieve."
+    },
+    {
+      "id": "rag-050",
+      "sub": "Retrieval evaluation",
+      "level": 1,
+      "type": "single",
+      "trap": true,
+      "q": "Một query có **8** chunk relevant trong toàn corpus. Retriever trả về top-10, trong đó có **4** chunk relevant. Phát biểu nào ĐÚNG?",
+      "options": [
+        "Precision@10 = 0,4; Recall@10 = 0,5; Hit rate@10 = 1",
+        "Precision@10 = 0,5; Recall@10 = 0,4; Hit rate@10 = 1",
+        "Precision@10 = 0,4; Recall@10 = 0,4; Hit rate@10 = 0,5",
+        "Precision@10 = 0,4; Recall@10 = 0,5; Hit rate@10 = 0,5"
+      ],
+      "answer": 0,
+      "explain": "Precision@10 = số relevant trong top-10 / 10 = 4/10 = 0,4 (trong những gì lấy về, bao nhiêu phần đúng). Recall@10 = số relevant lấy được / tổng số relevant = 4/8 = 0,5 (lấy được bao nhiêu phần trong số cần lấy). Hit rate@10 = 1 vì có ít nhất một chunk relevant trong top-10 (hit rate là nhị phân theo từng query, trung bình trên tập query). Bẫy kinh điển là đảo precision và recall. Lưu ý thực chiến: Recall@k đòi hỏi biết **tổng số** relevant trong corpus — thường không có đủ nhãn, nên nhiều team chỉ đo hit rate/MRR trên một tài liệu gold mỗi query; trong RAG, recall của retriever thường quan trọng hơn precision vì reranker và LLM có thể lọc nhiễu, nhưng không thể bù thông tin bị thiếu."
+    }
+  ]
+}
