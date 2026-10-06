@@ -1,6 +1,6 @@
 # Tổng hợp kiến thức ôn phỏng vấn AI Engineer
 
-9 chủ đề · 412 câu hỏi trong web quiz. File này được sinh tự động từ `data/src/*.json`.
+15 chủ đề · 712 câu hỏi trong web quiz. File này được sinh tự động từ `data/src/*.json`.
 
 ## Mục lục
 
@@ -9,10 +9,16 @@
 - ⚡ LLM Inference & Model Optimization
 - 🔎 RAG, Retrieval & Vector DB
 - 🤖 AI Agents, Tool Calling & MCP
+- 🧩 Agent Engineering: Skills, Subagents, Frameworks
 - 📊 LLM Evaluation, Observability & LLMOps
 - 📈 Machine Learning & Deep Learning
 - 👁️ Computer Vision, Speech, OCR & RecSys
 - 🛠️ Python, Backend & MLOps cho AI
+- 🏗️ ML System Design, Ranking & Experimentation
+- ∑ Nền tảng: Toán & Thống kê cho AI
+- 🧱 Nền tảng: ML & Deep Learning cốt lõi
+- 📘 Nền tảng: NLP, LLM, RAG & Agent
+- 🎓 Nền tảng: Lý thuyết AI tổng quát
 
 ---
 
@@ -792,6 +798,198 @@ Kỹ thuật: cửa sổ K lượt gần nhất + rolling summary; trích fact q
 
 ---
 
+## 🧩 Agent Engineering: Skills, Subagents, Frameworks
+
+### Context engineering: nguyên tắc & chiến lược
+
+**Context engineering** = chọn và duy trì *tập token nhỏ nhất có tín hiệu cao* cho mỗi bước suy luận của agent (system prompt, tools, examples, lịch sử, dữ liệu ngoài).
+
+- **Attention budget** hữu hạn; **context rot**: càng nhiều token, khả năng nhớ lại chính xác càng giảm, *trước cả* khi chạm giới hạn window.
+- Ba chiến lược cho tác vụ dài:
+
+| Kỹ thuật | Cơ chế | Hợp khi |
+|---|---|---|
+| Compaction | Tóm tắt lịch sử, mở context mới; giữ quyết định kiến trúc, bug chưa xử lý, việc đang dở | Hội thoại/tác vụ dài liên tục |
+| Structured note-taking | Ghi `NOTES.md`/memory tool ngoài context, đọc lại khi cần | Tác vụ có mốc, tiến độ rõ |
+| Sub-agent | Subagent đọc nhiều trong context riêng, trả tóm tắt ~1.000–2.000 token | Nghiên cứu, khám phá song song |
+
+- **Just-in-time**: giữ định danh nhẹ (path, query, URL), nạp bằng tool khi cần, đổi lại chậm hơn dữ liệu tính sẵn. **Hybrid** (Claude Code): CLAUDE.md nạp sẵn, glob/grep tìm đúng lúc.
+- Tinh chỉnh prompt compaction: **tối đa recall trước**, sau đó mới tăng precision.
+
+Nguồn: anthropic.com/engineering/effective-context-engineering-for-ai-agents (kiểm tra 10/2026).
+
+### Token tích luỹ & prompt caching
+
+**Tổng input của vòng agent tăng theo bậc hai**: lần gọi thứ i (i = 1..n) có input = P + (i−1)·(o + r), với P là prefix, o là output, r là tool result. Tổng = n·P + (o + r)·n(n−1)/2.
+
+**Prompt caching (Claude, docs 10/2026)**
+
+| Mục | Giá trị |
+|---|---|
+| Thứ tự prefix | `tools` → `system` → `messages` |
+| Đổi tools | mất cache của tools + system + messages |
+| Đổi system | mất cache của system + messages |
+| Cache write TTL 5 phút / 1 giờ | 1,25× / 2× giá input |
+| Cache read | 0,1× (tuỳ model) |
+| Số breakpoint tối đa | 4 |
+
+- Cache khớp **chính xác từng token** của prefix, không theo ngữ nghĩa và không phụ thuộc temperature.
+- Mọi thứ thay đổi (timestamp, user id, kết quả retrieval, tool động) đặt **sau** phần ổn định. Timestamp ở đầu system prompt có thể làm chi phí *tăng* (chỉ ghi, không bao giờ đọc).
+- Tool RAG đổi tập tool mỗi lượt sẽ phá cache; nên giữ tool ổn định hoặc dùng cơ chế tool search/defer loading của provider.
+
+Nguồn: platform.claude.com/docs/en/build-with-claude/prompt-caching.
+
+### Tool result clearing / context editing
+
+- Dạng compaction "nhẹ" an toàn nhất: xoá **tool result cũ** (đã dùng xong) và thay bằng placeholder.
+- Claude API *context editing* (beta `context-management-2025-06-27`, docs 10/2026), strategy `clear_tool_uses_20250919`:
+
+| Tham số | Mặc định | Ý nghĩa |
+|---|---|---|
+| `trigger` | 100.000 input token | Ngưỡng kích hoạt |
+| `keep` | 3 tool use | Số cặp gần nhất giữ lại |
+| `clear_at_least` | không | Xoá tối thiểu bao nhiêu token để đáng mất cache |
+| `exclude_tools` | không | Tool không bao giờ bị xoá |
+| `clear_tool_inputs` | false | Xoá cả args của tool call |
+
+- Xoá diễn ra **phía server**, client vẫn giữ lịch sử đầy đủ. Mỗi lần xoá **làm mất cache** từ điểm bị sửa.
+- Kết hợp **memory tool**: Claude được báo trước khi bị xoá và có thể lưu điều quan trọng.
+- Có thêm `clear_thinking_20251015` cho thinking block (phải đứng trước khi dùng cùng `clear_tool_uses`).
+
+### Agent Skills (SKILL.md)
+
+**Skill** = thư mục chứa `SKILL.md` (YAML frontmatter + hướng dẫn) kèm file phụ, script và tài nguyên. Chuẩn mở agentskills.io từ 12/2025.
+
+**Progressive disclosure** (docs Claude, 10/2026):
+
+| Level | Khi nạp | Chi phí |
+|---|---|---|
+| 1. Metadata (`name`, `description`) | Luôn, lúc khởi động | ~100 token/skill |
+| 2. Thân `SKILL.md` | Khi skill được kích hoạt | khuyến nghị < 5k token |
+| 3+. File phụ, script | Khi được đọc/chạy | file đọc vào thì tính; script chỉ tính **output** |
+
+**Frontmatter**: `name` ≤ 64 ký tự, chỉ chữ thường/số/gạch ngang, không chứa "anthropic"/"claude", không thẻ XML. `description` không rỗng, ≤ 1.024 ký tự, phải nói *làm gì* + *khi nào dùng*.
+
+**Chọn chỗ đặt kiến thức**
+
+| Loại | Đặt ở |
+|---|---|
+| Quy ước ngắn, luôn đúng | System prompt / CLAUDE.md (luôn nạp) |
+| Quy trình dài, dùng thỉnh thoảng, có script tất định | Skill |
+| Dữ liệu sống, hành động trên hệ thống ngoài | MCP server / tool |
+
+Bảo mật: chỉ cài skill từ nguồn tin cậy; skill có thể chạy code và gọi tool. Claude Code: `~/.claude/skills/`, `.claude/skills/`; `disable-model-invocation: true` để chỉ chạy khi user gọi.
+
+### Thiết kế tool cho agent (ACI)
+
+Theo *Writing effective tools for agents* (Anthropic, 2025):
+
+- **Chọn đúng tool**: đừng bọc 1:1 API. `search_contacts` tốt hơn `list_contacts`; gộp thao tác liên quan (`schedule_event`).
+- **Namespacing**: `asana_search`, `jira_search`; tiền tố hay hậu tố ảnh hưởng khác nhau tuỳ model, cần đo.
+- **Trả ngữ cảnh có ý nghĩa**: tên dễ đọc thay vì UUID; tham số `response_format` (concise ≈ 1/3 token so với detailed trong ví dụ 72 vs 206).
+- **Hiệu quả token**: phân trang, filter, range, truncate với mặc định hợp lý, kèm chỉ dẫn bước tiếp theo. Claude Code giới hạn tool response 25.000 token theo mặc định (tại thời điểm bài viết).
+- **Lỗi có hướng dẫn**: nói rõ sai gì, đúng phải thế nào, ví dụ, tool thay thế. Không trả stack trace hay chuỗi rỗng.
+- Tham số rõ nghĩa (`user_id` thay vì `user`), mô tả như viết cho đồng nghiệp mới; tối ưu bằng **eval**.
+
+Nguồn: anthropic.com/engineering/writing-tools-for-agents.
+
+### Subagents, handoff & multi-agent
+
+- **Subagent** (Claude Code): file Markdown + frontmatter (`name`, `description`, `tools`, `model`, `permissionMode`, `maxTurns`…), ở `.claude/agents/` hoặc `~/.claude/agents/`. Chạy trong **context riêng**, trả tóm tắt. Agent chính chọn subagent dựa vào `description`.
+- Số liệu Anthropic (multi-agent research): agent ≈ **4×** token so với chat, multi-agent ≈ **15×**; lead Opus 4 + subagent Sonnet 4 hơn single-agent **90,2%**; 3–5 subagent song song cắt tới **90%** thời gian.
+- **Không nên** tách: cần chung toàn bộ context, phụ thuộc chặt, phần lớn tác vụ coding, tác vụ đơn giản, ngân sách chặt.
+- Giao việc rõ: objective, output format, tool/nguồn, ranh giới; scale số subagent theo độ phức tạp; lưu output ra filesystem để tránh *game of telephone*.
+
+**OpenAI Agents SDK** (openai-agents 0.23.1): handoff = tool `transfer_to_<agent_name>`; agent đích **tiếp quản**, mặc định thấy toàn bộ lịch sử; `input_filter` cắt lịch sử; `on_handoff`, `input_type`. `Agent.as_tool()` khi muốn giữ quyền điều phối.
+
+### A2A vs MCP
+
+| | MCP | A2A |
+|---|---|---|
+| Hướng | *Vertical*: agent ↔ tool/dữ liệu | *Horizontal*: agent ↔ agent (opaque) |
+| Khởi xướng | Anthropic | Google, nay thuộc Linux Foundation |
+| Khám phá | `initialize`/list tools… | **Agent Card** tại `/.well-known/agent-card.json` |
+| Đơn vị | tool call, resource, prompt | **Task** (stateful), Message/Part, Artifact |
+
+- Agent Card: name, description, endpoint, capabilities (streaming, push notifications), security schemes, skills (`id, name, description, tags, examples`).
+- Trạng thái Task (spec 1.0): submitted, working, input-required, auth-required, completed, failed, canceled, rejected.
+- Binding: JSON-RPC 2.0, gRPC, HTTP+JSON/REST; streaming qua SSE/gRPC; push notification qua webhook.
+- Ví dụ trong docs: quản lý xưởng ↔ thợ ↔ nhà cung cấp dùng A2A; thợ ↔ máy chẩn đoán dùng MCP.
+
+Nguồn: a2a-protocol.org/latest/specification, /topics/a2a-and-mcp (kiểm tra 10/2026).
+
+### Hooks, permissions, plugins (Claude Code)
+
+**Hooks** là lệnh **tất định** do harness chạy tại lifecycle event: `PreToolUse`, `PostToolUse`, `PostToolUseFailure`, `UserPromptSubmit`, `Stop`, `SubagentStop`, `PreCompact`, `SessionStart`, `SessionEnd`… Loại hook: command, http, mcp_tool, prompt, agent.
+
+| Exit code | Ý nghĩa |
+|---|---|
+| 0 | Thành công, đọc JSON từ stdout |
+| 2 | Lỗi chặn: PreToolUse chặn tool, stderr đưa cho Claude |
+| Khác | Lỗi không chặn |
+
+- PreToolUse: `permissionDecision` = allow / deny / ask / defer. PostToolUse **không chặn, không hoàn tác** được (tool đã chạy); có thể sửa output Claude thấy.
+- Matcher MCP: `mcp__<server>__<tool>`.
+- **Permission rules**: deny → ask → allow, rule khớp đầu tiên thắng, **độ cụ thể không đổi thứ tự**. Deny chặn ở mọi mode kể cả `bypassPermissions`. Hook allow **không vượt** deny/ask rule; hook exit 2 chặn được cả lệnh có allow rule.
+- **Modes**: `default` (Manual), `acceptEdits`, `plan`, `auto` (classifier), `dontAsk` (cái gì cần hỏi thì từ chối, hợp CI), `bypassPermissions` (chỉ dùng trong container/VM).
+- **Plugin**: thư mục skills, agents, hooks, MCP servers với manifest `.claude-plugin/plugin.json`; cài từ marketplace; skill có namespace `/plugin:skill`.
+
+Nguồn: code.claude.com/docs/en/hooks, /permissions, /permission-modes, /plugins (kiểm tra 10/2026).
+
+### Sandbox cho code agent (smolagents)
+
+- `CodeAgent` mặc định chạy `LocalPythonExecutor`: interpreter tự viết theo AST; import bị cấm trừ khi nằm trong `additional_authorized_imports` (submodule phải cho phép riêng, vd `numpy.*`); giới hạn số thao tác; chặn truy cập như `random._os`. **Không sandbox local nào an toàn tuyệt đối.**
+- Remote executor: `executor_type` ∈ {`e2b`, `docker`, `modal`, `blaxel`} (smolagents 1.26.0). Chỉ code chạy trong sandbox, model vẫn gọi local; **không hỗ trợ managed agents**.
+- Muốn multi-agent cách ly: chạy **toàn bộ** hệ agent trong sandbox (phải đưa API key vào).
+- Best practice: giới hạn CPU/RAM, timeout, chạy user không đặc quyền, tắt mạng nếu không cần, pin version, luôn cleanup (`with` hoặc `agent.cleanup()`).
+- Rủi ro: lỗi của LLM, prompt injection từ web, supply chain, agent public bị lạm dụng.
+
+Nguồn: huggingface.co/docs/smolagents/tutorials/secure_code_execution.
+
+### So sánh framework agent
+
+| Framework | Điểm mạnh | API cần nhớ |
+|---|---|---|
+| **LangGraph** | Điều khiển tường minh, persistence | `StateGraph`, reducer, `Command(update, goto, graph=Command.PARENT, resume)`, `Send` (map-reduce), subgraph, checkpointer (`thread_id`) vs Store (namespace, xuyên thread), `recursion_limit` |
+| **LlamaIndex** | Data/RAG + agent | Workflows (`@step`, Event, StartEvent/StopEvent, Context), `RouterQueryEngine` (Pydantic/LLM Single/Multi selector), `SubQuestionQueryEngine`, `AgentWorkflow` (`root_agent`, `can_handoff_to`), FunctionAgent/ReActAgent |
+| **smolagents** | Gọn, code-as-action | `CodeAgent` vs `ToolCallingAgent`, `managed_agents`, `max_steps` (mặc định 20), `final_answer_checks`, `executor_type` |
+| **OpenAI Agents SDK** | Ít abstraction, tích hợp sẵn | `Agent`, `Runner.run/run_sync/run_streamed`, handoff, guardrails (input: agent đầu, output: agent cuối, tool guardrail), `max_turns` (mặc định 10, `None` = tắt giới hạn; vượt → `MaxTurnsExceeded`), tracing bật mặc định |
+
+- LangGraph: `Command` chỉ **thêm** edge động, edge tĩnh vẫn chạy; schema khác nhau thì gọi subgraph trong node function.
+- LlamaIndex: câu hỏi cần nhiều nguồn → SubQuestion; mỗi câu hỏi thuộc một nguồn → Router.
+- Workflow cố định thì viết code thường; chỉ dùng agent khi cần LLM quyết định luồng.
+
+### Agentic RAG nâng cao
+
+- **Retrieval là tool**: agent quyết định có retrieve không, retrieve gì, ở nguồn nào, bao nhiêu lần.
+- **Multi-hop**: query của bước sau phụ thuộc kết quả bước trước; tăng top-k không thay được việc lặp retrieve.
+- **Router / query planning**: chọn index theo description (nêu rõ phạm vi, thời gian, loại tài liệu); tách câu hỏi so sánh thành câu hỏi con.
+- **Corrective / self-reflective** (CRAG, Self-RAG): grade tài liệu → viết lại query hoặc đổi nguồn → generate → kiểm groundedness; **giới hạn vòng** và có đường thoát "không đủ thông tin".
+- Latency kỳ vọng với p đạt mỗi vòng, tối đa R vòng: E[số vòng] = Σ_{k=0}^{R−1} (1−p)^k.
+- **Khi nào pipeline cố định tốt hơn**: phần lớn câu hỏi single-hop, SLA latency chặt, cần tái lập/audit, ngân sách thấp → pipeline cố định + router đẩy ca khó sang agent.
+- Failure mode: lặp query gần trùng, trả lời từ kiến thức có sẵn không retrieve, chọn nhầm index, context phình vì kết quả dài.
+
+### Observability & đánh giá agent
+
+- **Trace** cho mỗi task, **span** lồng nhau: agent step, generation (token, cost), tool (args, output, lỗi), retriever, guardrail, handoff. Gắn session/user id, version prompt/model. Langfuse có observation type `agent`, `tool`, `chain`, `retriever`, `evaluator`, `embedding`, `guardrail`… (Python SDK ≥ 3.3.1).
+- OpenAI Agents SDK: tracing bật mặc định; `OPENAI_AGENTS_DISABLE_TRACING=1`; `trace_include_sensitive_data` mặc định True; `add_trace_processor()`; không khả dụng với ZDR.
+
+| Chỉ số | Công thức |
+|---|---|
+| Success rate | task thành công / tổng task |
+| Cost per successful task | tổng chi phí / số task **thành công** |
+| Tool-call success rate | 1 − call lỗi / tổng call |
+| Tool precision / recall | trên tập tool duy nhất so với tham chiếu |
+| pass^k (độ ổn định) | pᵏ |
+
+- **Outcome eval** (state cuối, kiểm bằng code) + **trajectory eval** dạng ràng buộc (tool bắt buộc/cấm, thứ tự, số bước tối đa) thay vì exact match một đường duy nhất. LLM-judge có rubric, hiệu chỉnh với nhãn người.
+- **Regression với golden task**: chạy nhiều lần mỗi task; với p = 0,8 và luật 2/3 thì P(fail) = 0,104, tức có fail "giả". So với baseline có tính nhiễu.
+- **Online**: max steps/turns + ngân sách cost, phát hiện call trùng, dashboard step count, cost/task, p95 latency, tool error rate theo version.
+- Anthropic: bắt đầu eval sớm với ~20 truy vấn thực tế; LLM-judge chấm theo rubric; tập trung vào end-state.
+
+
+---
+
 ## 📊 LLM Evaluation, Observability & LLMOps
 
 ### Vì sao eval LLM khó & bản đồ phương pháp
@@ -1559,4 +1757,777 @@ with torch.no_grad():                 # hoặc torch.inference_mode()
 | Trie | O(độ dài chuỗi) | tokenizer, autocomplete |
 
 - Tỷ số sort vs heap top-k: log(n)/log(k); n = 10^6, k = 100 → 6/2 = 3.
+
+
+---
+
+## 🏗️ ML System Design, Ranking & Experimentation
+
+### Khung trả lời ML system design (8 bước)
+
+1. **Làm rõ yêu cầu**: mục tiêu kinh doanh, người dùng, quy mô (user, item, peak QPS), latency/cost budget, ràng buộc pháp lý/dữ liệu.
+2. **Metric**: offline (recall@K, nDCG, PR-AUC, calibration) ↔ online (CTR, conversion, GMV, retention) + **guardrail** (latency p99, error rate, complaint).
+3. **Dữ liệu & nhãn**: nguồn, label explicit/implicit, label delay, selection bias, chia train/test **theo thời gian**.
+4. **Feature**: user/item/context/cross, batch vs real-time, point-in-time correctness.
+5. **Model**: heuristic/baseline → GBDT/two-tower → deep/LLM; giải thích trade-off.
+6. **Serving**: batch/online/streaming, cascade, caching, fallback, latency budget, capacity.
+7. **Monitoring**: data/feature drift, prediction drift, KPI, freshness, tỉ lệ fallback.
+8. **Iteration**: shadow → canary → A/B, retrain, data flywheel (sản phẩm tốt hơn → nhiều tương tác → nhiều nhãn → model tốt hơn).
+
+**Lỗi hay gặp:** nhảy vào model ngay; không nói metric; quên baseline; quên cold start và feedback loop; không nêu fallback.
+
+### Batch vs online vs streaming
+
+| Kiểu | Khi nào | Ưu | Nhược |
+|---|---|---|---|
+| Batch (offline) | Biết trước tập cần chấm, không cần tức thì (email hằng ngày, gợi ý tính sẵn) | Rẻ, batch lớn, dễ kiểm tra trước | Kết quả cũ, tốn công cho user không hoạt động |
+| Online (đồng bộ) | Cần quyết định trong request (fraud lúc thanh toán, search) | Dùng ngữ cảnh mới nhất | Ràng buộc latency, cần autoscale, fallback |
+| Streaming | Feature/score cập nhật theo event (velocity, session) | Feature tươi, độ trễ giây | Phức tạp (Kafka/Flink), exactly-once, late events |
+
+Kiến trúc thường gặp là lai: embedding item tính batch, feature velocity tính streaming, ranking online.
+
+### Feature store & training-serving skew
+
+- **Online store**: KV latency thấp (Redis/DynamoDB), giữ giá trị mới nhất → serving.
+- **Offline store**: lịch sử có timestamp → dựng tập train bằng **point-in-time join** (chỉ lấy giá trị có `ts ≤ event_ts`).
+- **Nguồn skew**: hai codebase tính feature khác nhau; join snapshot hiện tại (leakage tương lai); feature online bị trễ/thiếu; xử lý null khác nhau; phân phối thay đổi (drift).
+- **Phòng tránh**: định nghĩa feature một lần; log feature lúc serving để train lại ("log-and-wait"); so sánh phân phối train vs serve (PSI, KS); unit test cho transform.
+- Dấu hiệu leakage: AUC offline cao bất thường (0.97+) rồi rơi mạnh online.
+
+### Latency budget, capacity, cost
+
+- **Latency budget**: bước song song lấy max, tuần tự thì cộng; cộng các p99 là ước lượng bảo thủ.
+- **Little's law**: `L = λ × W` → số request đồng thời = QPS × latency (giây).
+- **Số replica** = ⌈QPS × latency / (concurrency_mỗi_replica × utilization_mục_tiêu)⌉, cộng thêm N+1 dự phòng.
+- **Batch tuần tự**: số ứng viên tối đa = ⌊budget / t_batch⌋ × batch_size (batch không đầy vẫn tốn trọn thời gian).
+- **Cost per request (API)** = in_tok × giá_in + out_tok × giá_out.
+- **Hoà vốn self-host**: N* = chi phí cố định/tháng (GPU 24/7 + **người vận hành**) / cost_per_request_API. Kiểm tra utilization thật và chất lượng model.
+- Ví dụ: 800 QPS × 0.15 s = 120 đồng thời; 16 slot × 70% = 11.2 → 11 replica.
+
+### Cascade, cold start, feedback loop, deploy an toàn
+
+- **Cascade**: retrieval (recall@K, ANN, two-tower) → ranking (nDCG, GBDT/DNN, cross features) → re-ranking (đa dạng, business rule, fairness). Recall của tầng đầu là trần chất lượng; recall nối tiếp = tích recall các tầng.
+- **Cold start**: user mới → popular theo segment, onboarding, session features; item mới → content embedding, exploration slot.
+- **Feedback loop**: model chỉ thấy nhãn trên cái nó hiển thị/cho qua → cần exploration, holdout ngẫu nhiên, log propensity.
+- **Label delay**: chỉ train trên dữ liệu đã qua label maturity window, hoặc dùng delayed-feedback model.
+- **Deploy**: shadow (sức khoẻ, không đo được hành vi user) → canary (lỗi, guardrail) → A/B (KPI) → ramp-up; luôn có rollback và fallback (popular, cache, model nhẹ, circuit breaker).
+
+### Case study nhanh
+
+| Bài toán | Điểm then chốt |
+|---|---|
+| Fraud | < 100 ms, velocity feature streaming, rule + ML, split theo thời gian, label delay (chargeback), ngưỡng theo chi phí, selective labels |
+| Document AI/OCR | detect → recognize → layout/KIE → validate rule → human-in-the-loop theo confidence; ngưỡng theo tổng chi phí review + lỗi |
+| Chatbot CSKH RAG | tri thức tĩnh → RAG; dữ liệu cá nhân/động → tool/API có xác thực; guardrail, handoff sang người, eval faithfulness |
+| Search | query understanding → hybrid retrieval → LTR → rerank; metric nDCG/MRR, zero-result rate, CTR@k |
+| Moderation | classifier rẻ recall cao → LLM/model nặng → người; recall nhân dồn, sample ngẫu nhiên bài đã đăng để đo bỏ sót |
+| RecSys | two-tower + ANN → ranker đa mục tiêu → re-rank đa dạng; cold start, position bias |
+
+### Learning-to-rank & metric
+
+| Họ | Loss trên | Ví dụ |
+|---|---|---|
+| Pointwise | từng doc | regression/logloss |
+| Pairwise | cặp (d_i ≻ d_j) | RankNet `P = σ(s_i − s_j)` |
+| Listwise | cả danh sách | ListNet, ListMLE, LambdaRank (lai pairwise–listwise) |
+
+- **LambdaRank**: λ_ij = gradient RankNet × |ΔNDCG_ij| (nDCG không khả vi → định nghĩa thẳng gradient). **LambdaMART** = lambda + GBDT (LightGBM `lambdarank`).
+- `DCG@k = Σ (2^rel − 1)/log2(i + 1)`; nDCG = DCG/IDCG, với IDCG từ **mọi** doc relevant đã biết.
+- MRR = mean(1/rank của kết quả đúng đầu tiên); MAP = mean AP (nhị phân).
+- Precision@k tăng không kéo theo nDCG tăng.
+
+### Position bias, click model, IPS, interleaving, exploration
+
+- **Examination hypothesis**: P(click) = P(xem | vị trí) × P(hấp dẫn). Hấp dẫn ≈ CTR / propensity.
+- **Click model**: position-based (PBM), cascade (người dùng duyệt từ trên xuống, dừng khi click).
+- **Ước lượng propensity**: randomization (swap/RandPair), EM trên log; KHÔNG dùng CTR theo vị trí thô.
+- **IPS**: trọng số 1/p_k → không chệch nếu p đúng, variance cao → clip / self-normalized. Không cứu được item chưa từng hiển thị.
+- **Interleaving** (team-draft): nhạy hơn A/B nhiều lần cho so sánh ranker, nhưng chỉ cho preference, không cho lift KPI.
+- **Exploration**: ε-greedy, UCB, Thompson; log propensity để off-policy eval.
+- **Offline↑ online↔**: nhãn sinh từ policy cũ, metric lệch KPI, novelty, hiệu ứng toàn trang.
+
+### Anomaly detection cheat-sheet
+
+| Phương pháp | Ý tưởng | Lưu ý |
+|---|---|---|
+| z-score | \|x − μ\|/σ > 3 | Bị **masking**; với n nhỏ \|z\| ≤ √(n−1); dùng modified z (median, MAD, > 3.5) |
+| IQR (Tukey) | ngoài [Q1 − 1.5·IQR, Q3 + 1.5·IQR] | Robust; quy ước quantile khác nhau |
+| Isolation Forest | path ngắn = dễ cô lập = bất thường; s = 2^(−E[h]/c(n)) | Không cần nhãn, nhanh, sub-sample 256 |
+| LOF | mật độ cục bộ so với láng giềng; ≈1 bình thường, ≫1 bất thường | Hợp cụm mật độ khác nhau; O(n²) |
+| One-Class SVM | biên bao dữ liệu bình thường; ν = cận trên tỉ lệ outlier | Nhạy scale & kernel |
+| Autoencoder | reconstruction error cao = bất thường | Train trên data sạch; dễ học luôn anomaly |
+
+- Loại: **point**, **contextual** (theo giờ/mùa), **collective** (chuỗi).
+- Đánh giá ít nhãn: precision@k (k = năng lực review), PR-AUC, recall trên case đã biết, backtest sự cố.
+- Ngưỡng theo chi phí: tối thiểu `#alert × c_review + #miss × c_miss`.
+
+### A/B testing: thiết kế & thống kê
+
+- **Đơn vị randomize** = đơn vị phân tích (user); hash ổn định; pre-register primary/guardrail/thời lượng; chạy trọn chu kỳ tuần.
+- **Sample size**: `n ≈ 16σ²/δ²` mỗi nhóm (α = 0.05 hai phía, power 80%); tỉ lệ: σ² = p(1 − p). Ví dụ p = 5%, δ = 0.5 điểm → 30 400/nhóm.
+- **MDE**: `δ = √(16σ²/n)` với n **mỗi nhóm**; n ∝ 1/δ².
+- **Multiple testing**: FWER = 1 − (1 − α)^m khi m kiểm định độc lập và mọi H0 đúng (m = 20 → 64%); Bonferroni α/m; Holm; BH cho FDR.
+- **Peeking**: nhìn 10 lần ≈ 19% false positive → fixed horizon hoặc sequential (O'Brien–Fleming, mSPRT).
+- **SRM**: χ² = Σ(O − E)²/E, df = 1; 50 600 vs 49 400 → χ² = 14.4, p ≈ 0.00015 → dừng, tìm bug.
+- **CUPED**: Y − θ(X − X̄), θ = cov/var, variance × (1 − ρ²) → ρ = 0.6 giảm 36% cỡ mẫu.
+- **A/A**: tỉ lệ false positive kỳ vọng ≈ α; p-value phân phối đều.
+- **Novelty** (lift giảm dần) vs **primacy** (ban đầu tệ, tốt dần): xem effect theo thời gian, tách user mới/cũ.
+
+### Interference, bandit & khi nào không A/B
+
+- **SUTVA bị vi phạm**: marketplace (chung nguồn cung), mạng xã hội, đấu giá quảng cáo chung ngân sách → chệch, tăng n không sửa được.
+- Thiết kế: **switchback** (khu vực × khung giờ), **cluster/geo randomization** (variance ↑), ego-network clusters.
+- **Bandit** vs A/B: bandit giảm regret, hợp chiến dịch ngắn/nhiều arm; A/B cho ước lượng hiệu ứng không chệch và CI chuẩn.
+- ε-greedy: arm tốt nhất nhận 1 − ε + ε/K (ε = 0.1, K = 4 → 92.5%). Thompson: sample posterior (Beta) rồi argmax.
+- Offline eval → online A/B mismatch: luôn xác nhận bằng thí nghiệm online trước khi ship thay đổi lớn.
+
+### Causal inference khi không thí nghiệm được
+
+| Phương pháp | Giả định then chốt | Ghi nhớ |
+|---|---|---|
+| Propensity (matching/IPW) | Không có confounder ẩn, có overlap | e(X) = P(T=1\|X); kiểm tra balance; không đưa biến sau treatment |
+| DiD | Parallel trends | (A_sau − A_trước) − (B_sau − B_trước); kiểm tra event study |
+| IV | Relevance + exclusion | Ước lượng LATE cho compliers; encouragement design |
+| RDD | Không thao túng quanh ngưỡng | Hiệu ứng cục bộ tại ngưỡng |
+| Uplift modeling | Có cả treatment & control | Nhắm persuadables; Qini curve; đừng nhắm "sure things" |
+
+- **Correlation ≠ causation**: self-selection, confounder (mức độ gắn bó).
+- **Simpson's paradox**: thắng từng tầng nhưng thua tổng do phân phối tầng khác nhau → so theo tầng/chuẩn hoá.
+
+
+---
+
+## ∑ Nền tảng: Toán & Thống kê cho AI
+
+### Vector, norm & similarity
+
+- **Dot product** a·b = Σ aᵢbᵢ = ‖a‖‖b‖·cos θ. Dương: cùng phía, 0: **trực giao**, âm: ngược phía.
+- **Norm**: ‖v‖₁ = Σ|vᵢ| · ‖v‖₂ = √Σvᵢ² · ‖v‖∞ = max|vᵢ|. Ví dụ (3, −4, 0, 12): 19 / 13 / 12.
+- **Cosine** = a·b / (‖a‖₂‖b‖₂) ∈ [−1, 1], chỉ đo hướng. Embedding đã L2-normalize → cosine = dot product (vector DB dùng inner product).
+- Khoảng cách Euclid với vector đơn vị: ‖a − b‖² = 2 − 2cos θ → xếp hạng theo L2 và cosine **trùng nhau**.
+- Pearson correlation = cosine của hai vector đã trừ mean.
+- Liên hệ: L1 → Lasso/sparse; L2 → weight decay, gradient clipping; L∞ → adversarial ε-ball.
+
+### Ma trận: shape, chi phí, tính chất
+
+| Phép | Shape | Ghi chú |
+|---|---|---|
+| (m×k)·(k×n) | m×n | m·k·n phép nhân, ≈ 2mkn FLOP |
+| outer u·vᵀ (u∈ℝᵐ, v∈ℝⁿ) | m×n | rank 1 |
+| Q·Kᵀ (T×d)(d×T) | T×T | O(T²d) mỗi head |
+
+- Nhân n×n thông thường O(n³). LLM forward ≈ 2·N FLOP/token.
+- **Không giao hoán**: AB ≠ BA. (AB)ᵀ = BᵀAᵀ, (AB)⁻¹ = B⁻¹A⁻¹.
+- 2×2: det[[a, b], [c, d]] = ad − bc; nghịch đảo = (1/det)·[[d, −b], [−c, a]]. det = 0 ⇔ rank < n ⇔ không khả nghịch ⇔ Ax = b vô nghiệm hoặc vô số nghiệm.
+- **Rank** = số hàng/cột độc lập tuyến tính.
+- **Broadcasting**: so từ chiều cuối, bằng nhau hoặc một bên = 1; thiếu chiều thì thêm 1 ở đầu. Bẫy kinh điển: (32, 1) − (32,) → (32, 32).
+
+### Eigen, SVD, PCA, low-rank (LoRA)
+
+- **Eigen**: Av = λv. 2×2: λ² − (trace)·λ + det = 0; Σλ = trace, Πλ = det. Ví dụ [[4, 1], [2, 3]] → λ = 5 (v = (1, 1)), λ = 2 (v = (1, −2)).
+- Ma trận đối xứng: trị riêng thực, vector riêng trực giao.
+- **SVD**: A = UΣVᵀ cho mọi ma trận; σᵢ = √eig(AᵀA) ≥ 0. σᵢ = |λᵢ| chỉ đúng với ma trận đối xứng (tổng quát: normal), không đúng cho ma trận bất kỳ.
+- **Eckart–Young**: giữ k singular value lớn nhất = xấp xỉ rank-k tốt nhất.
+- **PCA** = SVD của X đã **center**; trục chính = cột V, phương sai giải thích = σᵢ²/(n − 1).
+- **LoRA**: ΔW = B·A, B ∈ ℝ^(d×r), A ∈ ℝ^(r×k) → r(d + k) tham số, rank ≤ r. d = k = 4096, r = 16 → 131,072 (≈ 0.78% của W).
+
+### Đạo hàm & backprop
+
+| Hàm | Đạo hàm | Ghi chú |
+|---|---|---|
+| σ(z) | σ(1 − σ) | max 0.25 tại 0 → vanishing |
+| tanh z | 1 − tanh² | max 1, output (−1, 1) |
+| ReLU | 0 (z<0), 1 (z>0) | dead ReLU |
+| ln x | 1/x | |
+| eˣ | eˣ | |
+
+- **Chain rule**: ∂L/∂w = ∂L/∂h · ∂h/∂z · ∂z/∂w. Backprop = chain rule ngược, tái sử dụng gradient upstream.
+- **Softmax + cross-entropy**: ∂L/∂z = p − y (tổng = 0). Logistic + BCE: ∂L/∂w = (p − y)·x. Truyền **logits** vào `CrossEntropyLoss`.
+- **Jacobian** f: ℝⁿ→ℝᵐ: m×n. **Hessian**: n×n đối xứng; PD → min, ND → max, trị riêng trái dấu → saddle.
+- **Taylor bậc 1**: f(x + Δ) ≈ f(x) + f'(x)Δ → cơ sở của GD: L(θ − ηg) ≈ L(θ) − η‖g‖².
+
+### Tối ưu: GD, learning rate, momentum, Lagrange
+
+- GD: θ ← θ − η∇L. f = (w − 3)², w₀ = 0, η = 0.1 → 0.6 → 1.08.
+- **Ổn định**: với hàm bậc hai có độ cong lớn nhất L, cần η < 2/L. f = w²: η < 1; η = 1 dao động, η > 1 phân kỳ. Đổi dấu ≠ phân kỳ.
+- **Lồi**: f'' ≥ 0 / Hessian PSD → local min = global min (linear/logistic regression). Neural net: không lồi, saddle phổ biến hơn local min tồi.
+- **Batch GD** chính xác nhưng đắt; **SGD/mini-batch** nhiễu không chệch, rẻ, giúp thoát saddle.
+- **Momentum** v ← βv + g: làm mượt, giữ quán tính; gradient không đổi → v → g/(1 − β) (β = 0.9 → 10g). Adam = momentum + chia √v (thích nghi theo từng tham số).
+- **Lagrange**: tối ưu có ràng buộc g = 0 ⇒ ∇f = λ∇g; λ = độ nhạy của giá trị tối ưu theo ràng buộc. Max entropy + ràng buộc → softmax/Gibbs.
+
+### Xác suất cơ bản & Bayes
+
+- P(A | B) = P(A ∩ B)/P(B). **Độc lập**: P(A ∩ B) = P(A)P(B). **Xung khắc** (P > 0) ⇒ KHÔNG độc lập.
+- **Bayes**: P(H | E) = P(E | H)P(H)/P(E); posterior ∝ likelihood × prior.
+- Bài kinh điển: prevalence 1%, sensitivity 99%, specificity 95% → P(bệnh | +) = 0.0099/0.0594 ≈ **16.7%** (không phải 99%: base rate neglect).
+- Mẹo: đếm trên 10,000 người thay vì dùng công thức.
+- Liên hệ: precision trên lớp hiếm thấp dù recall/specificity cao; Naive Bayes; diễn giải p-value sai cũng là nhầm P(E | H) với P(H | E).
+
+### Phân phối, kỳ vọng, phương sai, CLT
+
+| Phân phối | E | Var | Dùng ở đâu |
+|---|---|---|---|
+| Bernoulli(p) | p | p(1−p) | BCE |
+| Binomial(n,p) | np | np(1−p) | pass@k, đếm thành công |
+| Poisson(λ) | λ | λ | số request/phút |
+| Uniform[a,b] | (a+b)/2 | (b−a)²/12 | random init |
+| N(μ,σ²) | μ | σ² | init, nhiễu diffusion, MSE |
+| Categorical(p) | – | – | softmax, next-token |
+
+- Var(aX + c) = a²Var(X); Var(X ± Y) = VarX + VarY ± 2Cov. Độc lập ⇒ Cov = 0 (ngược lại sai: Y = X²).
+- ρ = Cov/(σxσy) ∈ [−1, 1], chỉ đo tuyến tính, bất biến khi đổi đơn vị.
+- 68-95-99.7 cho ±1σ/±2σ/±3σ. Một đuôi > μ + 2σ ≈ 2.5%.
+- **LLN**: x̄ → μ. **CLT**: x̄ ≈ N(μ, σ²/n) với mọi phân phối có phương sai hữu hạn; dữ liệu gốc KHÔNG trở thành chuẩn.
+- q·k của vector d chiều (thành phần độc lập, mean 0, var 1) có Var = d → chia √d trong attention.
+
+### MLE & MAP ↔ loss & regularization
+
+- **MLE**: θ̂ = argmax Σ log p(xᵢ | θ) = argmin NLL.
+  - Bernoulli: p̂ = k/n; NLL = BCE. Categorical: NLL = cross-entropy (train LLM).
+  - Gaussian: μ̂ = x̄, σ̂² = (1/n)Σ(xᵢ − x̄)² (chệch); với σ cố định, MLE ⇔ MSE.
+- **MAP**: argmax [log p(D | θ) + log p(θ)].
+  - Prior Gaussian N(0, τ²) → **L2/Ridge/weight decay**, λ = σ²/τ².
+  - Prior Laplace → **L1/Lasso** (sparse).
+  - Prior đều → MAP = MLE.
+- Phương sai mẫu không chệch chia n − 1 (Bessel). NumPy `std` mặc định ddof=0, pandas/torch mặc định chia n − 1.
+
+### Lý thuyết thông tin cho LLM
+
+- **Entropy** H(P) = −Σp log p (bit nếu log₂, nats nếu ln). (1/2, 1/4, 1/8, 1/8) → 1.75 bit; đều K lớp → log₂K.
+- **Cross-entropy** H(P, Q) = −Σp log q = H(P) + KL(P ‖ Q) → train bằng CE = minimize forward KL.
+- **KL** = Σp log(p/q) ≥ 0, = 0 ⇔ P = Q, **bất đối xứng**, = ∞ nếu q = 0 mà p > 0. Ví dụ P = (0.5, 0.5), Q = (0.9, 0.1): 0.511 vs đảo chiều 0.368 nats.
+- Forward KL(P‖Q): mode-covering (MLE). Reverse KL(Q‖P): mode-seeking (VI, phạt KL trong RLHF).
+- **Mutual information** I(X; Y) = H(X) − H(X|Y) = KL(p(x,y) ‖ p(x)p(y)); = 0 ⇔ độc lập; InfoNCE tối đa cận dưới của MI.
+- **Perplexity** = exp(CE trung bình/token) cùng cơ số: loss 2.0 nats → e² ≈ 7.39.
+- **Temperature**: softmax(z/T); T < 1 nhọn, T > 1 phẳng, argmax không đổi.
+- **Log-sum-exp**: LSE(z) = m + log Σe^(zᵢ − m), m = max z; softmax(z) = softmax(z − c).
+
+### Thống kê mô tả & suy diễn
+
+- Mean nhạy outlier; **median** bền (breakdown 50%); mode = giá trị hay gặp nhất. MSE ↔ mean, MAE ↔ median.
+- Std mẫu s = √(Σ(x − x̄)²/(n − 1)). **z** = (x − μ)/σ; Φ(1.5) ≈ 0.933, Φ(1.96) = 0.975.
+- **SE** = s/√n; CI 95% ≈ x̄ ± 1.96·SE. CI nói về **tham số** (mean), không phải từng quan sát. Giảm một nửa CI cần gấp 4 lần mẫu.
+- **p-value** = P(dữ liệu cực đoan như vậy | H₀), KHÔNG phải P(H₀ đúng). p lớn ≠ chứng minh H₀.
+- **Loại I** (α): bác bỏ H₀ đúng – false positive. **Loại II** (β): bỏ sót hiệu ứng thật. Power = 1 − β.
+- **A/B** hai tỷ lệ: z = (p₂ − p₁)/√(p̂(1 − p̂)(1/n₁ + 1/n₂)); |z| > 1.96 → có ý nghĩa ở 5%. Tránh peeking và multiple testing.
+- **Correlation ≠ causation** (confounder). **Simpson's paradox**: xu hướng trong từng nhóm đảo ngược khi gộp → so trên cùng eval set/phân tầng.
+- **Sampling/selection bias**: mẫu tự nguyện, survivorship, eval contamination.
+
+### Số thực trên máy tính
+
+| Kiểu | Sign/Exp/Mantissa | Max | eps (quanh 1) | Ghi chú |
+|---|---|---|---|---|
+| fp32 | 1/8/23 | ~3.4e38 | 2⁻²³ ≈ 1.2e-7 | master weights |
+| fp16 | 1/5/10 | 65504 | 2⁻¹⁰ ≈ 9.8e-4 | cần loss scaling |
+| bf16 | 1/8/7 | ~3.4e38 | 2⁻⁷ ≈ 7.8e-3 | range như fp32 |
+| fp64 | 1/11/52 | ~1.8e308 | 2⁻⁵² | khoa học |
+
+- Exponent → **range**, mantissa → **precision**.
+- Overflow: exp(z) tràn fp32 khi z > ~88.7, fp16 khi z > ~11.1 → trừ max trong softmax.
+- Underflow: gradient < ~6e-8 thành 0 trong fp16 → loss scaling.
+- bf16: 256 + 1 = 256 (khoảng cách 2 trong [256, 512)) → accumulate ở fp32.
+- Bộ nhớ: 7B tham số × 2 byte = 14 GB (bf16).
+
+
+---
+
+## 🧱 Nền tảng: ML & Deep Learning cốt lõi
+
+### Bức tranh chung & các kiểu học
+
+**AI ⊃ ML ⊃ DL.** AI: máy làm tác vụ cần trí thông minh (gồm cả luật viết tay). ML: học hàm từ dữ liệu thay vì lập trình luật. DL: ML bằng neural network nhiều lớp, tự học biểu diễn.
+
+| Kiểu học | Dữ liệu | Ví dụ |
+|---|---|---|
+| Supervised | (x, y) có nhãn | phân loại spam, dự đoán giá nhà |
+| Unsupervised | chỉ x | clustering, PCA, phát hiện bất thường |
+| Self-supervised | nhãn tự sinh từ dữ liệu | next-token (GPT), masked LM (BERT), contrastive |
+| Semi-supervised | ít nhãn + nhiều không nhãn | pseudo-labeling |
+| Reinforcement | reward từ môi trường | game, robot, RLHF |
+
+**Loại task** (hỏi 'output là gì?'): classification (nhãn rời rạc), regression (số liên tục), clustering (nhóm, không nhãn), ranking (thứ tự – NDCG/MAP), generation (sinh dữ liệu).
+
+### Các cặp khái niệm dễ nhầm
+
+| Cặp | Phân biệt | Ví dụ |
+|---|---|---|
+| Generative vs discriminative | học P(x, y) = P(x\|y)P(y) vs học thẳng P(y\|x) | Naive Bayes, GMM, HMM vs logistic regression, SVM, NN classifier |
+| Parametric vs non-parametric | số tham số cố định vs độ phức tạp tăng theo dữ liệu | linear/logistic, NN vs kNN, cây không giới hạn, kernel SVM |
+| Online vs batch learning | cập nhật dần theo từng mẫu/mini-batch đến liên tục vs train lại trên toàn bộ dữ liệu | SGD trên stream, recommender cập nhật realtime vs train định kỳ hằng tuần |
+| Lazy vs eager | không train, tính lúc dự đoán vs học model trước | kNN vs hầu hết model khác |
+| Parameter vs hyperparameter | học từ data vs chọn bằng validation | trọng số w vs learning rate, k, max_depth |
+
+- 'Non-parametric' **không** có nghĩa là không có hyperparameter.
+- 'Generative' trong ML cổ điển ≠ 'GenAI': Naive Bayes là generative.
+
+### Quy trình: chia dữ liệu, baseline, giả định
+
+- **Train**: fit trọng số. **Validation**: chọn hyperparameter/model/threshold/epoch. **Test**: dùng **một lần** cuối để báo cáo. Dữ liệu nhỏ → k-fold CV, vẫn giữ test riêng.
+- **Baseline** trước tiên: majority class (`DummyClassifier`), mean/median (`DummyRegressor`), rule đơn giản, model tuyến tính.
+- **No Free Lunch**: trung bình trên mọi bài toán, mọi thuật toán như nhau → không có model tốt nhất tuyệt đối; phải thử & đánh giá.
+- **Inductive bias**: giả định giúp tổng quát hoá (CNN: locality + weight sharing; kNN: hàng xóm giống nhau; linear: quan hệ tuyến tính; Naive Bayes: độc lập có điều kiện).
+- **i.i.d.**: các mẫu độc lập, train và test cùng phân phối. Vi phạm: time-series, nhiều mẫu cùng 1 user/bệnh nhân, dữ liệu deploy khác train.
+
+| Distribution shift | Cái gì đổi | Ví dụ |
+|---|---|---|
+| Covariate | P(x), P(y\|x) giữ nguyên | ảnh scan → ảnh điện thoại |
+| Label/prior | P(y), P(x\|y) giữ nguyên | mùa dịch tỷ lệ bệnh tăng |
+| Concept | P(y\|x) | chiêu gian lận mới, định nghĩa spam đổi |
+
+### Confusion matrix & metric phân loại
+
+| | Dự đoán + | Dự đoán − |
+|---|---|---|
+| **Thực tế +** | TP | FN (bỏ sót, lỗi loại II) |
+| **Thực tế −** | FP (báo động giả, lỗi loại I) | TN |
+
+Mẹo: chữ thứ hai = model đoán gì; chữ đầu = đoán đúng hay sai.
+
+- Accuracy = (TP + TN)/N – vô nghĩa khi mất cân bằng.
+- **Precision** = TP/(TP + FP) – 'trong các ca báo dương, bao nhiêu đúng'.
+- **Recall / sensitivity / TPR** = TP/(TP + FN) – 'bắt được bao nhiêu ca dương'.
+- **Specificity / TNR** = TN/(TN + FP); FPR = 1 − specificity.
+- **F1** = 2PR/(P + R) (trung bình điều hoà, ≤ trung bình cộng). F-beta: β > 1 nghiêng về recall.
+- **ROC**: TPR theo FPR khi quét threshold. **AUC** = P(score mẫu dương ngẫu nhiên > score mẫu âm ngẫu nhiên); 0.5 = ngẫu nhiên. Không phụ thuộc threshold. Lớp dương rất hiếm → xem thêm PR-AUC.
+- Tăng threshold → thường precision ↑, recall ↓.
+
+### Metric hồi quy & chọn metric
+
+- **MAE** = mean|y − ŷ| – dễ hiểu, bền outlier.
+- **MSE** = mean(y − ŷ)² – khả vi, hay dùng làm loss, phạt lỗi lớn.
+- **RMSE** = √MSE – cùng đơn vị y; luôn RMSE ≥ MAE, chênh nhiều ⇒ có vài lỗi rất lớn.
+- Ví dụ e = [1, 0, −2, 3]: MAE 1.5, MSE 3.5, RMSE 1.871.
+
+| Tình huống | Ưu tiên |
+|---|---|
+| Bỏ sót đắt (sàng lọc bệnh, fraud) | Recall (kèm ràng buộc precision) |
+| Báo động giả đắt (lọc spam) | Precision |
+| Mất cân bằng nặng | PR-AUC, F1, recall@precision |
+| Cần xếp hạng tốt, không phụ thuộc threshold | ROC-AUC |
+| Lỗi lớn rất tệ | RMSE |
+| Nhiều outlier | MAE / Huber |
+
+### Overfitting, bias–variance & regularization
+
+**Expected error = Bias² + Variance + Irreducible noise.**
+
+| Triệu chứng | Chẩn đoán | Xử lý |
+|---|---|---|
+| Train tốt, val kém, gap lớn | Overfit / high variance | thêm data, augmentation, L1/L2, dropout, early stopping, model nhỏ hơn, bagging |
+| Train kém ≈ val kém | Underfit / high bias | model mạnh hơn, thêm feature, giảm regularization, train lâu hơn, boosting |
+
+- **Learning curve** (error theo lượng data): overfit → gap thu hẹp khi thêm data (thêm data có ích); underfit → hai đường hội tụ sớm ở mức cao (thêm data vô ích).
+- **L2** (λΣw²): co trọng số nhỏ. **L1** (λΣ|w|): đẩy về đúng 0 → sparse. **Dropout**: tắt ngẫu nhiên neuron khi train (inverted dropout chia 1 − p). **Early stopping**: theo val loss + patience, khôi phục best checkpoint. **Data augmentation**: biến thể hợp lệ của dữ liệu train.
+- kNN: k nhỏ → variance cao; k lớn → bias cao.
+
+### Thuật toán ML kinh điển
+
+| Thuật toán | Ý tưởng | Cần scale? | Ghi nhớ |
+|---|---|---|---|
+| Linear regression | min Σ(y − ŷ)²; normal equation w = (XᵀX)⁻¹Xᵀy | có (nếu regularize/GD) | giả định: tuyến tính, phần dư độc lập, phương sai đều, không đa cộng tuyến hoàn hảo |
+| Logistic regression | p = σ(w·x + b), loss BCE | có | boundary **tuyến tính** w·x + b = 0; z là log-odds |
+| kNN | vote k láng giềng gần nhất | **bắt buộc** | lazy, non-parametric |
+| Naive Bayes | P(y\|x) ∝ P(y)ΠP(xᵢ\|y) | không | độc lập có điều kiện; Laplace smoothing; generative |
+| Decision tree | split greedy theo Gini/entropy | không | sâu → overfit; dễ diễn giải |
+| Random forest | bagging cây sâu + random feature | không | giảm variance, song song |
+| Gradient boosting | cây nông tuần tự khớp residual | không | giảm bias, cần early stopping |
+| SVM | max margin, support vector, kernel trick | có | C lớn → ít vi phạm, dễ overfit |
+| k-means | gán cụm gần nhất ↔ cập nhật centroid = mean | có | chọn k trước, k-means++ |
+| PCA | chiếu lên hướng phương sai lớn nhất | có | unsupervised, component = tổ hợp tuyến tính |
+
+### Neural network cơ bản
+
+- **Neuron**: z = Σwᵢxᵢ + b → a = activation(z). Perceptron dùng hàm bước, chỉ tách tuyến tính (không giải XOR).
+- **Non-linearity**: thiếu activation, nhiều layer tuyến tính = 1 layer tuyến tính.
+- **Activation**: ReLU max(0, z) mặc định cho layer ẩn; sigmoid cho xác suất nhị phân; softmax cho đa lớp; GELU trong Transformer.
+- **Loss**: regression → MSE/MAE/Huber; multi-class → softmax + CE (= −log p_đúng); multi-label/binary → sigmoid + BCE. PyTorch `CrossEntropyLoss` nhận logits.
+- **Backprop** = chain rule từ output ngược về input để tính ∂L/∂w; optimizer mới là thứ cập nhật trọng số.
+- **Epoch** = 1 lượt toàn bộ data; **iteration** = 1 batch. Số iteration/epoch = ⌈N / batch⌉ (drop_last=False).
+- **Optimizer**: SGD θ ← θ − ηg; Momentum v ← βv + g; RMSProp chia √E[g²]; Adam = momentum + RMSProp + bias correction (lr mặc định 1e-3). AdamW tách weight decay.
+- **Learning rate**: lớn → dao động/NaN; nhỏ → chậm. Dùng warmup + scheduler.
+- **Init**: không init hằng số (đối xứng). Xavier (tanh/sigmoid), He (ReLU).
+- **Vanishing**: σ' ≤ 0.25 nhân dồn → dùng ReLU, He init, Norm, residual. **Exploding** → gradient clipping.
+
+### Kiến trúc nền: CNN, RNN, attention, Transformer, autoencoder
+
+- **CNN**: kernel trượt, weight sharing → params = k·k·C_in·C_out + C_out, không phụ thuộc H×W. Output: **⌊(n + 2p − k)/s⌋ + 1**. Padding 'same' (stride 1): p = (k − 1)/2. Pooling: giảm kích thước, không tham số.
+- **RNN**: h_t = tanh(W h_{t−1} + U x_t) – tuần tự, vanishing qua thời gian. **LSTM**: cell state cập nhật cộng + forget/input/output gate → nhớ xa; ~4× tham số RNN. GRU: 2 gate.
+- **Attention**: Attention(Q, K, V) = softmax(QKᵀ/√d_k)·V – tra cứu mềm; chia √d_k tránh softmax bão hoà.
+- **Transformer**: self-attention (mọi token nhìn nhau, train song song), multi-head, FFN, residual + LayerNorm, positional encoding (attention không biết thứ tự), chi phí O(n²) theo độ dài; decoder dùng causal mask.
+- **Autoencoder**: encoder → bottleneck → decoder, reconstruction loss; dùng giảm chiều, denoising, anomaly detection. VAE: sinh dữ liệu.
+- **Embedding**: bảng tra V × d học được, vector dày, ngữ nghĩa gần → vector gần.
+- **Transfer learning**: dùng pretrained; ít data → freeze backbone, train head; nhiều/khác domain → fine-tune sâu hơn với lr nhỏ.
+
+### Thực hành dữ liệu
+
+- **Missing**: drop (ít, ngẫu nhiên), impute mean/median/mode (median nếu lệch/outlier), thêm cột `is_missing`; tree-based (XGBoost/LightGBM) xử lý được NaN.
+- **Outlier**: điều tra trước (lỗi hay tín hiệu?); clip/winsorize, log transform, model/loss bền.
+- **Min-max**: (x − min)/(max − min) → [0, 1], nhạy outlier. **Standardization**: (x − μ)/σ → mean 0, std 1 (sklearn dùng population std). Cây không cần scale.
+- **Encoding**: nominal → one-hot; ordinal → label/ordinal encoding; cardinality cao → target encoding (cẩn thận leakage), hashing, embedding.
+- **Imbalanced**: class_weight, over/undersampling, SMOTE (chỉ trên train), chỉnh threshold, metric PR-AUC/F1.
+- **Augmentation**: chỉ khi train; val/test giữ nguyên.
+- **Feature engineering**: tạo feature có ý nghĩa từ domain – tách ngày/giờ/thứ trong tuần, tỷ lệ (nợ/thu nhập), tổng hợp theo nhóm, log của biến lệch.
+- **Leakage cơ bản**: fit scaler/imputer/encoder trên toàn bộ data, resample trước khi split, feature chỉ có sau thời điểm dự đoán → dùng `Pipeline`, fit chỉ trên train.
+
+### Công cụ: tensor, GPU, sklearn, PyTorch
+
+- **Shape**: ảnh PyTorch (N, C, H, W). Broadcasting so từ phải sang trái, chiều bằng nhau hoặc = 1. Matmul: (…, n, k) @ (k, m) → (…, n, m). `reshape(N, -1)` để flatten.
+- **GPU**: hàng nghìn core song song + Tensor Core + băng thông HBM cao → nhân ma trận nhanh. Model và data phải cùng device.
+- **Bộ nhớ train** = weights + gradients + optimizer state (cố định) + activations (∝ batch size). OOM → giảm batch + gradient accumulation, mixed precision, gradient checkpointing.
+- **sklearn**: `fit` học tham số, `transform` áp dụng, `fit_transform` cho train, `predict`/`predict_proba` cho model. Chỉ fit trên train; gói trong `Pipeline`.
+- **PyTorch**: `model.train()` bật dropout & BatchNorm dùng batch stats; `model.eval()` tắt dropout, BatchNorm dùng running stats; `torch.no_grad()` tắt tính gradient khi inference. Vòng lặp: `optimizer.zero_grad()` → forward → `loss.backward()` → `optimizer.step()`.
+
+
+---
+
+## 📘 Nền tảng: NLP, LLM, RAG & Agent
+
+### Trả lời phỏng vấn 30 giây (câu kinh điển)
+
+- **RAG là gì?** — Retrieval-Augmented Generation: trước khi LLM trả lời, hệ thống tìm các đoạn tài liệu liên quan (thường bằng embedding + vector DB, có thể kèm BM25 và reranker) rồi chèn vào prompt để mô hình trả lời *dựa trên* tài liệu. Lợi ích: kiến thức mới/riêng tư không cần train lại, giảm hallucination, có trích dẫn, phân quyền được. Đánh giá tách 2 tầng: retrieval (recall/hit rate) và generation (faithfulness, relevancy).
+- **Transformer khác RNN thế nào?** — RNN đọc tuần tự, state truyền qua từng bước → khó song song, quên phụ thuộc xa. Transformer dùng self-attention: mọi token nhìn trực tiếp mọi token khác, cả chuỗi tính song song → train nhanh, scale lớn, phụ thuộc xa tốt. Đổi lại attention O(n²) theo độ dài và cần positional encoding.
+- **Agent là gì?** — LLM + tools + vòng lặp + memory, trong đó LLM tự quyết định bước tiếp theo (gọi tool nào, khi nào dừng) dựa trên kết quả quan sát. Khác workflow (các bước do code định sẵn) và chatbot (chỉ hội thoại). Rủi ro: tốn token, khó đoán, prompt injection → cần guardrails, giới hạn vòng lặp, human-in-the-loop.
+- **Vì sao LLM hallucinate?** — Được huấn luyện để sinh token tiếp theo *nghe hợp lý*, không có cơ chế kiểm chứng sự thật; thiếu/cũ kiến thức vẫn trả lời trôi chảy. Giảm bằng RAG + trích dẫn, cho phép nói 'không biết', tool, kiểm chứng đầu ra.
+- **RAG hay fine-tune?** — RAG cho *kiến thức* (thay đổi, lớn, cần nguồn, cần phân quyền); fine-tune cho *hành vi* (format, giọng văn, kỹ năng hẹp, model nhỏ rẻ). Có thể kết hợp.
+
+### Token, tokenization & tiền xử lý
+
+- **Token**: đơn vị mô hình xử lý (từ, mảnh từ, ký tự hoặc byte). **Vocabulary**: tập token cố định; mỗi token có id → tra bảng embedding V × d.
+
+| Cách tách | Ưu | Nhược |
+|---|---|---|
+| Word-level | token có nghĩa | vocab khổng lồ, OOV → `<UNK>` |
+| Character-level | không OOV, vocab nhỏ | chuỗi rất dài, mỗi token ít nghĩa |
+| **Subword** (BPE, WordPiece, Unigram/SentencePiece) | vocab vừa, ghép được mọi từ lạ | token không trùng ranh giới từ |
+
+- Tiền xử lý cổ điển (cho BoW/TF-IDF): lowercase, bỏ stopword, **stemming** (cắt hậu tố theo luật, nhanh, có thể ra 'từ' không có thật: `studies → studi`), **lemmatization** (về dạng từ điển theo từ loại: `better → good`, chậm hơn, chính xác hơn).
+- LLM hiện đại gần như **không** dùng các bước này: `không`, `not` mang nghĩa quyết định; tokenizer subword đã xử lý biến thể.
+- Chi phí và context đều tính theo **token**, không theo từ; tiếng Việt thường tốn nhiều token/từ hơn tiếng Anh với tokenizer thiên về tiếng Anh.
+
+### Biểu diễn văn bản: BoW → TF-IDF → embedding
+
+| Biểu diễn | Ý tưởng | Hạn chế |
+|---|---|---|
+| Bag-of-words | đếm từ, bỏ thứ tự | thưa, nhiều chiều, không ngữ nghĩa, `chó cắn mèo` = `mèo cắn chó` |
+| TF-IDF | tf × idf: nhiều trong văn bản, hiếm trong corpus | vẫn không hiểu đồng nghĩa |
+| Static embedding (word2vec, GloVe, fastText) | vector dày, từ cùng ngữ cảnh gần nhau | 1 vector/từ, không xử lý đa nghĩa |
+| Contextual embedding (BERT, LLM) | vector phụ thuộc câu | phải chạy mô hình |
+
+- TF-IDF: `tf = count/len`, `idf = log(N/df)`; từ có ở mọi văn bản → idf = 0. (scikit-learn: smooth idf `ln((1+N)/(1+df)) + 1`.)
+- Analogy: `king − man + woman ≈ queen` — quan hệ trở thành hướng gần cố định trong không gian vector.
+- Cosine: `cos = a·b / (‖a‖‖b‖)`; vector đã chuẩn hoá thì cosine = dot product.
+
+### Language model & n-gram
+
+- **Language model** gán xác suất cho chuỗi: `P(w1..wn) = Π P(wi | w1..wi−1)` (chain rule) ⇔ dự đoán token kế tiếp.
+- **n-gram**: giả định Markov — chỉ phụ thuộc n−1 từ trước. Bigram: `P(wi | wi−1) = count(wi−1 wi) / count(wi−1)`.
+- Vấn đề: n-gram chưa gặp → xác suất 0 → cần **smoothing** (Laplace, Kneser-Ney); ngữ cảnh ngắn; dữ liệu thưa khi n lớn. Tích xác suất nhỏ → dùng tổng log-prob.
+- Neural LM → RNN LM → Transformer LM (GPT): cùng mục tiêu next-token, nhưng ngữ cảnh dài và biểu diễn học được.
+- **Perplexity** = exp(trung bình NLL/token): 'số lựa chọn tương đương' mô hình phân vân; chỉ so sánh được khi cùng tokenizer và cùng tập dữ liệu.
+
+| Tác vụ | Đầu ra | Mô hình hợp |
+|---|---|---|
+| Classification | 1 nhãn/văn bản | encoder + head, hoặc prompt LLM |
+| NER | 1 nhãn/token (BIO) | token classification |
+| Extractive QA | span start/end trong đoạn văn | encoder (BERT) |
+| Summarization, translation | chuỗi mới | encoder-decoder hoặc decoder-only |
+
+### Transformer: self-attention, positional encoding
+
+- `Attention(Q, K, V) = softmax(Q·Kᵀ / √d_k) · V`, với Q = X·W_Q, K = X·W_K, V = X·W_V.
+- Q = 'token này tìm gì', K = 'token kia chứa gì', V = 'nội dung được lấy về'. Chia √d_k để softmax không bão hoà.
+- **Multi-head**: nhiều bộ Q/K/V song song, mỗi head học một kiểu quan hệ, rồi nối lại và chiếu bằng W_O.
+- **Positional encoding** cần vì attention không tự biết thứ tự. **Causal mask** (khác PE!) cấm nhìn token tương lai trong decoder.
+- Chi phí attention **O(n²)**: chuỗi dài gấp 4 → ma trận điểm lớn gấp 16.
+
+| | RNN/LSTM | Transformer |
+|---|---|---|
+| Xử lý | tuần tự | song song |
+| Phụ thuộc xa | qua n bước, dễ quên | trực tiếp 1 bước |
+| Chi phí theo n | tuyến tính | bậc hai (attention) |
+| Thứ tự | sẵn trong cách tính | cần positional encoding |
+
+### Ba họ kiến trúc & vòng đời LLM
+
+| Họ | Ví dụ | Attention | Dùng cho |
+|---|---|---|---|
+| Encoder-only | BERT, RoBERTa | hai chiều | phân loại, NER, embedding, rerank |
+| Decoder-only | GPT, Llama, Qwen | causal | sinh văn bản, chat, agent |
+| Encoder-decoder | T5, BART | 2 chiều + cross-attention | dịch, tóm tắt |
+
+Vòng đời: **Pretraining** (next-token trên dữ liệu khổng lồ → kiến thức, base model chỉ 'viết tiếp') → **SFT/instruction tuning** (cặp chỉ dẫn–trả lời → biết làm theo yêu cầu, chat template) → **Alignment** (RLHF: reward model từ xếp hạng của người + RL; hoặc DPO) → hữu ích, an toàn.
+
+- Kiến thức chủ yếu từ pretraining; SFT/RLHF dạy *hành vi*.
+- **Autoregressive**: sinh từng token, nối vào, lặp tới EOS/max_tokens → streaming, độ trễ tỷ lệ số output token.
+- **Embedding model** (vector, không sinh chữ) ≠ **generative model** (sinh chữ).
+
+### Sinh văn bản: context window, sampling, chi phí
+
+- **Context window** = giới hạn tổng input + output. Ngân sách lịch sử = context − system − câu hỏi − phần dành cho output; số lượt giữ được = **floor**(ngân sách / token mỗi lượt).
+- **Temperature**: chia logits cho T; T thấp → nhọn, gần greedy (ổn định, *không* đảm bảo đúng); T cao → đa dạng.
+- **Top-p**: giữ tập token nhỏ nhất có tổng xác suất ≥ p (số token thay đổi theo bước). **Top-k sampling**: giữ k token xác suất cao nhất (khác top-k retrieval!).
+- **Chi phí** = (input × giá_in + output × giá_out) / 10⁶; giá output thường gấp 3–5 lần input. Ví dụ 20K req/ngày × (1,500 in, 400 out) với $0.40/$1.60 → $744/tháng.
+- Giảm chi phí: prompt caching, rút gọn output, model nhỏ cho tác vụ dễ, RAG thay vì nhồi toàn bộ tài liệu.
+- **Hallucination**: nội dung nghe hợp lý nhưng sai/không có căn cứ. Gốc: mục tiêu next-token, không kiểm chứng sự thật.
+
+### Prompting & in-context learning vs fine-tuning
+
+- **Zero-shot**: chỉ dẫn, không ví dụ. **Few-shot**: kèm vài ví dụ input → output. **Chain-of-thought**: suy luận từng bước trước khi kết luận. **System prompt**: vai trò, quy tắc, format cho cả phiên (ưu tiên cao nhưng không phải rào chắn tuyệt đối).
+- **In-context learning** không đổi trọng số: hiệu quả chỉ trong request đó.
+
+| | In-context learning (prompt) | Fine-tuning |
+|---|---|---|
+| Dữ liệu cần | 0–vài chục ví dụ | hàng trăm–nghìn+ mẫu |
+| Tốc độ thử | vài phút–giờ | ngày, cần pipeline train |
+| Đổi yêu cầu | sửa prompt | train lại |
+| Chi phí chạy | prompt dài → tốn token | prompt ngắn, có thể dùng model nhỏ |
+| Hợp với | prototype, yêu cầu hay đổi | tác vụ ổn định, khối lượng lớn, format/giọng văn |
+
+Thứ tự nên thử: prompt tốt → few-shot → RAG (nếu thiếu kiến thức) → fine-tune (nếu thiếu hành vi/kinh tế).
+
+### RAG: pipeline & các khái niệm gốc
+
+```
+INDEXING (offline):  load → parse/clean → chunk → embed → store (vector + text + metadata)
+QUERY (online):      embed query → retrieve top-k → (rerank) → augment prompt → generate (+ trích dẫn)
+```
+
+- Query và tài liệu phải embed bằng **cùng một** embedding model; đổi model → index lại toàn bộ.
+- **Chunk** cửa sổ trượt: stride s = c − o; số chunk = ceil((L − c)/s) + 1. Ví dụ L = 2,000, c = 500, o = 100 → 5 chunk. Overlap giữ ý bị cắt ở ranh giới.
+- **Vector DB**: lưu vector + payload, tìm láng giềng gần bằng ANN (HNSW, IVF), lọc metadata.
+- **Top-k**: số chunk lấy về; k lớn → recall ↑ nhưng nhiễu, token, độ trễ ↑.
+- **Keyword (BM25)**: mạnh với mã, tên riêng, từ hiếm. **Semantic (dense)**: mạnh với paraphrase. **Hybrid**: chạy cả hai rồi fuse (RRF).
+- **Reranker** (cross-encoder): chấm cặp (query, chunk) chung → chính xác nhưng chậm → chỉ rerank top 20–100 → giữ 3–5.
+
+### RAG vs fine-tuning vs long context; đánh giá RAG
+
+| Nhu cầu | Chọn |
+|---|---|
+| Kiến thức hay thay đổi, cần trích dẫn, phân quyền | **RAG** |
+| Format/giọng văn/kỹ năng hẹp, nhiều dữ liệu gán nhãn | **Fine-tune** |
+| Kho nhỏ, ít đổi, có prompt caching | **Long context** (nhồi thẳng) có thể đủ |
+
+- RAG **giảm** chứ không **loại bỏ** hallucination; không thay đổi trọng số.
+- Ví dụ chi phí: sổ tay 120K token nhồi mỗi câu vs RAG 2,400 token → 1,000 câu/ngày ở $2.5/1M tiết kiệm $295/ngày.
+
+**Đánh giá 2 tầng:**
+
+| Tầng | Câu hỏi | Metric | Sửa ở đâu |
+|---|---|---|---|
+| Retrieval | chunk đúng có trong top-k? | hit rate@k, recall@k, MRR, context recall/precision | chunking, embedding, hybrid, rerank, query rewrite |
+| Generation | trả lời bám context, đúng câu hỏi? | faithfulness/groundedness, answer relevancy, correctness | prompt, trích dẫn, giảm nhiễu context, model |
+
+Lỗi kinh điển: tài liệu không có trong kho → retrieve trượt → có nhưng bị cắt khỏi prompt → có trong prompt nhưng LLM không dùng → trả lời sai format.
+
+### Agent: định nghĩa, tool calling, ReAct, memory
+
+| | Chatbot | Workflow | Agent |
+|---|---|---|---|
+| Gọi tool | không | có thể | có |
+| Ai quyết định bước tiếp | — | code định sẵn | **LLM** |
+| Độ dự đoán / chi phí | cao / thấp | cao / thấp | thấp / cao |
+
+- **Tool calling**: app khai báo tool (name, description, JSON Schema) → model trả về *lời gọi* (tên + đối số) → **app thực thi** → gửi kết quả lại → model trả lời hoặc gọi tiếp. Luôn validate đối số.
+- **ReAct**: Thought → Action → Observation (do môi trường trả về) → … → Final Answer. Lỗi kinh điển: model tự bịa Observation; luôn có max iterations.
+- **Planning**: plan-and-execute (lập kế hoạch trước, re-plan khi cần) vs ReAct (từng bước).
+- **Memory**: ngắn hạn = context window hiện tại (cắt, tóm tắt); dài hạn = lưu ngoài (DB/vector store) rồi truy xuất. Không thay đổi trọng số.
+- **Multi-agent**: orchestrator–worker, chuyên môn hoá, song song; tốn token hơn, khó debug. Bắt đầu với single-agent.
+- **Token agent**: mỗi lần gọi gửi lại toàn bộ lịch sử → tổng input tăng gần bậc hai theo số bước (vd 4 lần gọi: 1,600 + 2,100 + 2,600 + 3,100 = 9,400).
+
+### MCP, guardrails & an toàn
+
+- **MCP (Model Context Protocol)**: chuẩn mở (Anthropic, 11/2024) kết nối ứng dụng LLM ↔ tool/dữ liệu; biến tích hợp M×N thành M+N (6 app × 10 hệ thống: 60 → 16).
+- Kiến trúc: **Host** (ứng dụng: IDE, chat app, chứa LLM) → nhiều **Client** (mỗi client 1–1 với một server) → **Server** (expose một hệ thống).
+- Primitives phía server: **Tools** (hành động, model quyết định gọi), **Resources** (dữ liệu đọc làm context, ứng dụng quyết định), **Prompts** (mẫu prompt/quy trình, người dùng chọn).
+- **Guardrails**: input (lọc, phát hiện injection), output (PII, độc hại, format), hành động (quyền tool, ngưỡng tiền, max iterations). Ràng buộc quan trọng phải nằm trong **code**, không chỉ trong prompt.
+- **Human-in-the-loop**: duyệt hành động rủi ro cao, khó đảo ngược (hoàn tiền, gửi email ra ngoài, xoá dữ liệu); không duyệt hành động chỉ đọc.
+- **Prompt injection**: direct (user gõ) vs **indirect** (chỉ dẫn ẩn trong web/email/tài liệu/kết quả tool). Không có cách chặn 100% → least privilege, coi output tool là dữ liệu không tin cậy, xác nhận hành động nhạy cảm, allowlist, giám sát.
+
+
+---
+
+## 🎓 Nền tảng: Lý thuyết AI tổng quát
+
+### Mốc lịch sử AI cần nhớ
+
+| Năm | Mốc | Ý nghĩa |
+|---|---|---|
+| 1950 | Turing, 'Computing Machinery and Intelligence' | Imitation game / Turing test – tiêu chí **hành vi** |
+| 1956 | Hội thảo Dartmouth | Khai sinh lĩnh vực, tên 'artificial intelligence' (McCarthy) |
+| 1958 | Perceptron (Rosenblatt) | Mạng nơ-ron một lớp học trọng số từ dữ liệu (perceptron learning rule) |
+| 1970s | AI winter #1 | Báo cáo Lighthill (1973), giới hạn perceptron một lớp, bùng nổ tổ hợp |
+| 1970–80s | Expert systems (MYCIN, XCON) | Symbolic AI thương mại hoá |
+| 1986 | Backprop (Rumelhart, Hinton, Williams) | Train được mạng nhiều lớp |
+| cuối 1980s | AI winter #2 | Expert system khó bảo trì, thị trường Lisp machine sụp đổ (1987) |
+| 1997 | Deep Blue thắng Kasparov | Tìm kiếm alpha-beta + hàm đánh giá viết tay, **không** phải deep learning |
+| 2012 | AlexNet thắng ImageNet | Mở đầu kỷ nguyên deep learning (CNN + GPU) |
+| 2014 | GAN | Mô hình sinh đối kháng |
+| 2016 | AlphaGo thắng Lee Sedol | Policy/value network (SL từ ván người + RL self-play) + MCTS |
+| 2017 | Transformer ('Attention Is All You Need') | Nền tảng của LLM |
+| 2020 | GPT-3 (175B) | Few-shot / in-context learning |
+| 2022 | ChatGPT (30/11) | GPT-3.5 + RLHF, AI phổ cập đại chúng |
+
+- **Narrow AI**: giỏi một nhiệm vụ hẹp (AlphaGo, model phân loại ảnh). **AGI**: năng lực tổng quát ngang người trên nhiều nhiệm vụ – chưa có định nghĩa/tiêu chí thống nhất.
+- **Chinese Room** (Searle 1980): vượt Turing test về hành vi ≠ hiểu thật.
+
+### Trường phái AI & intelligent agent
+
+| Trường phái | Tri thức nằm ở đâu | Mạnh | Yếu | Ví dụ |
+|---|---|---|---|---|
+| Symbolic (GOFAI) | ký hiệu, luật, logic do người viết | minh bạch, suy luận chặt | khó mở rộng, giòn, nút thắt thu nhận tri thức | expert system, Prolog |
+| Connectionism | trọng số mạng nơ-ron | học từ dữ liệu thô, chịu nhiễu | khó giải thích, cần nhiều dữ liệu | MLP, CNN, Transformer |
+| Statistical learning | mô hình xác suất, tối ưu loss | nền tảng lý thuyết (VC, PAC) | cần feature engineering | SVM, Naive Bayes, boosting |
+
+**Agent** = nhận percept qua sensors → chọn action qua actuators để tối đa performance measure. **PEAS**: Performance, Environment, Actuators, Sensors.
+
+Tính chất môi trường:
+- fully vs **partially observable** (poker, xe tự lái)
+- deterministic vs **stochastic** (đối thủ chiến lược ≠ ngẫu nhiên: cờ vua vẫn deterministic)
+- episodic vs sequential; static vs dynamic; discrete vs continuous; single vs multi-agent.
+
+### Tìm kiếm: uninformed & informed
+
+| Thuật toán | Mở node theo | Complete | Optimal | Bộ nhớ |
+|---|---|---|---|---|
+| BFS | tầng nông nhất | có (b hữu hạn) | chỉ khi chi phí bước bằng nhau | O(b^d) |
+| DFS | sâu nhất | không (vô hạn/chu trình) | không | O(b·m) |
+| Iterative deepening | DFS giới hạn độ sâu tăng dần | có | như BFS | O(b·d) |
+| UCS | g(n) nhỏ nhất | có (chi phí ≥ ε > 0) | có | O(b^(1+C*/ε)) |
+| Greedy best-first | h(n) nhỏ nhất | không | không | – |
+| A* | f = g + h nhỏ nhất | có | có nếu h admissible (tree) / consistent (graph) | lớn |
+
+- **Admissible**: h(n) ≤ chi phí thật tới goal (lạc quan). **Consistent**: h(n) ≤ c(n, n') + h(n').
+- h = 0 → A* thành UCS; h càng sát h* (vẫn admissible) → mở càng ít node.
+- A* chỉ dừng khi **lấy** goal ra khỏi hàng đợi, không phải khi vừa sinh ra goal.
+- Số node cây đầy đủ tới độ sâu d: (b^(d+1) − 1)/(b − 1), tầng cuối chiếm phần lớn.
+
+### Adversarial search, CSP & biểu diễn tri thức
+
+- **Minimax**: MAX chọn max, MIN chọn min, truyền từ lá lên. **Alpha-beta**: cắt nhánh khi α ≥ β → kết quả **y hệt** minimax; thứ tự tốt nhất O(b^(d/2)) (tìm sâu gấp đôi), ngẫu nhiên ≈ O(b^(3d/4)).
+- **MCTS**: selection – expansion – simulation – backpropagation (UCT); AlphaGo = MCTS + policy/value network.
+- **CSP**: biến + miền giá trị + ràng buộc (Sudoku, tô màu bản đồ, xếp lịch). Giải bằng backtracking + MRV + forward checking + arc consistency (AC-3).
+- **Logic mệnh đề**: mệnh đề đúng/sai + ∧ ∨ ¬ →. **Logic vị từ bậc nhất (FOL)**: thêm đối tượng, vị từ, lượng từ ∀ ∃ → biểu diễn tổng quát gọn hơn.
+- **Knowledge graph**: triple (subject, relation, object); **ontology**: lược đồ lớp, thuộc tính, quan hệ, ràng buộc (OWL, schema.org). Dùng cho tìm kiếm, QA, GraphRAG.
+- **Bayesian network**: DAG + bảng CPT, P(X₁…Xₙ) = Π P(Xᵢ | cha(Xᵢ)); mã hoá độc lập có điều kiện, suy luận xác suất 'nguyên nhân → triệu chứng'.
+
+### Reinforcement Learning: khái niệm & công thức
+
+**Vòng lặp**: state s → agent chọn action a theo policy π → môi trường trả reward r và state s'. Mục tiêu: tối đa **return** G_t = r_{t+1} + γ·r_{t+2} + γ²·r_{t+3} + …
+
+- **MDP** (S, A, P, R, γ) + **Markov property**: tương lai chỉ phụ thuộc (s, a) hiện tại. Markov ≠ deterministic.
+- **V^π(s)** = E[G | s]; **Q^π(s, a)** = E[G | s, a]; V^π(s) = Σ_a π(a|s)·Q^π(s, a).
+- **Bellman**: V(s) = E[r + γ·V(s')]; tối ưu: Q*(s, a) = E[r + γ·max_a' Q*(s', a')].
+- γ → 0: thiển cận; γ → 1: nhìn xa, khó học hơn. G_t = r_{t+1} + γ·G_{t+1} (tính ngược từ cuối).
+- **Q-learning**: Q ← Q + α·[r + γ·max_a' Q(s', a') − Q] (off-policy). **SARSA**: dùng Q(s', a') của action thực tế (on-policy).
+- **ε-greedy** (ngẫu nhiên trên mọi action): P(greedy) = 1 − ε + ε/|A|.
+- **Exploration vs exploitation**: ε-greedy, softmax, UCB, Thompson sampling; thường giảm ε dần.
+- Khác supervised: không có nhãn hành động đúng, reward trễ/thưa (credit assignment), dữ liệu phụ thuộc policy.
+
+### RL: các họ thuật toán, reward & liên hệ LLM
+
+| Họ | Học gì | Ví dụ | Ghi chú |
+|---|---|---|---|
+| Value-based | Q(s, a) → policy = argmax | Q-learning, DQN | action rời rạc; DQN: replay buffer + target network |
+| Policy-based | π_θ trực tiếp | REINFORCE | action liên tục được, variance cao |
+| Actor-critic | π (actor) + V/advantage (critic) | A2C, PPO, SAC | critic giảm variance |
+| Model-based | mô hình P(s'∣s,a), R để lập kế hoạch | Dyna, AlphaZero, MuZero | hiệu quả mẫu cao, sai model thì lệch |
+
+- **On-policy** (SARSA, REINFORCE, PPO): học từ dữ liệu của chính policy hiện tại. **Off-policy** (Q-learning, DQN, SAC): học từ dữ liệu của policy khác → tái sử dụng replay, offline RL.
+- Cliff walking: SARSA chọn đường an toàn, Q-learning chọn đường sát vực (tối ưu cho greedy) nhưng reward online thấp hơn khi còn khám phá.
+- **Reward hacking / specification gaming**: tối ưu proxy lệch mục tiêu (thuyền CoastRunners chạy vòng). **Potential-based shaping** F = γΦ(s') − Φ(s) không đổi policy tối ưu → giúp học nhanh nhưng **không** sửa được reward gốc đã lệch; chữa hacking phải sửa đặc tả reward.
+- **RLHF ↔ RL**: policy = LLM; state = prompt + token đã sinh; action = token kế tiếp; reward = reward model cuối câu − β·KL so với model tham chiếu; PPO (actor-critic, value head).
+
+### Mô hình sinh: 4 họ + autoregressive
+
+**Generative** học p(x) hoặc p(x, y) (sinh được mẫu); **discriminative** học p(y|x) / ranh giới. Naive Bayes ↔ logistic regression là cặp kinh điển.
+
+| Họ | Ý tưởng | Sinh | Likelihood | Ưu | Nhược |
+|---|---|---|---|---|---|
+| Autoregressive | p(x) = Π p(x_t ∣ x_<t) | tuần tự | chính xác | đơn giản, mạnh (GPT) | chậm theo độ dài |
+| VAE | encoder q(z∣x), decoder p(x∣z), tối đa ELBO | 1 bước | cận dưới | ổn định, latent có cấu trúc | mẫu mờ |
+| GAN | G vs D chơi minimax | 1 bước | không có | sắc nét, nhanh | train bất ổn, mode collapse |
+| Flow | biến đổi khả nghịch, đổi biến | 1 bước | chính xác | likelihood chính xác | ràng buộc kiến trúc, giữ số chiều |
+| Diffusion | thêm nhiễu dần, học khử nhiễu (dự đoán ε) | nhiều bước | cận dưới | chất lượng + đa dạng cao, ổn định | chậm (giảm bằng DDIM, distillation, latent) |
+| EBM | p(x) ∝ exp(−E(x)) | MCMC | Z khó tính | linh hoạt | train/sample khó |
+
+- **ELBO** = E_q[log p(x|z)] − KL(q(z|x) ‖ p(z)) ≤ log p(x). **Reparameterization**: z = μ + σ·ε để backprop.
+- GAN: D quá mạnh → gradient G biến mất → loss **non-saturating** (max log D(G(z))); WGAN, spectral norm.
+- Đánh giá: **FID** (thấp = tốt, so ảnh thật vs sinh), **IS** (cao = tốt, chỉ ảnh sinh), CLIPScore cho text–image, đánh giá của người.
+
+### Lý thuyết học máy
+
+- **True risk** R(h) = E[L] trên phân phối thật; **empirical risk** R̂(h) = trung bình trên train. **ERM**: chọn h tối thiểu R̂. **Generalization gap** = R − R̂.
+- **VC dimension**: số điểm lớn nhất lớp H shatter được. Siêu phẳng có bias trong R^d: **d + 1**. VC ≠ số tham số (sign(sin(ωx)) có VC vô hạn).
+- **PAC**: với xác suất ≥ 1 − δ, lỗi ≤ ε, số mẫu đa thức theo 1/ε, 1/δ. H hữu hạn (realizable): m ≥ (1/ε)(ln|H| + ln(1/δ)).
+- **Curse of dimensionality**: hypercube con chứa tỷ lệ p dữ liệu có cạnh p^(1/d) (d = 10, p = 10% → 0.79); khoảng cách mất ý nghĩa, cần dữ liệu tăng theo hàm mũ. Cứu cánh: manifold hypothesis, giảm chiều, inductive bias.
+- **Occam's razor**: ưu tiên giải thích đơn giản khi khớp như nhau (ưu tiên, không phải bảo đảm).
+- **No Free Lunch**: trung bình trên mọi bài toán, không thuật toán nào tốt hơn → hiệu quả đến từ giả định khớp bài toán.
+- **Double descent**: test error giảm → đỉnh tại ngưỡng nội suy (#tham số ≈ #mẫu) → giảm lại khi over-parameterized; có cả theo epoch và theo lượng dữ liệu.
+- **Lottery ticket** (Frankle & Carbin 2019): có mạng con thưa train lại từ khởi tạo gốc đạt độ chính xác tương đương; tìm bằng iterative magnitude pruning (tốn kém).
+
+### Inductive bias, representation & self-supervised
+
+| Kiến trúc | Inductive bias | Hệ quả |
+|---|---|---|
+| MLP | gần như không có | cần nhiều dữ liệu, không khai thác cấu trúc |
+| CNN | locality + weight sharing → translation **equivariance**; pooling → bất biến xấp xỉ | hiệu quả dữ liệu cao cho ảnh |
+| RNN | tuần tự, hidden state tóm tắt quá khứ | hợp chuỗi, khó song song, khó phụ thuộc xa |
+| Transformer | attention toàn cục, permutation-equivariant nếu không có PE | bias yếu → cần nhiều dữ liệu, scale rất tốt |
+| GNN | bất biến hoán vị node | hợp dữ liệu đồ thị |
+
+- **Representation learning**: học feature tự động thay vì viết tay; biểu diễn tốt → linear probe/fine-tune ít nhãn.
+- **Self-supervised**: nhãn tự sinh từ dữ liệu. **Contrastive** (SimCLR, MoCo; CLIP cho ảnh–text): kéo gần positive, đẩy xa negative (InfoNCE). **Masked/generative** (BERT, MAE, GPT next-token).
+- **Scaling hypothesis / The Bitter Lesson** (Sutton 2019): phương pháp tổng quát + nhiều compute/data thắng tri thức viết tay về lâu dài.
+- **Emergent abilities**: năng lực 'xuất hiện đột ngột' ở model lớn – đang tranh luận, một phần có thể do chọn metric không liên tục.
+
+### Ứng dụng: bài toán → input/output → metric
+
+| Miền | Bài toán | Output | Metric chính |
+|---|---|---|---|
+| CV | classification | 1 nhãn/ảnh | accuracy, top-k |
+| CV | detection | box + class | mAP (theo ngưỡng IoU) |
+| CV | semantic / instance / panoptic segmentation | lớp mỗi pixel / mask từng vật | mIoU, Dice / mask AP / PQ |
+| CV | generation | ảnh | FID, IS, CLIPScore |
+| Speech | ASR / TTS | text / audio | WER, CER / MOS |
+| Speech | speaker verification (1:1) / identification (1:N) / diarization | chấp nhận/từ chối / ai / ai nói lúc nào | EER / accuracy / DER |
+| OCR | detection + recognition (CRNN + CTC, TrOCR) | chuỗi ký tự | CER, WER |
+| RecSys | retrieval + ranking | danh sách xếp hạng | NDCG@k, MAP@k, Recall@k; CTR online |
+| Time-series | forecasting / anomaly detection | giá trị tương lai / cờ bất thường | MAE, RMSE, MAPE, MASE / precision–recall |
+| Multimodal | CLIP (embedding chung) / VLM (vision encoder + LLM) | similarity / văn bản | retrieval recall, zero-shot acc / VQA acc |
+
+- Ít nhãn bất thường → anomaly detection không giám sát (autoencoder, forecasting residual, Isolation Forest).
+- CLIP không tự sinh văn bản; VLM sinh văn bản.
+
+### Responsible AI: bias, fairness, XAI
+
+**Các loại bias**: historical (dữ liệu phản ánh bất công quá khứ), representation/sampling (thiếu nhóm), selection, measurement (proxy đo lệch), label, aggregation, automation bias (người tin máy quá mức). Đừng nhầm với *bias thống kê* trong bias–variance.
+
+| Tiêu chí | Điều kiện bằng nhau giữa các nhóm |
+|---|---|
+| Demographic parity | P(ŷ = 1) |
+| Equal opportunity | TPR |
+| Equalized odds | TPR **và** FPR |
+| Calibration theo nhóm | P(y = 1 ∣ score = s) |
+
+- Disparate impact = tỷ lệ dương nhóm thấp / nhóm cao; quy tắc 4/5 (≥ 0.8).
+- **Impossibility** (Kleinberg 2016, Chouldechova 2017): base rate khác nhau → không thể vừa calibration vừa cân bằng FPR/FNR.
+- Bỏ thuộc tính nhạy cảm không đủ: proxy (mã bưu chính, tên…).
+- **XAI**: SHAP (Shapley, additive, cục bộ + toàn cục), LIME (surrogate tuyến tính cục bộ), permutation importance (lệch khi feature tương quan), Grad-CAM cho CNN. **Attention ≠ explanation**; importance ≠ nhân quả.
+
+### Privacy, robustness, safety & quy định + trả lời 30 giây
+
+- **Differential privacy**: output gần như không đổi khi thêm/bớt 1 bản ghi; ε nhỏ → riêng tư mạnh; DP-SGD = clip gradient từng mẫu + nhiễu Gauss.
+- **Federated learning**: dữ liệu ở lại máy, gửi cập nhật; gradient vẫn rò rỉ → secure aggregation + DP. Thách thức non-IID.
+- **PII**: phát hiện/che (masking), tối thiểu hoá dữ liệu, kiểm soát truy cập, không đưa PII vào prompt/log.
+- **Adversarial example**: nhiễu nhỏ được tối ưu (FGSM x + ε·sign(∇ₓL)); khác data poisoning (tấn công lúc train) và distribution shift. Phòng thủ: adversarial training.
+- **Alignment**: hành vi khớp ý định/giá trị con người (helpful, honest, harmless); RLHF, Constitutional AI, red teaming, guardrail.
+- **Hallucination** mitigation: RAG + trích dẫn, cho phép 'không biết', verify, eval liên tục; temperature 0 không chữa được.
+- **Model card** (Mitchell 2019), **datasheet/data card** (Gebru): mục đích, giới hạn, dữ liệu, hiệu năng theo nhóm. **Human-in-the-loop** cho quyết định rủi ro cao.
+- **EU AI Act** (hiệu lực 8/2024): cấm (social scoring) / rủi ro cao (tuyển dụng, tín dụng, y tế, giáo dục) / minh bạch (chatbot, deepfake) / tối thiểu; áp dụng cả nhà cung cấp ngoài EU. Lộ trình: điều cấm từ 2/2/2025; nghĩa vụ GPAI từ 2/8/2025; minh bạch (Điều 50) từ 2/8/2026; nghĩa vụ high-risk vốn từ 2/8/2026 đã được **Digital Omnibus on AI** (Regulation (EU) 2026/1744, hiệu lực 27/7/2026) lùi sang 2/12/2027 (Annex III) và 2/8/2028 (Annex I).
+
+**Trả lời 30 giây**
+- *RL khác supervised?* Không có nhãn đúng, chỉ có reward trễ; hành động ảnh hưởng dữ liệu; phải cân bằng explore/exploit.
+- *On- vs off-policy?* Học giá trị của policy đang hành động (SARSA) vs của policy khác/greedy (Q-learning) → off-policy dùng được replay.
+- *GAN vs diffusion?* GAN nhanh, sắc nét nhưng train bất ổn/mode collapse; diffusion ổn định, đa dạng, chất lượng cao nhưng sinh chậm.
+- *Vì sao ViT cần nhiều data?* Ít inductive bias hơn CNN (không có locality/equivariance sẵn).
 

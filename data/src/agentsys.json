@@ -1,0 +1,905 @@
+{
+  "id": "agentsys",
+  "name": "Agent Engineering: Skills, Subagents, Frameworks",
+  "icon": "🧩",
+  "order": 5.5,
+  "notes": [
+    {
+      "title": "Context engineering: nguyên tắc & chiến lược",
+      "md": "**Context engineering** = chọn và duy trì *tập token nhỏ nhất có tín hiệu cao* cho mỗi bước suy luận của agent (system prompt, tools, examples, lịch sử, dữ liệu ngoài).\n\n- **Attention budget** hữu hạn; **context rot**: càng nhiều token, khả năng nhớ lại chính xác càng giảm, *trước cả* khi chạm giới hạn window.\n- Ba chiến lược cho tác vụ dài:\n\n| Kỹ thuật | Cơ chế | Hợp khi |\n|---|---|---|\n| Compaction | Tóm tắt lịch sử, mở context mới; giữ quyết định kiến trúc, bug chưa xử lý, việc đang dở | Hội thoại/tác vụ dài liên tục |\n| Structured note-taking | Ghi `NOTES.md`/memory tool ngoài context, đọc lại khi cần | Tác vụ có mốc, tiến độ rõ |\n| Sub-agent | Subagent đọc nhiều trong context riêng, trả tóm tắt ~1.000–2.000 token | Nghiên cứu, khám phá song song |\n\n- **Just-in-time**: giữ định danh nhẹ (path, query, URL), nạp bằng tool khi cần, đổi lại chậm hơn dữ liệu tính sẵn. **Hybrid** (Claude Code): CLAUDE.md nạp sẵn, glob/grep tìm đúng lúc.\n- Tinh chỉnh prompt compaction: **tối đa recall trước**, sau đó mới tăng precision.\n\nNguồn: anthropic.com/engineering/effective-context-engineering-for-ai-agents (kiểm tra 10/2026)."
+    },
+    {
+      "title": "Token tích luỹ & prompt caching",
+      "md": "**Tổng input của vòng agent tăng theo bậc hai**: lần gọi thứ i (i = 1..n) có input = P + (i−1)·(o + r), với P là prefix, o là output, r là tool result. Tổng = n·P + (o + r)·n(n−1)/2.\n\n**Prompt caching (Claude, docs 10/2026)**\n\n| Mục | Giá trị |\n|---|---|\n| Thứ tự prefix | `tools` → `system` → `messages` |\n| Đổi tools | mất cache của tools + system + messages |\n| Đổi system | mất cache của system + messages |\n| Cache write TTL 5 phút / 1 giờ | 1,25× / 2× giá input |\n| Cache read | 0,1× (tuỳ model) |\n| Số breakpoint tối đa | 4 |\n\n- Cache khớp **chính xác từng token** của prefix, không theo ngữ nghĩa và không phụ thuộc temperature.\n- Mọi thứ thay đổi (timestamp, user id, kết quả retrieval, tool động) đặt **sau** phần ổn định. Timestamp ở đầu system prompt có thể làm chi phí *tăng* (chỉ ghi, không bao giờ đọc).\n- Tool RAG đổi tập tool mỗi lượt sẽ phá cache; nên giữ tool ổn định hoặc dùng cơ chế tool search/defer loading của provider.\n\nNguồn: platform.claude.com/docs/en/build-with-claude/prompt-caching."
+    },
+    {
+      "title": "Tool result clearing / context editing",
+      "md": "- Dạng compaction \"nhẹ\" an toàn nhất: xoá **tool result cũ** (đã dùng xong) và thay bằng placeholder.\n- Claude API *context editing* (beta `context-management-2025-06-27`, docs 10/2026), strategy `clear_tool_uses_20250919`:\n\n| Tham số | Mặc định | Ý nghĩa |\n|---|---|---|\n| `trigger` | 100.000 input token | Ngưỡng kích hoạt |\n| `keep` | 3 tool use | Số cặp gần nhất giữ lại |\n| `clear_at_least` | không | Xoá tối thiểu bao nhiêu token để đáng mất cache |\n| `exclude_tools` | không | Tool không bao giờ bị xoá |\n| `clear_tool_inputs` | false | Xoá cả args của tool call |\n\n- Xoá diễn ra **phía server**, client vẫn giữ lịch sử đầy đủ. Mỗi lần xoá **làm mất cache** từ điểm bị sửa.\n- Kết hợp **memory tool**: Claude được báo trước khi bị xoá và có thể lưu điều quan trọng.\n- Có thêm `clear_thinking_20251015` cho thinking block (phải đứng trước khi dùng cùng `clear_tool_uses`)."
+    },
+    {
+      "title": "Agent Skills (SKILL.md)",
+      "md": "**Skill** = thư mục chứa `SKILL.md` (YAML frontmatter + hướng dẫn) kèm file phụ, script và tài nguyên. Chuẩn mở agentskills.io từ 12/2025.\n\n**Progressive disclosure** (docs Claude, 10/2026):\n\n| Level | Khi nạp | Chi phí |\n|---|---|---|\n| 1. Metadata (`name`, `description`) | Luôn, lúc khởi động | ~100 token/skill |\n| 2. Thân `SKILL.md` | Khi skill được kích hoạt | khuyến nghị < 5k token |\n| 3+. File phụ, script | Khi được đọc/chạy | file đọc vào thì tính; script chỉ tính **output** |\n\n**Frontmatter**: `name` ≤ 64 ký tự, chỉ chữ thường/số/gạch ngang, không chứa \"anthropic\"/\"claude\", không thẻ XML. `description` không rỗng, ≤ 1.024 ký tự, phải nói *làm gì* + *khi nào dùng*.\n\n**Chọn chỗ đặt kiến thức**\n\n| Loại | Đặt ở |\n|---|---|\n| Quy ước ngắn, luôn đúng | System prompt / CLAUDE.md (luôn nạp) |\n| Quy trình dài, dùng thỉnh thoảng, có script tất định | Skill |\n| Dữ liệu sống, hành động trên hệ thống ngoài | MCP server / tool |\n\nBảo mật: chỉ cài skill từ nguồn tin cậy; skill có thể chạy code và gọi tool. Claude Code: `~/.claude/skills/`, `.claude/skills/`; `disable-model-invocation: true` để chỉ chạy khi user gọi."
+    },
+    {
+      "title": "Thiết kế tool cho agent (ACI)",
+      "md": "Theo *Writing effective tools for agents* (Anthropic, 2025):\n\n- **Chọn đúng tool**: đừng bọc 1:1 API. `search_contacts` tốt hơn `list_contacts`; gộp thao tác liên quan (`schedule_event`).\n- **Namespacing**: `asana_search`, `jira_search`; tiền tố hay hậu tố ảnh hưởng khác nhau tuỳ model, cần đo.\n- **Trả ngữ cảnh có ý nghĩa**: tên dễ đọc thay vì UUID; tham số `response_format` (concise ≈ 1/3 token so với detailed trong ví dụ 72 vs 206).\n- **Hiệu quả token**: phân trang, filter, range, truncate với mặc định hợp lý, kèm chỉ dẫn bước tiếp theo. Claude Code giới hạn tool response 25.000 token theo mặc định (tại thời điểm bài viết).\n- **Lỗi có hướng dẫn**: nói rõ sai gì, đúng phải thế nào, ví dụ, tool thay thế. Không trả stack trace hay chuỗi rỗng.\n- Tham số rõ nghĩa (`user_id` thay vì `user`), mô tả như viết cho đồng nghiệp mới; tối ưu bằng **eval**.\n\nNguồn: anthropic.com/engineering/writing-tools-for-agents."
+    },
+    {
+      "title": "Subagents, handoff & multi-agent",
+      "md": "- **Subagent** (Claude Code): file Markdown + frontmatter (`name`, `description`, `tools`, `model`, `permissionMode`, `maxTurns`…), ở `.claude/agents/` hoặc `~/.claude/agents/`. Chạy trong **context riêng**, trả tóm tắt. Agent chính chọn subagent dựa vào `description`.\n- Số liệu Anthropic (multi-agent research): agent ≈ **4×** token so với chat, multi-agent ≈ **15×**; lead Opus 4 + subagent Sonnet 4 hơn single-agent **90,2%**; 3–5 subagent song song cắt tới **90%** thời gian.\n- **Không nên** tách: cần chung toàn bộ context, phụ thuộc chặt, phần lớn tác vụ coding, tác vụ đơn giản, ngân sách chặt.\n- Giao việc rõ: objective, output format, tool/nguồn, ranh giới; scale số subagent theo độ phức tạp; lưu output ra filesystem để tránh *game of telephone*.\n\n**OpenAI Agents SDK** (openai-agents 0.23.1): handoff = tool `transfer_to_<agent_name>`; agent đích **tiếp quản**, mặc định thấy toàn bộ lịch sử; `input_filter` cắt lịch sử; `on_handoff`, `input_type`. `Agent.as_tool()` khi muốn giữ quyền điều phối."
+    },
+    {
+      "title": "A2A vs MCP",
+      "md": "| | MCP | A2A |\n|---|---|---|\n| Hướng | *Vertical*: agent ↔ tool/dữ liệu | *Horizontal*: agent ↔ agent (opaque) |\n| Khởi xướng | Anthropic | Google, nay thuộc Linux Foundation |\n| Khám phá | `initialize`/list tools… | **Agent Card** tại `/.well-known/agent-card.json` |\n| Đơn vị | tool call, resource, prompt | **Task** (stateful), Message/Part, Artifact |\n\n- Agent Card: name, description, endpoint, capabilities (streaming, push notifications), security schemes, skills (`id, name, description, tags, examples`).\n- Trạng thái Task (spec 1.0): submitted, working, input-required, auth-required, completed, failed, canceled, rejected.\n- Binding: JSON-RPC 2.0, gRPC, HTTP+JSON/REST; streaming qua SSE/gRPC; push notification qua webhook.\n- Ví dụ trong docs: quản lý xưởng ↔ thợ ↔ nhà cung cấp dùng A2A; thợ ↔ máy chẩn đoán dùng MCP.\n\nNguồn: a2a-protocol.org/latest/specification, /topics/a2a-and-mcp (kiểm tra 10/2026)."
+    },
+    {
+      "title": "Hooks, permissions, plugins (Claude Code)",
+      "md": "**Hooks** là lệnh **tất định** do harness chạy tại lifecycle event: `PreToolUse`, `PostToolUse`, `PostToolUseFailure`, `UserPromptSubmit`, `Stop`, `SubagentStop`, `PreCompact`, `SessionStart`, `SessionEnd`… Loại hook: command, http, mcp_tool, prompt, agent.\n\n| Exit code | Ý nghĩa |\n|---|---|\n| 0 | Thành công, đọc JSON từ stdout |\n| 2 | Lỗi chặn: PreToolUse chặn tool, stderr đưa cho Claude |\n| Khác | Lỗi không chặn |\n\n- PreToolUse: `permissionDecision` = allow / deny / ask / defer. PostToolUse **không chặn, không hoàn tác** được (tool đã chạy); có thể sửa output Claude thấy.\n- Matcher MCP: `mcp__<server>__<tool>`.\n- **Permission rules**: deny → ask → allow, rule khớp đầu tiên thắng, **độ cụ thể không đổi thứ tự**. Deny chặn ở mọi mode kể cả `bypassPermissions`. Hook allow **không vượt** deny/ask rule; hook exit 2 chặn được cả lệnh có allow rule.\n- **Modes**: `default` (Manual), `acceptEdits`, `plan`, `auto` (classifier), `dontAsk` (cái gì cần hỏi thì từ chối, hợp CI), `bypassPermissions` (chỉ dùng trong container/VM).\n- **Plugin**: thư mục skills, agents, hooks, MCP servers với manifest `.claude-plugin/plugin.json`; cài từ marketplace; skill có namespace `/plugin:skill`.\n\nNguồn: code.claude.com/docs/en/hooks, /permissions, /permission-modes, /plugins (kiểm tra 10/2026)."
+    },
+    {
+      "title": "Sandbox cho code agent (smolagents)",
+      "md": "- `CodeAgent` mặc định chạy `LocalPythonExecutor`: interpreter tự viết theo AST; import bị cấm trừ khi nằm trong `additional_authorized_imports` (submodule phải cho phép riêng, vd `numpy.*`); giới hạn số thao tác; chặn truy cập như `random._os`. **Không sandbox local nào an toàn tuyệt đối.**\n- Remote executor: `executor_type` ∈ {`e2b`, `docker`, `modal`, `blaxel`} (smolagents 1.26.0). Chỉ code chạy trong sandbox, model vẫn gọi local; **không hỗ trợ managed agents**.\n- Muốn multi-agent cách ly: chạy **toàn bộ** hệ agent trong sandbox (phải đưa API key vào).\n- Best practice: giới hạn CPU/RAM, timeout, chạy user không đặc quyền, tắt mạng nếu không cần, pin version, luôn cleanup (`with` hoặc `agent.cleanup()`).\n- Rủi ro: lỗi của LLM, prompt injection từ web, supply chain, agent public bị lạm dụng.\n\nNguồn: huggingface.co/docs/smolagents/tutorials/secure_code_execution."
+    },
+    {
+      "title": "So sánh framework agent",
+      "md": "| Framework | Điểm mạnh | API cần nhớ |\n|---|---|---|\n| **LangGraph** | Điều khiển tường minh, persistence | `StateGraph`, reducer, `Command(update, goto, graph=Command.PARENT, resume)`, `Send` (map-reduce), subgraph, checkpointer (`thread_id`) vs Store (namespace, xuyên thread), `recursion_limit` |\n| **LlamaIndex** | Data/RAG + agent | Workflows (`@step`, Event, StartEvent/StopEvent, Context), `RouterQueryEngine` (Pydantic/LLM Single/Multi selector), `SubQuestionQueryEngine`, `AgentWorkflow` (`root_agent`, `can_handoff_to`), FunctionAgent/ReActAgent |\n| **smolagents** | Gọn, code-as-action | `CodeAgent` vs `ToolCallingAgent`, `managed_agents`, `max_steps` (mặc định 20), `final_answer_checks`, `executor_type` |\n| **OpenAI Agents SDK** | Ít abstraction, tích hợp sẵn | `Agent`, `Runner.run/run_sync/run_streamed`, handoff, guardrails (input: agent đầu, output: agent cuối, tool guardrail), `max_turns` (mặc định 10, `None` = tắt giới hạn; vượt → `MaxTurnsExceeded`), tracing bật mặc định |\n\n- LangGraph: `Command` chỉ **thêm** edge động, edge tĩnh vẫn chạy; schema khác nhau thì gọi subgraph trong node function.\n- LlamaIndex: câu hỏi cần nhiều nguồn → SubQuestion; mỗi câu hỏi thuộc một nguồn → Router.\n- Workflow cố định thì viết code thường; chỉ dùng agent khi cần LLM quyết định luồng."
+    },
+    {
+      "title": "Agentic RAG nâng cao",
+      "md": "- **Retrieval là tool**: agent quyết định có retrieve không, retrieve gì, ở nguồn nào, bao nhiêu lần.\n- **Multi-hop**: query của bước sau phụ thuộc kết quả bước trước; tăng top-k không thay được việc lặp retrieve.\n- **Router / query planning**: chọn index theo description (nêu rõ phạm vi, thời gian, loại tài liệu); tách câu hỏi so sánh thành câu hỏi con.\n- **Corrective / self-reflective** (CRAG, Self-RAG): grade tài liệu → viết lại query hoặc đổi nguồn → generate → kiểm groundedness; **giới hạn vòng** và có đường thoát \"không đủ thông tin\".\n- Latency kỳ vọng với p đạt mỗi vòng, tối đa R vòng: E[số vòng] = Σ_{k=0}^{R−1} (1−p)^k.\n- **Khi nào pipeline cố định tốt hơn**: phần lớn câu hỏi single-hop, SLA latency chặt, cần tái lập/audit, ngân sách thấp → pipeline cố định + router đẩy ca khó sang agent.\n- Failure mode: lặp query gần trùng, trả lời từ kiến thức có sẵn không retrieve, chọn nhầm index, context phình vì kết quả dài."
+    },
+    {
+      "title": "Observability & đánh giá agent",
+      "md": "- **Trace** cho mỗi task, **span** lồng nhau: agent step, generation (token, cost), tool (args, output, lỗi), retriever, guardrail, handoff. Gắn session/user id, version prompt/model. Langfuse có observation type `agent`, `tool`, `chain`, `retriever`, `evaluator`, `embedding`, `guardrail`… (Python SDK ≥ 3.3.1).\n- OpenAI Agents SDK: tracing bật mặc định; `OPENAI_AGENTS_DISABLE_TRACING=1`; `trace_include_sensitive_data` mặc định True; `add_trace_processor()`; không khả dụng với ZDR.\n\n| Chỉ số | Công thức |\n|---|---|\n| Success rate | task thành công / tổng task |\n| Cost per successful task | tổng chi phí / số task **thành công** |\n| Tool-call success rate | 1 − call lỗi / tổng call |\n| Tool precision / recall | trên tập tool duy nhất so với tham chiếu |\n| pass^k (độ ổn định) | pᵏ |\n\n- **Outcome eval** (state cuối, kiểm bằng code) + **trajectory eval** dạng ràng buộc (tool bắt buộc/cấm, thứ tự, số bước tối đa) thay vì exact match một đường duy nhất. LLM-judge có rubric, hiệu chỉnh với nhãn người.\n- **Regression với golden task**: chạy nhiều lần mỗi task; với p = 0,8 và luật 2/3 thì P(fail) = 0,104, tức có fail \"giả\". So với baseline có tính nhiễu.\n- **Online**: max steps/turns + ngân sách cost, phát hiện call trùng, dashboard step count, cost/task, p95 latency, tool error rate theo version.\n- Anthropic: bắt đầu eval sớm với ~20 truy vấn thực tế; LLM-judge chấm theo rubric; tập trung vào end-state."
+    }
+  ],
+  "questions": [
+    {
+      "id": "agentsys-001",
+      "sub": "Context rot",
+      "level": 1,
+      "type": "single",
+      "trap": false,
+      "q": "Trong bài *Effective context engineering for AI agents* của Anthropic, **context rot** chỉ hiện tượng gì?",
+      "options": [
+        "Model quên kiến thức pretrain sau khi fine-tune thêm trên dữ liệu trajectory của agent (catastrophic forgetting)",
+        "Prompt cache hết TTL nên phần prefix phải tính lại, khiến output lệch so với lần gọi trước",
+        "KV cache bị lượng tử hoá dần trong phiên dài, làm sai lệch các token ở đầu cuộc hội thoại",
+        "Số token trong context càng tăng thì khả năng model nhớ và truy xuất chính xác thông tin trong đó càng giảm"
+      ],
+      "answer": 3,
+      "explain": "Anthropic mô tả context như một **attention budget** hữu hạn: mỗi token thêm vào đều tiêu hao ngân sách này. Khi số token tăng, khả năng nhớ lại chính xác thông tin trong context giảm dần, gọi là *context rot*. Hiện tượng này xảy ra **trước** khi chạm giới hạn context window, nên window lớn không có nghĩa là cứ nhồi thêm vào. Một nguyên nhân là kiến trúc transformer phải xử lý n² quan hệ cặp giữa các token, và model được huấn luyện chủ yếu trên chuỗi ngắn hơn. Catastrophic forgetting là chuyện về trọng số khi fine-tune, không liên quan độ dài context. Cache hết TTL chỉ ảnh hưởng chi phí và latency, không làm đổi kết quả. Hệ quả thiết kế: tìm *tập token nhỏ nhất có tín hiệu cao* cho từng bước của agent."
+    },
+    {
+      "id": "agentsys-002",
+      "sub": "Tool result clearing",
+      "level": 3,
+      "type": "numeric",
+      "trap": true,
+      "q": "Agent coding chạy 8 vòng tool rồi trả lời ở lần gọi LLM thứ 9 (tổng 9 lần gọi). Prefix cố định (system + tools + task) = **3.000** token. Mỗi lần gọi model sinh **200** token output. Mỗi tool result dài **2.500** token. Mỗi lần gọi gửi lại toàn bộ lịch sử.\n\nBạn áp dụng **tool result clearing**: ở mỗi lần gọi, chỉ giữ nguyên **2 tool result gần nhất**; các tool result cũ hơn được thay bằng placeholder **50** token. Output của model không bị xoá.\n\nTính **tổng input token** của cả 9 lần gọi khi có clearing (đơn vị token, số nguyên).",
+      "answer": 72750,
+      "tolerance": 0,
+      "unit": "token",
+      "explain": "Lần gọi có k vòng trước đó (k = 0..8) có input = 3.000 + 200·k + 2.500·min(k, 2) + 50·max(0, k − 2). Cộng lại: 3.000·9 = 27.000; 200·(0+1+…+8) = 7.200; 2.500·(0+1+2·7) = 37.500; 50·(1+2+…+6) = 1.050. Tổng = **72.750** token. Nếu không clearing: Σ(3.000 + 2.700·k) = 27.000 + 2.700·36 = 124.200 token, tức clearing tiết kiệm ≈ 41%. Bẫy: quên rằng mọi lần gọi đều gửi lại lịch sử, nên tổng input tăng theo bậc hai theo số vòng. Bẫy thứ hai: tính placeholder cho cả 2 kết quả gần nhất, hoặc xoá luôn output của model. Trong thực tế, mỗi lần xoá làm mất prompt cache từ điểm bị sửa trở đi, nên các API như context editing của Claude cho phép xoá theo lô (`clear_at_least`) để lần mất cache đó đáng giá."
+    },
+    {
+      "id": "agentsys-003",
+      "sub": "Compaction",
+      "level": 2,
+      "type": "single",
+      "trap": false,
+      "q": "Agent chạy nhiều giờ và sắp chạm giới hạn context. Bạn viết prompt **compaction** (tóm tắt lịch sử rồi mở context mới với bản tóm tắt). Cách làm nào khớp khuyến nghị của Anthropic?",
+      "options": [
+        "Tóm tắt càng ngắn càng tốt, khoảng một câu, vì model sẽ tự suy ra lại chi tiết bị mất từ codebase và các file đang mở",
+        "Giữ quyết định kiến trúc, bug chưa xử lý, việc đang dở; bỏ tool output thừa. Tối ưu recall trước, precision sau",
+        "Cắt cứng N message cũ nhất, kể cả yêu cầu gốc của user, vì phần đầu ít liên quan tới bước hiện tại",
+        "Bỏ compaction nếu model có context 1M token, vì chất lượng không phụ thuộc vào độ dài context"
+      ],
+      "answer": 1,
+      "explain": "Anthropic mô tả compaction trong Claude Code như sau: model tóm tắt lịch sử, giữ **quyết định kiến trúc, bug chưa giải quyết, chi tiết triển khai**, bỏ các tool output dư thừa, rồi tiếp tục với bản tóm tắt cộng vài file truy cập gần nhất. Khi tinh chỉnh prompt compaction, nên **tối đa recall trước** để không bỏ sót thông tin quan trọng trong trace, rồi mới tăng precision bằng cách cắt phần thừa. Tóm tắt một câu làm mất ràng buộc, khiến agent lặp lại lỗi cũ hoặc làm trái quyết định trước đó. Cắt cứng phần đầu dễ làm mất yêu cầu gốc và ràng buộc của user. Context lớn vẫn bị *context rot*, nên compaction vẫn có ích cả khi chưa chạm giới hạn. Dạng compaction nhẹ và an toàn nhất là xoá tool result cũ."
+    },
+    {
+      "id": "agentsys-004",
+      "sub": "Prompt caching & prefix ổn định",
+      "level": 2,
+      "type": "numeric",
+      "trap": false,
+      "q": "System prompt dài **10.000** token, nhưng dòng đầu tiên chứa timestamp tới từng giây nên mỗi request có prefix khác nhau. Phần động cuối mỗi request là **1.000** token. Bạn đã đặt `cache_control` sau system prompt. Giá input $3 / 1M token; cache write (TTL 5 phút) = **1,25×** giá input; cache read = **0,1×**.\n\nBạn chuyển timestamp xuống phần động cuối request, nên system prompt 10.000 token trở thành prefix giống hệt nhau. Với **1.000 request** liên tiếp, tất cả trong TTL, request đầu ghi cache và 999 request sau đọc cache. Tính **tổng chi phí input sau khi sửa** (USD, làm tròn 2 chữ số thập phân).",
+      "answer": 6.03,
+      "tolerance": 0.01,
+      "unit": "USD",
+      "explain": "Sau khi sửa: request đầu ghi cache 10.000 × 1,25 = 12.500 token quy đổi. 999 request sau đọc cache: 999 × 10.000 × 0,1 = 999.000 token quy đổi. Phần động: 1.000 × 1.000 = 1.000.000 token giá thường. Tổng = 2.011.500 × $3/10⁶ ≈ **$6,03**. Trước khi sửa, prefix đổi mỗi giây nên mọi request đều *ghi* cache mà không bao giờ đọc được: 1.000 × (12.500 + 1.000) × 3/10⁶ = $40,50, còn đắt hơn cả khi không dùng cache ($33). Bẫy: tưởng cứ bật cache là rẻ hơn. Cache chỉ khớp khi **prefix giống hệt từng token**, nên mọi phần thay đổi (timestamp, user id, kết quả retrieval) phải nằm sau phần ổn định. Hệ số 1,25× / 0,1× lấy theo docs prompt caching của Claude (kiểm tra 10/2026). Hệ số cache read có thể khác tuỳ model, nên ở đây là giả định của đề."
+    },
+    {
+      "id": "agentsys-005",
+      "sub": "Just-in-time retrieval",
+      "level": 2,
+      "type": "multi",
+      "trap": false,
+      "q": "Chọn TẤT CẢ phát biểu ĐÚNG về chiến lược **just-in-time (JIT) retrieval** so với **pre-load** context cho agent.",
+      "options": [
+        "Có thể kết hợp: nạp sẵn một ít (vd CLAUDE.md), phần còn lại để agent tự tìm bằng glob/grep",
+        "Pre-load càng nhiều tài liệu liên quan càng tốt, vì model có thêm thông tin thì luôn trả lời chính xác hơn",
+        "JIT chỉ dùng được với vector database; không áp dụng cho filesystem hay API nội bộ",
+        "JIT giữ các định danh nhẹ (đường dẫn file, query đã lưu, link) và chỉ nạp nội dung bằng tool khi thật sự cần",
+        "JIT chậm hơn so với lấy dữ liệu đã tính sẵn, và cần tool cùng heuristic tốt để agent không lạc hướng"
+      ],
+      "answer": [
+        0,
+        3,
+        4
+      ],
+      "explain": "Anthropic mô tả JIT là để agent giữ *lightweight identifiers* (file path, stored query, web link) rồi dùng tool nạp dữ liệu vào context lúc runtime, giống cách con người dùng hệ thống file thay vì học thuộc mọi thứ. Đánh đổi là **khám phá lúc runtime chậm hơn** truy xuất dữ liệu tính sẵn, và agent cần tool tốt để không phí context. Claude Code dùng chiến lược **hybrid**: CLAUDE.md được nạp sẵn từ đầu, còn glob/grep cho phép tìm file đúng lúc. Pre-load quá nhiều gây *context rot* và loãng tín hiệu, nên nhiều thông tin hơn không đồng nghĩa với chính xác hơn. JIT không gắn với vector DB; định danh có thể là đường dẫn file, câu SQL hay URL. Pre-load hợp với nội dung ít thay đổi (vd tài liệu pháp lý, tài chính) và cần độ trễ thấp."
+    },
+    {
+      "id": "agentsys-006",
+      "sub": "Structured note-taking",
+      "level": 1,
+      "type": "single",
+      "trap": false,
+      "q": "Agent chạy tác vụ kéo dài hàng giờ, qua nhiều lần compaction. Prompt yêu cầu agent thường xuyên ghi `NOTES.md` (tiến độ, quyết định, việc còn lại). Mục đích chính là gì?",
+      "options": [
+        "Tạo dữ liệu để fine-tune lại model sau mỗi phiên, giúp agent dần thuộc lòng codebase của dự án",
+        "Giảm latency mỗi lần gọi LLM, vì file notes được provider cache sẵn trên GPU cho các lượt sau",
+        "Lưu trạng thái quan trọng ngoài context window để đọc lại sau compaction hoặc ở phiên mới",
+        "Thay hẳn checkpointer: notes lưu nguyên văn toàn bộ message history để có thể replay từng bước"
+      ],
+      "answer": 2,
+      "explain": "**Structured note-taking** (agentic memory) là kỹ thuật cho agent ghi chú bền vững *bên ngoài* context window, rồi đọc lại khi cần. Nhờ vậy agent theo dõi được tiến độ và các phụ thuộc qua nhiều lần reset hoặc compaction mà không phải giữ mọi thứ trong context. Ví dụ Anthropic nêu: Claude chơi Pokémon giữ số liệu và chiến thuật chính xác qua hàng nghìn bước nhờ notes. Claude API cũng có *memory tool* dựa trên file với mục đích tương tự. Notes không cập nhật trọng số model, nên không phải fine-tune. Đọc file notes là thêm token vào context, không giảm latency. Notes là bản chắt lọc có chọn lọc, khác với checkpointer lưu toàn bộ state để resume hoặc time-travel."
+    },
+    {
+      "id": "agentsys-007",
+      "sub": "Prompt caching & tool động",
+      "level": 3,
+      "type": "single",
+      "trap": true,
+      "q": "Agent dùng Claude API với prompt caching. Để giảm token, bạn làm **tool RAG**: mỗi lượt chỉ gửi top-5 tool liên quan, tập tool thay đổi theo từng lượt. Sau đó cache hit rate gần như về 0 dù system prompt không đổi. Giải thích nào ĐÚNG?",
+      "options": [
+        "Cache chỉ áp dụng cho messages nên tool không liên quan; nguyên nhân thật là TTL 5 phút quá ngắn so với một lượt agent",
+        "Cache chỉ hit khi temperature = 0; agent dùng temperature 0,7 nên request nào cũng miss dù prefix không đổi",
+        "Prefix cache theo thứ tự tools → system → messages; đổi định nghĩa tool làm mất cache của mọi phần nằm phía sau nó",
+        "Cache so khớp theo độ tương đồng ngữ nghĩa; năm tool mới khác nghĩa năm tool cũ nên vector của prompt lệch đi"
+      ],
+      "answer": 2,
+      "explain": "Theo docs prompt caching của Claude (kiểm tra 10/2026), prefix được ghép theo thứ tự **`tools` → `system` → `messages`**. Đổi định nghĩa tool sẽ làm mất cache của tools, system và toàn bộ messages. Đổi system làm mất cache của system và messages. Vì vậy tập tool thay đổi mỗi lượt sẽ phá cache dù system prompt giữ nguyên. Cache so khớp **chính xác từng token** của prefix, không theo ngữ nghĩa, và không phụ thuộc temperature. Cách sửa: giữ danh sách tool ổn định, còn thông tin thay đổi thì đưa xuống cuối. Nếu thật sự có quá nhiều tool, dùng cơ chế tool search hoặc deferred loading của provider, vốn được thiết kế để không phá prefix, hoặc chấp nhận trade-off sau khi đo. Đây là ví dụ điển hình của việc tối ưu token đi ngược với tối ưu cache."
+    },
+    {
+      "id": "agentsys-008",
+      "sub": "Context editing",
+      "level": 3,
+      "type": "multi",
+      "trap": true,
+      "q": "Về **tool result clearing** trong tính năng *context editing* của Claude API (strategy `clear_tool_uses_20250919`, beta), chọn TẤT CẢ phát biểu ĐÚNG.",
+      "options": [
+        "Mỗi lần xoá làm mất cache prefix, nên dùng `clear_at_least` để mỗi lần xoá đủ nhiều token cho đáng",
+        "Có thể loại trừ tool khỏi việc xoá (`exclude_tools`) và kết hợp memory tool để lưu thông tin trước khi bị xoá",
+        "Nên xoá luôn định nghĩa tool và system prompt cũ, vì đó là phần chiếm nhiều token nhất trong context",
+        "Việc xoá sửa thẳng lịch sử phía client, nên sau đó không còn bản đầy đủ để audit hay replay trace",
+        "Tool result cũ nhất bị thay bằng placeholder, còn vài cặp tool use/result gần nhất được giữ nguyên (tham số `keep`)"
+      ],
+      "answer": [
+        0,
+        1,
+        4
+      ],
+      "explain": "Theo docs context editing của Claude (kiểm tra 10/2026), `clear_tool_uses_20250919` kích hoạt khi input vượt ngưỡng `trigger` (mặc định 100.000 token). Nó xoá tool result **cũ nhất** theo thứ tự thời gian, thay bằng placeholder, và giữ lại `keep` cặp gần nhất (mặc định 3). Xoá nội dung làm **mất prompt cache** từ điểm bị sửa, nên `clear_at_least` bảo đảm mỗi lần xoá đủ lớn để bù lại chi phí ghi cache mới. `exclude_tools` giữ kết quả của những tool quan trọng. Docs cũng nêu: Claude được báo trước khi tool result bị xoá, nên có thể lưu điều cần nhớ vào memory tool. Việc xoá diễn ra **phía server** trước khi prompt tới model, còn client vẫn giữ toàn bộ lịch sử. Tool definitions và system prompt là phần prefix ổn định, đáng được cache, không phải đối tượng cần xoá. Bẫy: nhầm context editing với việc tự cắt lịch sử ở client."
+    },
+    {
+      "id": "agentsys-009",
+      "sub": "Agent Skills",
+      "level": 1,
+      "type": "single",
+      "trap": false,
+      "q": "Theo docs của Anthropic, một **Agent Skill** là gì?",
+      "options": [
+        "Một MCP server chạy tiến trình riêng, khai báo tools, resources và prompts cho host thông qua giao thức JSON-RPC 2.0",
+        "Một JSON schema mô tả function cho tool calling, bắt buộc gửi kèm mọi request tới Messages API",
+        "Một adapter LoRA được nạp động vào model khi người dùng nhắc đến chủ đề tương ứng trong prompt",
+        "Thư mục có `SKILL.md` (frontmatter `name`, `description` và phần hướng dẫn), kèm script, tài nguyên tuỳ chọn"
+      ],
+      "answer": 3,
+      "explain": "Skill là tài nguyên **dựa trên filesystem**: một thư mục chứa `SKILL.md` (YAML frontmatter gồm `name` và `description`, thân là hướng dẫn), có thể kèm file Markdown phụ, script chạy được và tài nguyên tham khảo. Agent đọc các file này bằng bash trong môi trường có filesystem và code execution. MCP server là một giao thức kết nối tool/dữ liệu qua JSON-RPC, khác bản chất với skill. Hai thứ này bổ trợ nhau: skill có thể dạy agent *cách* dùng tool MCP cho một quy trình. Skill không phải tool schema gửi kèm mọi request, mà chỉ metadata được nạp sẵn. Skill cũng không thay đổi trọng số model. Anthropic công bố Agent Skills thành chuẩn mở (agentskills.io) vào 12/2025."
+    },
+    {
+      "id": "agentsys-010",
+      "sub": "Progressive disclosure",
+      "level": 2,
+      "type": "single",
+      "trap": true,
+      "q": "Một agent cài 30 skill. Theo cơ chế **progressive disclosure** trong docs Agent Skills, phần nào của skill nằm trong context **ngay từ đầu phiên**?",
+      "options": [
+        "Toàn bộ thân `SKILL.md` của mọi skill; chỉ các file phụ như `FORMS.md` mới được nạp khi cần đến",
+        "Chỉ `name` và `description` trong frontmatter của mỗi skill, khoảng 100 token mỗi skill, nằm sẵn trong system prompt",
+        "Toàn bộ mã nguồn script trong skill, để model đọc và hiểu logic trước khi quyết định có chạy hay không",
+        "Không phần nào: description được embed vào vector DB và chỉ top-k skill khớp nhất mới được chèn vào prompt"
+      ],
+      "answer": 1,
+      "explain": "Docs Agent Skills (kiểm tra 10/2026) chia ba mức. **Level 1, metadata**: `name` + `description` luôn được nạp lúc khởi động, khoảng 100 token mỗi skill. **Level 2, instructions**: thân `SKILL.md` (khuyến nghị dưới 5k token) chỉ được đọc vào context khi skill được kích hoạt. **Level 3+, resources và code**: file phụ chỉ vào context khi được đọc; script chạy qua bash và **chỉ output** đi vào context, còn mã nguồn thì không. Nhờ vậy có thể cài nhiều skill mà gần như không tốn context. Bẫy: tưởng toàn bộ `SKILL.md` được nạp sẵn. Cơ chế chọn skill là model đọc description trong system prompt, không phải vector retrieval. Vì thế description phải nói rõ skill làm gì và *khi nào* dùng."
+    },
+    {
+      "id": "agentsys-011",
+      "sub": "SKILL.md frontmatter",
+      "level": 2,
+      "type": "multi",
+      "trap": false,
+      "q": "Theo docs Agent Skills của Claude API, chọn TẤT CẢ phát biểu ĐÚNG về frontmatter của `SKILL.md`.",
+      "options": [
+        "`description` nên nói cả việc skill làm lẫn khi nào dùng, vì model dựa vào đó để quyết định kích hoạt skill",
+        "Frontmatter bắt buộc có thêm trường `version` và danh sách `tools`",
+        "`name: pdf-processing` là tên hợp lệ",
+        "`description` có thể để trống nếu `name` đã đủ rõ nghĩa, vì model chọn skill chủ yếu dựa vào tên",
+        "`name: Claude_PDF_Helper` hợp lệ vì vẫn ngắn hơn 64 ký tự"
+      ],
+      "answer": [
+        0,
+        2
+      ],
+      "explain": "Theo docs (kiểm tra 10/2026), hai trường bắt buộc là `name` và `description`. `name` dài tối đa 64 ký tự, **chỉ gồm chữ thường, số và dấu gạch ngang**, không chứa thẻ XML, không chứa từ dành riêng \"anthropic\" hoặc \"claude\". Vì vậy `pdf-processing` hợp lệ, còn `Claude_PDF_Helper` sai ba lỗi: chữ hoa, dấu gạch dưới và từ dành riêng. `description` không được rỗng, tối đa 1.024 ký tự, không chứa thẻ XML. Description phải nói skill làm gì **và** khi nào dùng, vì đây là căn cứ để model quyết định có kích hoạt skill. Không có trường `version` hay `tools` bắt buộc. Một số sản phẩm như Claude Code hỗ trợ thêm trường tuỳ chọn (vd `allowed-tools`, `disable-model-invocation`), nhưng đó là phần mở rộng chứ không phải yêu cầu."
+    },
+    {
+      "id": "agentsys-012",
+      "sub": "Chi phí token của skills",
+      "level": 2,
+      "type": "numeric",
+      "trap": false,
+      "q": "Agent cài **50 skill**. Metadata mỗi skill ≈ **100** token. Thân `SKILL.md` trung bình **3.000** token. Một task kích hoạt **2 skill**. Một trong hai skill đọc thêm file tham khảo **2.000** token, và chạy một script dài 5.000 dòng code cho ra output **150** token. Các skill khác không được kích hoạt.\n\nTheo cơ chế progressive disclosure, tổng số token mà các skill đóng góp vào context của task này là bao nhiêu (đơn vị token)?",
+      "answer": 13150,
+      "tolerance": 0,
+      "unit": "token",
+      "explain": "Level 1 luôn nạp: 50 × 100 = 5.000 token. Level 2 cho 2 skill được kích hoạt: 2 × 3.000 = 6.000 token. Level 3: file tham khảo được đọc nên tính 2.000 token. Script chạy qua bash, chỉ output 150 token vào context, còn mã nguồn 5.000 dòng **không** vào context. Tổng = 5.000 + 6.000 + 2.000 + 150 = **13.150** token. So sánh: nếu nạp sẵn toàn bộ `SKILL.md` của 50 skill thì riêng phần đó đã là 150.000 token. Bẫy: cộng cả mã nguồn script, hoặc cộng thân `SKILL.md` của 48 skill không dùng. Đây là lý do skill nên giao các thao tác tất định (sort, validate, convert) cho script thay vì để model sinh code tương đương."
+    },
+    {
+      "id": "agentsys-013",
+      "sub": "Skills vs MCP vs system prompt",
+      "level": 2,
+      "type": "single",
+      "trap": false,
+      "q": "Team pháp chế có: một quy trình review hợp đồng gồm checklist 40 bước kèm script kiểm tra định dạng (dùng vài lần mỗi tuần); nhu cầu tra **dữ liệu khách hàng realtime** trong CRM; và vài quy ước ngắn luôn áp dụng (xưng hô, ngôn ngữ). Cách phân bổ nào hợp lý nhất?",
+      "options": [
+        "Đưa cả checklist vào system prompt cho luôn sẵn; viết một skill để chép bản dump CRM vào context mỗi phiên",
+        "Bỏ skill vì MCP đã thay thế được; viết checklist thành MCP prompt và tính năng định dạng thành MCP resource",
+        "Fine-tune model trên checklist để khỏi tốn context; dữ liệu CRM thì index dump hàng tuần vào vector DB để RAG",
+        "Checklist và script làm skill (nạp khi cần), CRM truy cập qua MCP server, quy ước ngắn đặt luôn trong system prompt"
+      ],
+      "answer": 3,
+      "explain": "Nội dung **luôn cần** và ngắn (quy ước, persona) hợp với system prompt hoặc file luôn nạp như CLAUDE.md. Quy trình dài, dùng thỉnh thoảng, có script tất định thì hợp với **skill**: chỉ metadata tốn context cho tới khi được kích hoạt, và script chạy mà không nạp code vào context. **Dữ liệu sống** hoặc hành động trên hệ thống ngoài (CRM, ticket, DB) thì nên đi qua **MCP server/tool**, vì cần kết nối, xác thực và dữ liệu mới nhất. Nhồi checklist 40 bước vào system prompt khiến mọi phiên đều tốn token và loãng chỉ dẫn. MCP và skill bổ trợ nhau chứ không thay thế nhau: skill có thể hướng dẫn cách dùng tool MCP. Fine-tune khó cập nhật quy trình, còn bản dump hàng tuần làm dữ liệu khách hàng bị cũ."
+    },
+    {
+      "id": "agentsys-014",
+      "sub": "Thiết kế tool cho agent",
+      "level": 3,
+      "type": "multi",
+      "trap": false,
+      "q": "Theo bài *Writing effective tools for agents* của Anthropic, chọn TẤT CẢ thực hành ĐÚNG.",
+      "options": [
+        "Khi truncate hoặc phân trang, kèm chỉ dẫn cho agent, vd dùng filter hẹp hơn hoặc gọi trang tiếp theo",
+        "Bọc 1:1 mọi endpoint REST thành tool riêng để agent có nhiều lựa chọn linh hoạt nhất",
+        "Namespacing theo service/resource (vd `asana_search`, `jira_search`) để agent phân biệt các tool na ná nhau",
+        "Thêm tham số `response_format` (concise/detailed) để agent chọn mức chi tiết, tiết kiệm token khi không cần ID",
+        "Thay `list_contacts` trả toàn bộ danh bạ bằng `search_contacts(query)` trả đúng phần cần thiết",
+        "Trả UUID kỹ thuật thay cho tên dễ đọc, vì UUID chính xác hơn và model xử lý chuỗi hex dễ hơn ngôn ngữ"
+      ],
+      "answer": [
+        0,
+        2,
+        3,
+        4
+      ],
+      "explain": "Anthropic khuyên thiết kế tool theo cách agent làm việc, không bọc nguyên API. *Nhiều tool hơn không có nghĩa là tốt hơn*: `search_contacts` tốt hơn `list_contacts` vì agent không phải đọc từng mục, và có thể gộp các thao tác liên quan (vd `schedule_event` thay cho cặp tìm lịch rảnh + tạo sự kiện). **Namespacing** theo service/resource giúp agent chọn đúng tool khi có nhiều server; bài viết cũng ghi nhận đặt tiền tố hay hậu tố cho kết quả khác nhau tuỳ model, nên cần đo. Tool nên trả **thông tin có ý nghĩa**: đổi UUID thành tên dễ đọc giúp model chính xác hơn và ít bịa hơn, khi cần ID cho bước sau thì có thể thêm `response_format` dạng concise/detailed. Với output lớn: phân trang, filter, truncate với giá trị mặc định hợp lý, kèm chỉ dẫn để agent biết làm gì tiếp. Bài viết nêu Claude Code mặc định giới hạn tool response ở 25.000 token (tại thời điểm bài viết, 2025)."
+    },
+    {
+      "id": "agentsys-015",
+      "sub": "Tool error message",
+      "level": 1,
+      "type": "single",
+      "trap": false,
+      "q": "Tool `get_invoice(invoice_id)` nhận `\"INV 2024/77\"`, trong khi định dạng đúng là `INV-YYYY-NNNN`. Cách phản hồi lỗi nào giúp agent tự sửa tốt nhất?",
+      "options": [
+        "Lỗi nêu rõ định dạng đúng, ví dụ `INV-2024-0077`, và gợi ý `search_invoices` nếu chỉ biết tên khách",
+        "Trả HTTP 500 kèm stack trace Python đầy đủ để model có đủ thông tin tự debug nguyên nhân bên trong server",
+        "Trả chuỗi rỗng để khỏi tốn token; model thấy không có dữ liệu sẽ tự hiểu là đã truyền sai tham số",
+        "Ném exception làm dừng hẳn agent loop, để tránh model tiếp tục gọi tool với định dạng sai thêm lần nữa"
+      ],
+      "answer": 0,
+      "explain": "Thông báo lỗi là một phần của giao diện agent–tool (ACI). Lỗi tốt cho biết **sai ở đâu, đúng phải thế nào, làm gì tiếp**, nhờ đó model sửa được ngay ở vòng ReAct sau. Anthropic khuyên prompt-engineer cả thông báo lỗi: thay mã lỗi khó hiểu hoặc traceback bằng hướng dẫn cụ thể. Stack trace tốn token, có thể lộ chi tiết nội bộ và không chỉ ra cách sửa. Chuỗi rỗng khiến model hiểu nhầm là không có hoá đơn và có thể bịa câu trả lời. Dừng hẳn loop vì một lỗi định dạng làm mất khả năng tự phục hồi. Lỗi nghiệp vụ vẫn nên trả về như tool result có cờ lỗi (vd `is_error`), không làm sập vòng lặp."
+    },
+    {
+      "id": "agentsys-016",
+      "sub": "Subagent: cô lập context",
+      "level": 1,
+      "type": "single",
+      "trap": false,
+      "q": "Lợi ích chính khi giao việc cho **subagent** (vd subagent trong Claude Code, hoặc mô hình sub-agent trong bài context engineering của Anthropic) là gì?",
+      "options": [
+        "Subagent làm việc trong context riêng, đọc nhiều log/file rồi chỉ trả bản tóm tắt cô đọng cho agent chính",
+        "Subagent dùng chung context với agent chính, nên giao việc qua lại không bị mất thông tin nào",
+        "Tổng số token tiêu thụ luôn thấp hơn so với một agent đơn tự làm hết toàn bộ công việc, nhờ mỗi context nhỏ hơn",
+        "Subagent ghép KV cache của nhiều model, cho phép vượt giới hạn context window của model chính"
+      ],
+      "answer": 0,
+      "explain": "Subagent chạy trong **context window riêng**, với system prompt, quyền tool và permission riêng. Nó có thể đọc hàng chục nghìn token (search, log, file) rồi chỉ trả về bản tóm tắt đã chắt lọc, thường khoảng 1.000–2.000 token theo Anthropic. Nhờ vậy context của agent chính sạch và tập trung. Đây là cô lập context, ngược với dùng chung context. Bẫy: tưởng tách subagent luôn tiết kiệm token. Theo Anthropic, multi-agent tiêu thụ khoảng 15× token so với chat (agent đơn khoảng 4×), nên chỉ đáng khi tác vụ có giá trị cao và song song hoá được. Subagent không ghép KV cache; mỗi subagent là các lần gọi API độc lập. Lợi ích phụ: giới hạn tool cho từng subagent và chuyển việc đơn giản sang model rẻ hơn."
+    },
+    {
+      "id": "agentsys-017",
+      "sub": "Khi nào không tách subagent",
+      "level": 2,
+      "type": "multi",
+      "trap": false,
+      "q": "Chọn TẤT CẢ tình huống mà **không nên** tách thành nhiều subagent/multi-agent.",
+      "options": [
+        "Câu hỏi đơn giản trả lời được bằng một hai lần gọi tool, trong khi ngân sách token mỗi request rất chặt",
+        "Sửa một tính năng mà các thay đổi ở nhiều file phụ thuộc chặt vào nhau và cần chung toàn bộ ngữ cảnh",
+        "Các bước nối tiếp, bước sau cần chi tiết đầy đủ (không phải bản tóm tắt) mà bước trước vừa xử lý",
+        "Phải quét hàng nghìn dòng log chỉ để rút ra vài dòng lỗi liên quan, phần log còn lại không dùng lại",
+        "Nghiên cứu theo chiều rộng: so sánh 12 nhà cung cấp, mỗi nhà tra cứu độc lập trên nhiều nguồn khác nhau"
+      ],
+      "answer": [
+        0,
+        1,
+        2
+      ],
+      "explain": "Theo bài multi-agent research system của Anthropic, multi-agent hợp với tác vụ **theo chiều rộng**, nhiều hướng độc lập chạy song song được, thông tin vượt quá một context window, và giá trị đủ cao để bù chi phí token. Ngược lại, không hợp khi các agent cần **chung toàn bộ context** hoặc có nhiều phụ thuộc lẫn nhau. Phần lớn tác vụ coding thuộc nhóm này, vì có ít việc thật sự song song hoá được. Bước sau cần chi tiết đầy đủ của bước trước thì việc chỉ nhận bản tóm tắt từ subagent gây mất thông tin (hiệu ứng *game of telephone*). Tác vụ đơn giản thì chi phí điều phối lớn hơn lợi ích. Quét log khối lượng lớn để rút ra ít kết quả là ví dụ tiêu biểu *nên* dùng subagent, vì nó giữ log rác khỏi context chính. Nghiên cứu 12 nhà cung cấp độc lập là bài toán song song kinh điển."
+    },
+    {
+      "id": "agentsys-018",
+      "sub": "Handoff vs agent-as-tool",
+      "level": 3,
+      "type": "single",
+      "trap": true,
+      "q": "Với **OpenAI Agents SDK**, agent `Triage` cần chuyển cuộc hội thoại cho `Refund Agent`, để agent này **tiếp tục trò chuyện trực tiếp** với khách. Phát biểu nào ĐÚNG?",
+      "options": [
+        "Handoff chạy Refund Agent như hàm con rồi trả kết quả về Triage; Triage vẫn là agent trả lời khách hàng",
+        "Handoff hiện ra với LLM như tool `transfer_to_refund_agent`; agent đích tiếp quản và mặc định thấy toàn bộ lịch sử",
+        "Handoff mặc định chỉ chuyển tin nhắn cuối của user; muốn chuyển cả lịch sử phải tự viết `input_filter`",
+        "Handoff gửi message A2A qua HTTP tới Agent Card của Refund Agent, nên agent đích phải được deploy như một service riêng"
+      ],
+      "answer": 1,
+      "explain": "Theo docs OpenAI Agents SDK (openai-agents 0.23.1, kiểm tra 10/2026), handoff được **biểu diễn như tool** với LLM. Agent tên `Refund Agent` cho ra tool `transfer_to_refund_agent`, có thể đổi tên bằng `tool_name_override`. Khi model gọi tool này, Runner đổi agent hiện tại sang agent đích và vòng lặp tiếp tục; agent mới *tiếp quản cuộc hội thoại* và mặc định thấy toàn bộ lịch sử trước đó. `input_filter` dùng để **cắt bớt** lịch sử (vd bỏ tool call cũ), không phải để mở rộng. Chạy agent khác như hàm con rồi trả kết quả về là mô tả của `Agent.as_tool()`, dùng khi muốn agent gọi **giữ quyền điều phối**. Handoff diễn ra trong cùng một process của SDK, không liên quan tới giao thức A2A. Nên thêm `RECOMMENDED_PROMPT_PREFIX` vào instructions để model hiểu cơ chế handoff."
+    },
+    {
+      "id": "agentsys-019",
+      "sub": "Chi phí multi-agent",
+      "level": 3,
+      "type": "numeric",
+      "trap": false,
+      "q": "Hệ nghiên cứu orchestrator–worker: một **lead agent** dùng model lớn (input $5/1M, output $25/1M) và **5 subagent** dùng model nhỏ hơn (input $3/1M, output $15/1M). Mỗi task: lead tiêu thụ tổng **40.000** input token và **3.000** output token. Mỗi subagent tiêu thụ tổng **90.000** input token và **4.000** output token (đã gồm bản tóm tắt gửi về lead).\n\nTính **chi phí cho 1.000 task** (USD, làm tròn đến số nguyên).",
+      "answer": 1925,
+      "tolerance": 1,
+      "unit": "USD",
+      "explain": "Lead: 40.000 × 5/10⁶ + 3.000 × 25/10⁶ = 0,20 + 0,075 = $0,275. Mỗi subagent: 90.000 × 3/10⁶ + 4.000 × 15/10⁶ = 0,27 + 0,06 = $0,33. Năm subagent: $1,65. Một task: 0,275 + 1,65 = $1,925, nên 1.000 task là **$1.925**. Tổng token mỗi task = 43.000 + 5 × 94.000 = 513.000. Nếu một phiên chat thông thường khoảng 30.000 token thì hệ này tốn khoảng 17×, cùng cỡ con số ~15× Anthropic báo cáo. Bẫy: chỉ tính token của lead (vì người dùng chỉ thấy lead) hoặc quên output token. Chọn model nhỏ cho subagent và giới hạn số subagent theo độ phức tạp của truy vấn là hai đòn bẩy chi phí chính. Giá ở đây là giả định của đề."
+    },
+    {
+      "id": "agentsys-020",
+      "sub": "A2A vs MCP",
+      "level": 1,
+      "type": "single",
+      "trap": false,
+      "q": "Phát biểu nào mô tả ĐÚNG quan hệ giữa **A2A (Agent2Agent) protocol** và **MCP**?",
+      "options": [
+        "MCP chuẩn hoá cách agent dùng tool/dữ liệu; A2A chuẩn hoá cách các agent độc lập, opaque cộng tác với nhau",
+        "A2A là phiên bản kế nhiệm của MCP và đã thay thế MCP cho mọi kiểu tích hợp tool từ năm 2026",
+        "MCP dùng cho giao tiếp agent–agent qua Internet; A2A dùng để gọi tool cục bộ qua stdio trên cùng một máy với host",
+        "Hai giao thức giống nhau về chức năng, chỉ khác nơi phát triển nên có thể dùng thay thế nhau tuỳ ý"
+      ],
+      "answer": 0,
+      "explain": "Docs A2A (a2a-protocol.org, kiểm tra 10/2026) mô tả hai giao thức **bổ trợ nhau**: *MCP is vertical*, nó làm sâu năng lực của một agent bằng cách kết nối tool, API và resource. *A2A is horizontal*, nó kết nối các agent độc lập, thường *opaque* (không chia sẻ memory, tool hay suy nghĩ nội bộ), để cộng tác như những bên ngang hàng. Ví dụ trong docs: khách nói chuyện với agent quản lý xưởng sửa xe qua A2A, agent này giao việc cho các agent thợ qua A2A, còn mỗi thợ dùng MCP để truy cập máy chẩn đoán và sổ tay sửa chữa. A2A không thay thế MCP. A2A do Google khởi xướng và hiện thuộc Linux Foundation; MCP do Anthropic khởi xướng. Một hệ thống thực tế thường dùng cả hai."
+    },
+    {
+      "id": "agentsys-021",
+      "sub": "A2A Agent Card & Task",
+      "level": 2,
+      "type": "multi",
+      "trap": false,
+      "q": "Theo A2A specification (bản 1.0), chọn TẤT CẢ phát biểu ĐÚNG.",
+      "options": [
+        "A2A chỉ hỗ trợ request/response đồng bộ, không có streaming hay push notification cho task dài",
+        "Task chỉ có hai trạng thái completed và failed; agent không thể tạm dừng giữa chừng để xin thêm input từ client",
+        "Agent Card là tài liệu JSON mô tả agent, thường công bố tại `/.well-known/agent-card.json`",
+        "Agent Card công bố system prompt và danh sách tool nội bộ để agent khác gọi thẳng các tool đó",
+        "Agent Card khai báo skills (id, name, description, tags, examples), capabilities và các security scheme"
+      ],
+      "answer": [
+        2,
+        4
+      ],
+      "explain": "Theo spec A2A (bản 1.0.0, kiểm tra 10/2026), **Agent Card** là metadata JSON mô tả danh tính, năng lực và yêu cầu tương tác của agent. Đường dẫn well-known chuẩn là `https://{domain}/.well-known/agent-card.json` (theo RFC 8615). Card khai báo các **AgentSkill** (id, name, description, tags, examples), capabilities (streaming, push notifications…), security schemes và endpoint. Đơn vị công việc là **Task**, có trạng thái submitted, working, input-required, auth-required và các trạng thái kết thúc completed, failed, canceled, rejected. Dữ liệu trao đổi qua Message (gồm các Part) và kết quả là Artifact. Bẫy: A2A giữ agent **opaque**, các bên cộng tác dựa trên năng lực đã khai báo mà không cần biết state, memory hay tool nội bộ của nhau. A2A hỗ trợ streaming (SSE hoặc gRPC stream) và push notification qua webhook cho task chạy lâu. Spec định nghĩa các binding JSON-RPC 2.0, gRPC và HTTP+JSON/REST."
+    },
+    {
+      "id": "agentsys-022",
+      "sub": "Giao việc cho subagent",
+      "level": 3,
+      "type": "single",
+      "trap": false,
+      "q": "Lead agent giao cho 3 subagent cùng một câu: *\"Nghiên cứu tình trạng thiếu chip bán dẫn\"*. Log cho thấy cả ba chạy các truy vấn gần như giống nhau và trả về kết quả trùng lặp. Cách sửa hiệu quả nhất?",
+      "options": [
+        "Mỗi lệnh giao việc ghi rõ mục tiêu, định dạng output, nguồn/tool nên dùng và ranh giới phạm vi giữa các subagent",
+        "Tăng lên 10 subagent với cùng câu lệnh đó, để số lượng bù cho phần trùng lặp và phủ thêm được nhiều nguồn tin khác",
+        "Cho các subagent chạy chung một context window, để mỗi subagent thấy subagent khác đang tìm kiếm gì",
+        "Tăng temperature của từng subagent lên 1,2 để chúng ngẫu nhiên chọn các truy vấn tìm kiếm khác nhau"
+      ],
+      "answer": 0,
+      "explain": "Theo bài multi-agent research system của Anthropic, lead agent ban đầu giao việc quá ngắn kiểu \"nghiên cứu thiếu chip bán dẫn\", khiến các subagent hiểu sai hoặc làm trùng nhau. Bài học: mỗi lệnh giao việc cần **objective, định dạng output, chỉ dẫn về tool/nguồn và ranh giới nhiệm vụ** rõ ràng. Lead cũng cần quy tắc scale số subagent theo độ phức tạp: truy vấn đơn giản chỉ cần một agent và vài tool call. Tăng số subagent khi lệnh vẫn mơ hồ chỉ nhân bản phần trùng và tăng chi phí. Dùng chung context thì mất lợi ích cô lập context, vốn là lý do chính để tách subagent. Temperature cao làm kết quả kém ổn định mà không bảo đảm phân chia công việc hợp lý."
+    },
+    {
+      "id": "agentsys-023",
+      "sub": "Hooks: PreToolUse vs PostToolUse",
+      "level": 2,
+      "type": "single",
+      "trap": true,
+      "q": "Trong Claude Code, team muốn **chặn** mọi lệnh `rm -rf` và việc ghi vào `.env`. Họ đăng ký hook ở event **PostToolUse**: phát hiện vi phạm thì `exit 2` kèm thông điệp ra stderr. Kết quả thực tế?",
+      "options": [
+        "Chặn được và hoàn tác được, vì PostToolUse exit 2 khiến Claude Code khôi phục snapshot của file trước khi lệnh chạy",
+        "Chặn được với điều kiện đổi sang `exit 1`, vì exit 2 chỉ là cảnh báo không chặn ở mọi loại event",
+        "Không chặn được: PostToolUse chạy sau khi tool đã chạy, exit 2 chỉ đưa stderr cho Claude; phải dùng PreToolUse",
+        "Không chặn được ở bất kỳ event nào, vì hook chỉ là chỉ dẫn trong prompt và model có thể bỏ qua"
+      ],
+      "answer": 2,
+      "explain": "Theo docs hooks của Claude Code (kiểm tra 10/2026), **PreToolUse** chạy *trước* khi tool thực thi. Hook ở đây có thể chặn bằng `exit 2` (stderr được đưa cho Claude làm lý do) hoặc trả JSON `permissionDecision: \"deny\"`. **PostToolUse** chạy *sau* khi tool đã chạy xong, nên không ngăn được và không hoàn tác được tác dụng phụ. Exit 2 ở đây chỉ đưa stderr cho Claude như phản hồi. PostToolUse hợp với việc chạy formatter/linter, log, audit, hoặc sửa nội dung Claude thấy (`updatedToolOutput`). Exit code khác 0 và 2 là lỗi không chặn ở hầu hết event. Hook là lệnh **deterministic do harness thực thi**, không phải chỉ dẫn mà model có thể bỏ qua. Đó là ưu điểm của hook so với việc dặn trong prompt hay CLAUDE.md."
+    },
+    {
+      "id": "agentsys-024",
+      "sub": "Hooks trong Claude Code",
+      "level": 2,
+      "type": "multi",
+      "trap": false,
+      "q": "Chọn TẤT CẢ phát biểu ĐÚNG về **hooks** trong Claude Code (theo docs hiện hành).",
+      "options": [
+        "Hook chỉ khai báo được trong `~/.claude/settings.json` ở mức user, không thể đóng gói theo project",
+        "Hook do harness thực thi ở các lifecycle event, nên chạy tất định chứ không phụ thuộc việc model nhớ làm",
+        "PreToolUse trả allow sẽ vượt qua deny rule trong settings, vì hook được đánh giá sau rule",
+        "Matcher cho tool MCP dùng mẫu `mcp__<server>__<tool>`, vd `mcp__memory__.*`",
+        "PreToolUse có thể trả JSON với `permissionDecision` là allow, deny hoặc ask (và defer)"
+      ],
+      "answer": [
+        1,
+        3,
+        4
+      ],
+      "explain": "Theo docs hooks và permissions của Claude Code (kiểm tra 10/2026): hook là lệnh shell, HTTP, MCP tool, prompt hoặc agent chạy tại các event như `PreToolUse`, `PostToolUse`, `UserPromptSubmit`, `Stop`, `SubagentStop`, `PreCompact`, `SessionStart`… Vì do harness gọi nên hook tất định. PreToolUse có thể trả `permissionDecision` là `allow`, `deny`, `ask` hoặc `defer`. Matcher so theo tên tool; với MCP là `mcp__<server>__<tool>` và hỗ trợ regex. Quyết định của PreToolUse **không vượt qua** permission rule: deny rule khớp thì vẫn chặn, ask rule khớp thì vẫn hỏi, kể cả khi hook trả allow. Chiều ngược lại thì được: hook exit 2 chặn được lệnh mà allow rule cho phép. Hook có thể nằm ở `.claude/settings.json` của project, `settings.local.json`, managed settings, `hooks/hooks.json` của plugin, hoặc frontmatter của skill/subagent."
+    },
+    {
+      "id": "agentsys-025",
+      "sub": "Permission rules",
+      "level": 3,
+      "type": "single",
+      "trap": true,
+      "q": "Claude Code: user settings có deny rule `Bash(aws *)`; project settings có allow rule cụ thể hơn `Bash(aws s3 ls)`; session chạy ở mode **`bypassPermissions`**. Agent gọi `aws s3 ls`. Điều gì xảy ra?",
+      "options": [
+        "Bị chặn: deny được xét trước bất kể rule nào cụ thể hơn, và deny vẫn áp dụng trong `bypassPermissions`",
+        "Lệnh chạy, vì rule cụ thể hơn luôn thắng rule tổng quát hơn khi cả hai cùng khớp một lệnh (như firewall)",
+        "Lệnh chạy, vì `bypassPermissions` bỏ qua toàn bộ permission rule kể cả deny rule",
+        "Claude Code dừng lại hỏi người dùng, vì hai scope user và project mâu thuẫn nhau về cùng một lệnh"
+      ],
+      "answer": 0,
+      "explain": "Theo docs permissions (kiểm tra 10/2026), rule được xét theo thứ tự **deny → ask → allow**; rule khớp đầu tiên quyết định, và *độ cụ thể của rule không thay đổi thứ tự này*. Một deny rule rộng như `Bash(aws *)` chặn mọi lệnh khớp, kể cả khi có allow rule hẹp hơn: allow không thể tạo ngoại lệ cho deny. Điều này đúng giữa các scope: deny ở user chặn được allow ở project và ngược lại. Docs permission modes ghi rõ *deny rules block in every mode, including `bypassPermissions`*, trong khi allow rule không có tác dụng ở mode này vì mọi thứ khác đã được cho chạy. Bẫy: suy luận theo kiểu firewall \"rule cụ thể thắng\" hoặc tưởng bypass là tắt hết. Muốn mở một ngoại lệ thì phải thu hẹp chính deny rule."
+    },
+    {
+      "id": "agentsys-026",
+      "sub": "Permission modes",
+      "level": 2,
+      "type": "single",
+      "trap": true,
+      "q": "Bạn chạy Claude Code **headless trong CI**: chỉ cho phép đúng `Bash(npm test)` và `Read`; mọi thao tác khác phải bị **từ chối ngay** chứ không treo chờ người duyệt. Chọn mode phù hợp.",
+      "options": [
+        "`bypassPermissions`: chạy mọi thứ không cần hỏi, hợp CI vì pipeline không có ai ngồi duyệt",
+        "`dontAsk` cùng allowlist: mọi tool call cần duyệt mà không khớp allow rule đều bị tự động từ chối",
+        "`acceptEdits`: tự duyệt sửa file và các lệnh filesystem phổ biến (mkdir, mv, cp…) bên cạnh allowlist đã khai báo",
+        "`plan`: agent chỉ đọc và lập kế hoạch, rồi tự thực thi kế hoạch khi hết thời gian chờ phê duyệt"
+      ],
+      "answer": 1,
+      "explain": "Theo docs permission modes (kiểm tra 10/2026), **`dontAsk`** tự động từ chối mọi tool call lẽ ra phải hỏi người dùng. Nó chỉ chạy các thao tác không cần duyệt (đọc file trong working directory, lệnh Bash chỉ đọc), các lệnh khớp `permissions.allow`, và các call được PreToolUse hook chấp thuận. Docs gợi ý dùng mode này cho CI: `claude -p \"...\" --permission-mode dontAsk --allowedTools \"Bash(npm test)\" \"Read\"`. `bypassPermissions` chạy *mọi thứ*, chỉ nên dùng trong container hoặc VM cô lập; nó không thực hiện yêu cầu \"chỉ đúng hai lệnh\". `acceptEdits` tự duyệt thêm việc sửa file và các lệnh như `mkdir`, `mv`, `cp`, tức vượt ra ngoài allowlist chỉ gồm hai mục. `plan` chặn chỉnh sửa cho tới khi kế hoạch được duyệt và không tự thực thi khi hết giờ. Bẫy: nhầm \"không hỏi\" của `dontAsk` (từ chối) với \"không hỏi\" của `bypassPermissions` (cho phép tất cả)."
+    },
+    {
+      "id": "agentsys-027",
+      "sub": "Sandbox cho CodeAgent",
+      "level": 3,
+      "type": "multi",
+      "trap": false,
+      "q": "Về thực thi code của **smolagents** `CodeAgent`, chọn TẤT CẢ phát biểu ĐÚNG.",
+      "options": [
+        "Cách gửi từng code snippet ra sandbox không hỗ trợ managed agents; muốn multi-agent cách ly thì chạy cả hệ agent bên trong sandbox",
+        "`LocalPythonExecutor` chạy code theo AST, chặn import ngoài danh sách cho phép và giới hạn số thao tác, nhưng docs nói không sandbox local nào an toàn tuyệt đối",
+        "`ToolCallingAgent` cũng cần sandbox ngang `CodeAgent`, vì ở mỗi bước nó đều thực thi đoạn code Python do model sinh ra trong executor",
+        "Với `executor_type` là `\"e2b\"`, `\"docker\"`, `\"modal\"` hoặc `\"blaxel\"`, code sinh ra chạy trong sandbox còn model vẫn được gọi từ môi trường local",
+        "`additional_authorized_imports` chỉ thêm quyền cho package được liệt kê, còn mọi module của thư viện chuẩn Python vốn đã được phép dùng sẵn"
+      ],
+      "answer": [
+        0,
+        1,
+        3
+      ],
+      "explain": "Theo docs smolagents (bản 1.26.0, kiểm tra 10/2026), `CodeAgent` mặc định chạy code bằng `LocalPythonExecutor`. Đây là interpreter tự viết, thực thi theo AST từng thao tác: import bị cấm nếu chưa có trong danh sách cho phép, submodule cũng phải được cho phép riêng (vd `numpy.*`), và số thao tác bị giới hạn để chặn vòng lặp vô hạn. Docs cảnh báo *no local python sandbox can ever be completely secure*. Remote executor (`executor_type` = e2b/docker/modal/blaxel) chỉ gửi code sang sandbox, model vẫn chạy local; cách này **không hỗ trợ managed agents**, vì sandbox không giữ credential để gọi model. Muốn multi-agent cách ly thì chạy toàn bộ hệ agent trong sandbox, chấp nhận phải đưa API key vào. Import mặc định chỉ là một danh sách hẹp (math, re, datetime, collections…); module như `os` bị chặn, và cả `random._os` cũng bị chặn. `ToolCallingAgent` sinh JSON tool call, không thực thi code tuỳ ý, nên rủi ro thấp hơn nhiều."
+    },
+    {
+      "id": "agentsys-028",
+      "sub": "Plugins",
+      "level": 1,
+      "type": "single",
+      "trap": false,
+      "q": "Trong Claude Code, một **plugin** là gì?",
+      "options": [
+        "Thư mục đóng gói skills, subagents, hooks, MCP server…, có manifest `.claude-plugin/plugin.json`",
+        "Extension cài vào VS Code hoặc JetBrains để chạy Claude Code ngay trong giao diện và terminal của IDE",
+        "Một MCP server duy nhất đã được Anthropic duyệt và đăng ký trong directory chính thức của hãng",
+        "Một file CLAUDE.md dùng chung được commit vào repo để mọi thành viên có cùng bộ quy ước"
+      ],
+      "answer": 0,
+      "explain": "Theo docs plugins của Claude Code (kiểm tra 10/2026), plugin là **thư mục các component** (skills, agents/subagents, hooks, MCP servers…), thường có manifest JSON ở `.claude-plugin/plugin.json`. Claude Code cài và nạp plugin như **một đơn vị**, thường lấy từ một *marketplace* (catalog có `.claude-plugin/marketplace.json`). Skill trong plugin được namespace theo tên plugin, vd `/my-plugin:review`. Dùng plugin khi muốn chia sẻ cả một bộ cấu hình cho team, cài vào nhiều project hoặc phát hành có version. Bẫy: docs nói rõ extension VS Code/JetBrains *không phải* Claude Code plugin. Plugin đang bật thì có mặt trong mọi phiên: name/description của skill và agent luôn chiếm context, và mọi thứ plugin chạy đều chạy với quyền của bạn, nên cần review trước khi cài."
+    },
+    {
+      "id": "agentsys-029",
+      "sub": "smolagents: CodeAgent vs ToolCallingAgent",
+      "level": 1,
+      "type": "single",
+      "trap": false,
+      "q": "Trong **smolagents**, khác biệt cốt lõi giữa `CodeAgent` và `ToolCallingAgent` là gì?",
+      "options": [
+        "`CodeAgent` chỉ dành cho bài toán lập trình, còn `ToolCallingAgent` dùng cho mọi loại task khác",
+        "Cả hai đều sinh JSON; `CodeAgent` chỉ khác ở chỗ được thêm sẵn một tool `python_interpreter` để tính toán",
+        "`ToolCallingAgent` chạy code trong sandbox E2B, còn `CodeAgent` gọi API bên ngoài qua JSON",
+        "`CodeAgent` viết action thành đoạn Python gọi tool như hàm; `ToolCallingAgent` sinh tool call dạng JSON"
+      ],
+      "answer": 3,
+      "explain": "Theo guided tour của smolagents (1.26.0, kiểm tra 10/2026), `CodeAgent` sinh tool call dưới dạng **đoạn code Python**: tool được bind thành hàm, nên agent có thể gán biến, lặp, rẽ nhánh, kết hợp nhiều tool trong một bước. Code đó chạy local hoặc trong sandbox. `ToolCallingAgent` sinh **JSON** gồm tên tool và arguments, giống tool calling của OpenAI API, và không thực thi code tuỳ ý. Docs khuyên dùng `CodeAgent` khi cần suy luận nhiều bước và kết hợp tool động, dùng `ToolCallingAgent` khi tool đơn giản, nguyên tử và cần độ tin cậy, validate chặt. `CodeAgent` không bị giới hạn ở bài lập trình; \"code\" chỉ là cách biểu diễn action. Tool `PythonInterpreterTool` trong base tools chỉ được thêm cho `ToolCallingAgent`, vì `CodeAgent` vốn đã chạy được Python."
+    },
+    {
+      "id": "agentsys-030",
+      "sub": "Code-as-action",
+      "level": 2,
+      "type": "multi",
+      "trap": false,
+      "q": "smolagents và paper *Executable Code Actions Elicit Better LLM Agents* (CodeAct) lập luận viết action bằng code tốt hơn JSON. Chọn TẤT CẢ lý do được nêu ĐÚNG.",
+      "options": [
+        "Quản lý object: output của tool (vd một ảnh) lưu được vào biến để dùng ở bước sau",
+        "Composability: có thể lồng lời gọi, định nghĩa hàm để tái sử dụng, dùng vòng lặp",
+        "Code xuất hiện nhiều trong dữ liệu huấn luyện LLM, nên model đã quen viết action dạng này",
+        "Không cần validate hay xử lý lỗi, vì interpreter Python luôn bắt được lỗi trước khi code chạy",
+        "An toàn hơn JSON, vì code chỉ gọi được các tool đã đăng ký nên không thể gây side effect khác"
+      ],
+      "answer": [
+        0,
+        1,
+        2
+      ],
+      "explain": "Docs smolagents liệt kê bốn ưu điểm của code so với JSON khi biểu diễn action: **composability** (lồng, định nghĩa hàm, tái sử dụng), **object management** (giữ output như ảnh hoặc dataframe trong biến), **generality** (code diễn đạt được mọi việc máy tính làm), và **có sẵn nhiều trong dữ liệu huấn luyện**. Paper CodeAct báo cáo agent dùng code action thường cần ít bước hơn và có tỉ lệ thành công cao hơn trên tác vụ nhiều tool. Bẫy: code action lại **rủi ro hơn**, vì model có thể sinh code tuỳ ý. Docs smolagents nói thẳng code agent trao cho LLM mức agency cao hơn trên hệ thống của bạn, nên cần executor an toàn hoặc sandbox. Code cũng có lỗi cú pháp và exception lúc runtime, nên vẫn phải bắt lỗi và đưa thông báo lỗi lại cho agent sửa."
+    },
+    {
+      "id": "agentsys-031",
+      "sub": "Chọn framework",
+      "level": 2,
+      "type": "multi",
+      "trap": false,
+      "q": "Chọn TẤT CẢ cặp **nhu cầu ↔ framework** hợp lý.",
+      "options": [
+        "Chuẩn để agent của các tổ chức khác nhau phát hiện và giao task cho nhau ↔ FastMCP",
+        "Ứng dụng nặng về index/truy vấn tài liệu, cần sẵn router và sub-question query engine ↔ LlamaIndex",
+        "Workflow cố định 3 bước, không cần LLM tự quyết ↔ bắt buộc framework multi-agent để dễ mở rộng sau này",
+        "Agent nhẹ viết action bằng Python, có sẵn executor sandbox E2B/Docker/Modal ↔ smolagents",
+        "Graph trạng thái tường minh, checkpoint theo thread, interrupt chờ người duyệt, time travel ↔ LangGraph",
+        "Cần handoff giữa các agent, guardrail và tracing tích hợp sẵn với ít abstraction ↔ OpenAI Agents SDK"
+      ],
+      "answer": [
+        1,
+        3,
+        4,
+        5
+      ],
+      "explain": "LangGraph mạnh ở **điều khiển tường minh**: StateGraph, reducer, checkpointer theo `thread_id`, `interrupt` cho human-in-the-loop, time travel, subgraph và `Send`/`Command`. LlamaIndex mạnh ở **data framework**: ingestion, index, query engine (`RouterQueryEngine`, `SubQuestionQueryEngine`), cùng Workflows và AgentWorkflow để dựng agent. smolagents gọn nhẹ, ưu tiên `CodeAgent` và có sẵn executor từ xa (e2b, docker, modal, blaxel). OpenAI Agents SDK cung cấp Agent, Runner, handoff, guardrail và tracing tích hợp với ít abstraction. Workflow cố định không cần agent: Anthropic và Hugging Face đều khuyên ưu tiên code tất định khi đủ dùng. Giao tiếp agent liên tổ chức là việc của **A2A** (Agent Card, Task). FastMCP là framework viết MCP server/client, tức kết nối agent với tool, không phải agent với agent."
+    },
+    {
+      "id": "agentsys-032",
+      "sub": "LlamaIndex Workflows",
+      "level": 1,
+      "type": "single",
+      "trap": false,
+      "q": "Mô tả nào ĐÚNG về **Workflows** của LlamaIndex?",
+      "options": [
+        "DAG tĩnh: không cho phép vòng lặp, các step luôn chạy tuần tự theo đúng thứ tự khai báo trong class",
+        "Một lớp bọc quanh LangGraph: mỗi step được biên dịch thành node, state là TypedDict kèm reducer cho từng key",
+        "Chạy đồng bộ, và mỗi step bắt buộc phải gọi đúng một lần LLM rồi mới được phát ra event tiếp theo",
+        "Hướng sự kiện: step `@step` nhận Event theo type hint, trả Event mới; mở bằng StartEvent, dừng ở StopEvent"
+      ],
+      "answer": 3,
+      "explain": "Theo docs LlamaIndex (kiểm tra 10/2026), Workflow là cách điều khiển luồng **hướng sự kiện, theo step**. Mỗi step được trang trí bằng `@step` và dùng **type hint** để khai báo loại Event nhận vào và phát ra; framework dựa vào đó để định tuyến và validate. Luồng bắt đầu bằng `StartEvent` (các kwargs của `run()` thành field của nó) và kết thúc khi một step trả `StopEvent`. Workflow hỗ trợ **vòng lặp** (step phát event cho step trước đó), rẽ nhánh theo loại event, và chạy song song (`ctx.send_event`, trả list event). `Context` giữ state dùng chung trong một lần chạy. Workflow là async-first (`await wf.run(...)`), là hệ của riêng LlamaIndex, không dựa trên LangGraph. Step không bắt buộc gọi LLM; có thể chỉ là code thuần như retrieve hay validate."
+    },
+    {
+      "id": "agentsys-033",
+      "sub": "Router vs SubQuestion",
+      "level": 2,
+      "type": "single",
+      "trap": true,
+      "q": "LlamaIndex: bạn có hai query engine riêng, một cho báo cáo tài chính của **Uber**, một cho **Lyft**. Người dùng hỏi: *\"So sánh tăng trưởng doanh thu 2024 của Uber và Lyft\"*. Thành phần nào phù hợp nhất?",
+      "options": [
+        "`RouterQueryEngine` dùng `PydanticSingleSelector`: chọn một engine phù hợp nhất cho câu hỏi rồi trả lời",
+        "`SubQuestionQueryEngine`: tách thành câu hỏi con cho từng nguồn, chạy từng engine, rồi tổng hợp câu trả lời",
+        "`RouterQueryEngine` dùng `LLMSingleSelector`, vì text completion rẻ hơn function calling khi cần chọn engine phù hợp",
+        "Gộp hai index thành một `VectorStoreIndex` với top-k = 2; mỗi công ty chắc chắn sẽ có một chunk khớp"
+      ],
+      "answer": 1,
+      "explain": "Câu hỏi so sánh cần dữ liệu từ **cả hai** nguồn. `SubQuestionQueryEngine` dùng LLM tách câu hỏi phức tạp thành các câu hỏi con gắn với từng `QueryEngineTool` (vd doanh thu 2024 của Uber, doanh thu 2024 của Lyft), chạy từng câu, rồi tổng hợp thành câu trả lời cuối. Bẫy: `RouterQueryEngine` với **single selector** chỉ chọn *một* engine, nên sẽ thiếu nửa dữ liệu. Router hợp khi mỗi câu hỏi chỉ thuộc một nguồn (vd chọn giữa engine tóm tắt và engine tra fact); multi selector có thể chọn nhiều engine rồi gộp kết quả, nhưng không chủ động tách câu hỏi. Khác biệt giữa selector Pydantic (function calling) và LLM (text completion) chỉ ở cách chọn, không giải quyết việc cần nhiều nguồn. Gộp chung index với top-k = 2 không bảo đảm mỗi công ty có một chunk liên quan."
+    },
+    {
+      "id": "agentsys-034",
+      "sub": "LlamaIndex multi-agent patterns",
+      "level": 3,
+      "type": "single",
+      "trap": false,
+      "q": "Bạn dựng hệ 3 agent (research, write, review) bằng `AgentWorkflow` của LlamaIndex với handoff tự do qua `can_handoff_to`. Kết quả: agent nhảy qua lại khó đoán, đôi khi bỏ qua bước review. Bạn cần **kiểm soát thứ tự** và chèn logic riêng. Hướng nào khớp khuyến nghị trong docs?",
+      "options": [
+        "Giữ `AgentWorkflow`, thêm `can_handoff_to` cho đủ mọi cặp agent để agent nào cũng chuyển việc được cho các agent còn lại",
+        "Thay bằng `SubQuestionQueryEngine`, vì engine này tự điều phối thứ tự giữa các agent chuyên trách",
+        "Pattern orchestrator: bọc từng agent chuyên trách thành tool của một agent cấp trên, quyết định tập trung một chỗ",
+        "Gộp ba agent thành một `FunctionAgent` với system prompt dài, liệt kê thứ tự research → write → review"
+      ],
+      "answer": 2,
+      "explain": "Docs LlamaIndex (kiểm tra 10/2026) mô tả ba pattern multi-agent. **AgentWorkflow**: khai báo danh sách agent và `root_agent`, agent tự handoff qua `can_handoff_to`; ít code nhất nhưng kém linh hoạt. **Orchestrator**: các agent chuyên trách không nói chuyện trực tiếp với nhau, mà được bọc thành tool cho một agent cấp trên quyết định mọi bước; cách này giữ quyền điều phối ở một chỗ và cho phép chèn logic riêng. **Custom planner**: tự viết prompt sinh kế hoạch có cấu trúc rồi thực thi bằng code; linh hoạt nhất nhưng nhiều code nhất. Docs khuyên bắt đầu với AgentWorkflow, chuyển sang orchestrator khi cần kiểm soát thứ tự, và chỉ dùng custom planner khi hai cách trên không đủ. Thêm handoff tự do làm luồng càng khó đoán. SubQuestionQueryEngine là công cụ truy vấn, không phải bộ điều phối agent. Một agent với prompt dài vẫn có thể bỏ bước, không có cơ chế ép thứ tự."
+    },
+    {
+      "id": "agentsys-035",
+      "sub": "LangGraph Command",
+      "level": 3,
+      "type": "single",
+      "trap": true,
+      "q": "LangGraph: node `review` trả `Command(goto=\"rewrite\", update={\"feedback\": fb})` (có annotation `Command[Literal[\"rewrite\", \"publish\"]]`). Nhưng khi dựng graph, bạn vẫn để lại `builder.add_edge(\"review\", \"publish\")`. Điều gì xảy ra sau `review`?",
+      "options": [
+        "Chỉ `rewrite` chạy, vì `Command` trả từ node luôn ghi đè mọi edge tĩnh đi ra từ node đó",
+        "Cả `rewrite` và `publish` đều chạy: `Command` chỉ thêm edge động, edge tĩnh từ `add_edge` vẫn thực thi",
+        "Graph báo lỗi lúc compile, vì một node không được vừa có edge tĩnh vừa trả về `Command`",
+        "Chỉ `publish` chạy, vì edge tĩnh khai báo lúc dựng graph luôn được ưu tiên hơn routing quyết định lúc runtime"
+      ],
+      "answer": 1,
+      "explain": "Docs Graph API của LangGraph (kiểm tra 10/2026) cảnh báo: *Command only adds dynamic edges; static edges defined with `add_edge` still execute*. Vì vậy sau `review`, cả `rewrite` (do `goto`) lẫn `publish` (do edge tĩnh) đều được lên lịch ở super-step tiếp theo. Hệ quả là bài có thể bị publish trước khi được viết lại. Vì vậy nên chọn **một** cách: hoặc `Command`, hoặc edge tĩnh/conditional edge, không dùng cả hai cho cùng một node. Dùng `Command` khi cần **vừa cập nhật state vừa định tuyến** trong một bước; nếu chỉ định tuyến thì conditional edge là đủ. Annotation `Command[Literal[...]]` cần có để LangGraph vẽ graph và biết các đích có thể. `Command` còn có `graph=Command.PARENT` để nhảy lên graph cha và `resume` để tiếp tục sau `interrupt`."
+    },
+    {
+      "id": "agentsys-036",
+      "sub": "LangGraph memory: checkpointer vs store",
+      "level": 2,
+      "type": "multi",
+      "trap": false,
+      "q": "Chọn TẤT CẢ phát biểu ĐÚNG về **checkpointer** và **store** trong LangGraph.",
+      "options": [
+        "Muốn nhớ sở thích người dùng giữa các thread chỉ cần dùng chung checkpointer, store là thừa",
+        "Checkpointer lưu snapshot state ở mỗi super-step theo `thread_id`, phục vụ human-in-the-loop, time travel và fault tolerance",
+        "Store lưu dữ liệu key-value dùng chung giữa các thread, tổ chức theo namespace tuple như `(user_id, \"memories\")`",
+        "`InMemoryStore` hợp cho production vì nhanh nhất và tự ghi dữ liệu xuống đĩa khi process tắt",
+        "Store có thể cấu hình `index` với embedding để tìm kiếm ngữ nghĩa trên các memory đã lưu"
+      ],
+      "answer": [
+        1,
+        2,
+        4
+      ],
+      "explain": "Theo docs persistence của LangGraph (kiểm tra 10/2026), **checkpointer** cung cấp memory *theo thread*: lưu snapshot state ở mỗi super-step, gắn với `thread_id`. Nó là nền tảng cho `interrupt`/human-in-the-loop, time travel, fault tolerance và pending writes. **Store** cung cấp memory dài hạn *xuyên thread*: dữ liệu key-value do ứng dụng định nghĩa, tổ chức theo namespace tuple, thao tác bằng `put`/`get`/`search`. Store có thể bật semantic search bằng `index={\"embed\": ..., \"dims\": ...}`. Checkpointer không chia sẻ dữ liệu giữa các thread, nên sở thích người dùng cần nằm trong store (truy cập trong node qua `runtime.store`). `InMemoryStore` lưu trong RAM và mất khi restart, chỉ dùng cho dev/test; production nên dùng backend bền như Postgres. Store được truyền vào lúc `compile(store=...)`, giống `checkpointer=`."
+    },
+    {
+      "id": "agentsys-037",
+      "sub": "LangGraph subgraph",
+      "level": 3,
+      "type": "single",
+      "trap": false,
+      "q": "Graph cha có state `{messages}`. Subgraph RAG có state `{query, docs, summary}`, **không có key nào chung** với graph cha. Cách tích hợp đúng theo docs LangGraph?",
+      "options": [
+        "`add_node` trực tiếp với subgraph đã compile; LangGraph tự đoán cách ánh xạ key giữa hai state dựa trên kiểu dữ liệu",
+        "Phải gộp hai schema thành một TypedDict chung, vì subgraph không được phép có state schema riêng",
+        "Gọi subgraph trong một node function: chuyển state cha sang input subgraph, invoke, rồi ghi output về key của cha",
+        "Dùng `Send(\"rag\", state)` để gửi state cha vào subgraph, vì `Send` tự chuyển đổi giữa các schema"
+      ],
+      "answer": 2,
+      "explain": "Docs subgraphs của LangGraph (kiểm tra 10/2026) có hai cách. Khi graph cha và subgraph **dùng chung key state** (vd cùng `messages`), có thể truyền subgraph đã compile thẳng vào `add_node`. Khi **schema khác nhau, không có key chung**, gọi subgraph *bên trong một node function*: chuyển state cha thành input của subgraph (vd lấy câu hỏi cuối từ `messages` làm `query`), `invoke`, rồi chuyển kết quả (`summary`) về update cho state cha. LangGraph không tự đoán ánh xạ key. Subgraph hoàn toàn có thể có schema riêng; đó chính là điểm mạnh để đóng gói. `Send` dùng để fan-out (map-reduce) tới một node với state riêng cho mỗi nhánh, không phải bộ chuyển đổi schema. Subgraph mặc định dùng checkpointer của cha. Khi subgraph cần nhảy lên cha bằng `Command(graph=Command.PARENT)` và cập nhật key chung, key đó phải có reducer ở state cha."
+    },
+    {
+      "id": "agentsys-038",
+      "sub": "Agents SDK guardrails",
+      "level": 3,
+      "type": "single",
+      "trap": true,
+      "q": "OpenAI Agents SDK: luồng `Triage` → handoff → `Billing Agent`. Bạn gắn **input guardrail** chống jailbreak vào `Billing Agent`, không gắn vào `Triage`. Prompt jailbreak đi qua Triage rồi handoff sang Billing, nhưng guardrail **không bao giờ kích hoạt**. Vì sao?",
+      "options": [
+        "Guardrail chỉ chạy khi bật tracing; môi trường production tắt tracing nên mọi guardrail đều bị bỏ qua",
+        "Input guardrail chỉ chạy cho agent đầu tiên của chuỗi; hãy gắn vào `Triage`, hoặc dùng tool guardrail cho tool nhạy cảm",
+        "Input guardrail chạy sau khi agent đã trả lời, nên không thể chặn được nội dung của prompt đầu vào",
+        "Handoff mặc định tắt mọi guardrail để giảm latency; phải bật lại bằng một cờ cấu hình riêng trên agent nhận handoff"
+      ],
+      "answer": 1,
+      "explain": "Theo docs guardrails và source `Runner.run` (openai-agents 0.23.1, kiểm tra 10/2026): *input guardrails run only for the first agent in the chain*, còn *output guardrails run only for the agent that produces the final output*. Vì vậy guardrail gắn trên agent nhận handoff sẽ không chạy cho input của user. Cách sửa: gắn input guardrail vào agent bắt đầu (`Triage`) hoặc `RunConfig`, và dùng **tool guardrail** (chạy trên mỗi function tool được bảo vệ) cho các tool nhạy cảm như hoàn tiền. Lưu ý tool guardrail không áp dụng cho chính lời gọi handoff. Khi tripwire kích hoạt, SDK ném `InputGuardrailTripwireTriggered` hoặc `OutputGuardrailTripwireTriggered`. Input guardrail mặc định chạy **song song** với agent (`run_in_parallel=True`), nên agent có thể đã tiêu token trước khi bị chặn; đặt chế độ blocking nếu cần chặn trước. Guardrail không phụ thuộc tracing."
+    },
+    {
+      "id": "agentsys-039",
+      "sub": "Multi-hop retrieval",
+      "level": 2,
+      "type": "single",
+      "trap": false,
+      "q": "Câu hỏi: *\"Công ty mà CEO hiện tại của X từng sáng lập có trụ sở ở thành phố nào?\"*. Pipeline RAG một lần retrieve (top-5) thường trả lời sai. Nguyên nhân gốc và hướng xử lý agentic phù hợp?",
+      "options": [
+        "Top-k quá nhỏ; tăng top-k lên 100 là đủ để mọi câu hỏi multi-hop đều có đủ tài liệu cho cả hai bước",
+        "Dense embedding không hiểu tên riêng; chuyển sang BM25 là lấy được tài liệu cho cả hai bước chỉ trong một lần gọi",
+        "Reranker đã loại tài liệu của bước thứ hai; chỉ cần bỏ reranker là giữ được đủ ngữ cảnh để trả lời",
+        "Query của bước sau phụ thuộc kết quả bước trước; agent retrieve, đọc, sinh query mới, lặp tới khi đủ bằng chứng"
+      ],
+      "answer": 3,
+      "explain": "Đây là câu hỏi **multi-hop**: phải biết CEO hiện tại của X là ai, rồi công ty người đó sáng lập là gì, rồi trụ sở của công ty đó. Truy vấn cho bước sau *chưa tồn tại* lúc retrieve lần đầu, nên một lần retrieve với query gốc hiếm khi lấy được tài liệu của các bước sau. Agentic RAG coi retrieval là **tool**: agent retrieve, đọc kết quả, sinh truy vấn tiếp theo dựa trên điều vừa biết, và lặp lại cho tới khi đủ bằng chứng. Có thể thêm bước query planning để tách câu hỏi trước. Tăng top-k lên 100 làm loãng context và vẫn có thể không chứa tài liệu của bước cuối. BM25 hay bỏ reranker chỉ đổi cách xếp hạng cho cùng một query, không tạo ra query mới."
+    },
+    {
+      "id": "agentsys-040",
+      "sub": "Corrective / self-reflective RAG",
+      "level": 2,
+      "type": "multi",
+      "trap": false,
+      "q": "Về vòng lặp **corrective/self-reflective** trong agentic RAG (kiểu CRAG, Self-RAG), chọn TẤT CẢ thiết kế ĐÚNG.",
+      "options": [
+        "Grader nên chấm tài liệu dựa trên câu trả lời cuối cùng mà model đã sinh, thay vì dựa vào câu hỏi",
+        "Giới hạn số vòng sửa và có đường thoát kiểu \"không đủ thông tin\" thay vì lặp tới khi qua grader",
+        "Kiểm tra câu trả lời có được tài liệu hỗ trợ (groundedness) trước khi trả; nếu không thì sinh lại hoặc từ chối",
+        "Cho chạy đủ nhiều vòng thì vòng tự sửa sẽ loại bỏ hoàn toàn hallucination, nên không cần eval offline",
+        "Grader đánh giá độ liên quan của tài liệu; nếu kém thì viết lại query hoặc chuyển nguồn khác (vd web search)"
+      ],
+      "answer": [
+        1,
+        2,
+        4
+      ],
+      "explain": "CRAG đặt một *retrieval evaluator* chấm tài liệu truy xuất; khi kết quả kém, hệ thống bổ sung bằng nguồn khác như web search, hoặc tinh lọc tài liệu. Self-RAG cho model tự sinh tín hiệu phản tỉnh: có cần retrieve không, tài liệu có liên quan không, câu trả lời có được hỗ trợ không. Trong agent thực tế, pattern hay gặp là: retrieve → grade → (rewrite query / đổi nguồn) → generate → kiểm tra groundedness. Bắt buộc phải có **giới hạn vòng** và đường thoát trung thực, nếu không agent có thể lặp mãi hoặc ép ra câu trả lời. Grader là LLM nên cũng có lỗi; vòng lặp chỉ *giảm* hallucination chứ không loại bỏ hoàn toàn, nên vẫn cần eval offline với golden set. Chấm tài liệu theo câu trả lời đã sinh là lập luận vòng tròn và dễ hợp thức hoá câu trả lời sai."
+    },
+    {
+      "id": "agentsys-041",
+      "sub": "Latency corrective loop",
+      "level": 3,
+      "type": "numeric",
+      "trap": false,
+      "q": "Agentic RAG có vòng corrective: mỗi vòng gồm retrieve (**0,3 s**) và LLM grade (**0,8 s**). Nếu grade không đạt, agent viết lại query (**0,6 s**) rồi sang vòng tiếp theo. Tối đa **3 vòng**. Mỗi vòng đạt độc lập với xác suất **0,6**. Sau khi grade đạt, hoặc sau vòng thứ 3 dù không đạt, agent sinh câu trả lời (**2,0 s**). Mọi bước chạy tuần tự.\n\nTính **latency kỳ vọng** của một request (giây, làm tròn 3 chữ số thập phân).",
+      "answer": 4.052,
+      "tolerance": 0.005,
+      "unit": "s",
+      "explain": "Gọi R là số vòng: P(R=1) = 0,6; P(R=2) = 0,4·0,6 = 0,24; P(R=3) = 0,4² = 0,16 (vòng 3 luôn là vòng cuối, đạt hay không). E[R] = 0,6 + 0,48 + 0,48 = 1,56. Latency = 1,1·R + 0,6·(R − 1) + 2,0, vì chỉ viết lại query *giữa* các vòng. E[latency] = 1,1·1,56 + 0,6·0,56 + 2,0 = 1,716 + 0,336 + 2,0 = **4,052 s**. Pipeline cố định (retrieve + generate) chỉ mất 2,3 s, tức vòng corrective thêm khoảng 76% latency kỳ vọng, và ca tệ nhất là 1,1·3 + 1,2 + 2 = 6,5 s. Bẫy: tính 3 lần viết lại query cho R = 3, hoặc coi vòng 3 có thể dẫn tới vòng 4. Khi thiết kế, hãy đo p95 chứ không chỉ kỳ vọng, và cân nhắc chỉ bật vòng sửa cho các truy vấn mà router đánh giá là khó."
+    },
+    {
+      "id": "agentsys-042",
+      "sub": "Khi nào không dùng agentic RAG",
+      "level": 2,
+      "type": "single",
+      "trap": true,
+      "q": "Bot FAQ nội bộ: khoảng 95% câu hỏi chỉ cần một lần tra cứu; yêu cầu **p95 latency < 1,5 s**; bộ phận compliance cần **tái lập và audit** được câu trả lời. Kiến trúc nào hợp lý nhất?",
+      "options": [
+        "Pipeline cố định (hybrid retrieve, rerank, generate kèm citation); chỉ route số ít ca khó sang nhánh agentic",
+        "Agentic RAG cho mọi câu hỏi, vì agent tự quyết retrieve bao nhiêu lần nên luôn chính xác hơn pipeline",
+        "Multi-agent với một subagent cho mỗi nhóm tài liệu, để song song hoá truy vấn và giảm latency của từng câu hỏi",
+        "Agentic RAG với giới hạn số bước bị tắt, để agent không bao giờ dừng sớm khi chưa tìm đủ bằng chứng"
+      ],
+      "answer": 0,
+      "explain": "Agentic RAG đổi **latency, chi phí và khả năng dự đoán** lấy sự linh hoạt. Mỗi vòng thêm một hoặc nhiều lần gọi LLM, trajectory khác nhau giữa các lần chạy nên khó tái lập và audit. Với tập câu hỏi phần lớn single-hop và SLA chặt, pipeline cố định (hybrid search + rerank + generate có citation) nhanh, rẻ, dễ test và dễ debug hơn. Pattern hay dùng: một router nhẹ (classifier hoặc LLM nhỏ) chuyển số ít câu hỏi phức tạp sang nhánh agentic. Bẫy: tưởng agentic thì luôn tốt hơn. Multi-agent làm tăng mạnh token và thời gian điều phối, không hợp với SLA 1,5 s. Tắt giới hạn bước là anti-pattern: agent có thể lặp vô hạn và chi phí không kiểm soát được. Đây đúng nguyên tắc chung: chỉ thêm độ phức tạp khi đo được lợi ích."
+    },
+    {
+      "id": "agentsys-043",
+      "sub": "Debug agentic RAG",
+      "level": 3,
+      "type": "multi",
+      "trap": false,
+      "q": "Chọn TẤT CẢ cặp **triệu chứng ↔ cách xử lý** HỢP LÝ cho agentic RAG trong production.",
+      "options": [
+        "Agent hay chọn nhầm index ↔ tăng temperature để agent khám phá thêm nhiều index khác nhau trước khi chốt một nguồn",
+        "Router chọn sai index vì mô tả tool mơ hồ ↔ viết rõ nội dung, phạm vi thời gian, loại tài liệu của từng index trong description",
+        "Agent trả lời bằng kiến thức có sẵn mà không gọi retrieve ↔ kiểm tra trajectory có bước retrieve và citation trỏ tới chunk đã lấy",
+        "Agent gọi retrieve lặp lại với các query gần như trùng ↔ phát hiện call trùng (tool + args đã chuẩn hoá) và nhắc agent đổi chiến lược",
+        "Kết quả retrieve quá dài làm phình context ↔ trả nguyên văn toàn bộ tài liệu gốc để model tự chọn đoạn cần cho câu trả lời"
+      ],
+      "answer": [
+        1,
+        2,
+        3
+      ],
+      "explain": "Lặp truy vấn gần trùng là failure mode phổ biến. Phát hiện bằng hash của (tool, args đã chuẩn hoá) trong cửa sổ gần đây, rồi chèn thông báo yêu cầu đổi chiến lược hoặc dừng. Trả lời bằng kiến thức có sẵn (parametric) mà không retrieve là nguồn hallucination. Guardrail tất định: yêu cầu có ít nhất một bước retrieve và mỗi citation phải trỏ tới chunk thật trong trajectory. Router chọn nguồn dựa vào **description** của tool/index, nên description phải nêu rõ phạm vi (vd \"chính sách nhân sự 2023–2026, tiếng Việt\"). Output dài cần trim, phân trang hoặc trả snippet kèm ID để đọc thêm khi cần; trả nguyên tài liệu làm nặng thêm context rot. Tăng temperature khiến lựa chọn ngẫu nhiên hơn chứ không đúng hơn; cần sửa mô tả và thêm ví dụ."
+    },
+    {
+      "id": "agentsys-044",
+      "sub": "Trace & span cho agent",
+      "level": 1,
+      "type": "single",
+      "trap": false,
+      "q": "Cách tổ chức **tracing** nào hợp lý nhất để debug một agent nhiều bước (Langfuse, OpenTelemetry hoặc tracing của Agents SDK)?",
+      "options": [
+        "Một span duy nhất ghi input của user và câu trả lời cuối, để tiết kiệm chi phí lưu trữ observability",
+        "Mỗi lần gọi LLM là một trace riêng, không liên kết với nhau; khi cần debug thì ghép chúng lại theo timestamp và user id",
+        "Một trace mỗi task; span lồng nhau cho bước agent, gọi LLM, tool call, retrieval, guardrail; gắn session/user id",
+        "Chỉ tạo span cho tool call bị lỗi; tool call thành công không cần ghi vì không có gì để debug"
+      ],
+      "answer": 2,
+      "explain": "Debug agent cần thấy **cả trajectory**: model đã nghĩ gì, gọi tool nào với args gì, tool trả về gì, mất bao lâu, tốn bao nhiêu token. Cách chuẩn là một trace cho mỗi task/request, bên trong là cây span lồng nhau. OpenAI Agents SDK mặc định tạo `agent_span`, `generation_span`, `function_span`, `guardrail_span`, `handoff_span`. Langfuse có các observation type `agent`, `tool`, `generation`, `retriever`, `guardrail`, `evaluator`… (Python SDK ≥ 3.3.1, kiểm tra 10/2026). Gắn session id, user id và version của prompt/model để lọc và so sánh. Chỉ ghi input/output cuối thì không biết lỗi phát sinh ở bước nào. Trace rời rạc ghép theo timestamp dễ sai khi có nhiều request đồng thời. Tool call thành công nhưng trả dữ liệu sai thường lại là nguyên nhân gốc của lỗi."
+    },
+    {
+      "id": "agentsys-045",
+      "sub": "Agents SDK tracing",
+      "level": 2,
+      "type": "multi",
+      "trap": false,
+      "q": "Về **tracing** trong OpenAI Agents SDK (Python), chọn TẤT CẢ phát biểu ĐÚNG.",
+      "options": [
+        "Tracing mặc định tắt và chỉ ghi metadata; input/output của LLM không bao giờ được thu thập",
+        "Span mặc định gồm agent run, generation, function tool call, guardrail và handoff",
+        "Tracing bật mặc định; tắt bằng biến môi trường `OPENAI_AGENTS_DISABLE_TRACING=1` hoặc `RunConfig(tracing_disabled=True)`",
+        "`add_trace_processor()` thêm processor để gửi trace sang backend khác bên cạnh exporter mặc định của OpenAI",
+        "Tracing vẫn dùng được bình thường với tổ chức dùng API của OpenAI theo chính sách Zero Data Retention"
+      ],
+      "answer": [
+        1,
+        2,
+        3
+      ],
+      "explain": "Theo docs tracing của OpenAI Agents SDK (kiểm tra 10/2026), tracing **bật mặc định**. Có thể tắt toàn cục bằng `OPENAI_AGENTS_DISABLE_TRACING=1` hoặc `set_tracing_disabled(True)`, hoặc tắt cho từng run bằng `RunConfig.tracing_disabled`. Mỗi trace có `workflow_name`, `trace_id`, `group_id`, gồm các span cho agent, generation, function, guardrail, handoff (và transcription/speech với voice). `trace_include_sensitive_data` **mặc định True**, tức input/output của LLM và tool đều được ghi; đặt False nếu có PII. `add_trace_processor()` thêm đích (vd Langfuse qua OTel), còn `set_trace_processors()` thay hẳn exporter mặc định. Bẫy: docs ghi rõ tracing **không khả dụng** cho tổ chức dùng API theo chính sách ZDR."
+    },
+    {
+      "id": "agentsys-046",
+      "sub": "Cost per successful task",
+      "level": 2,
+      "type": "numeric",
+      "trap": true,
+      "q": "Chạy agent trên **200** golden task: **150** task thành công. Tổng chi phí LLM + tool của cả 200 lần chạy là **$46**. Tổng số tool call là **1.240**, trong đó **93** call lỗi.\n\nTính **chi phí trung bình cho mỗi task thành công** (USD, làm tròn 3 chữ số thập phân).",
+      "answer": 0.307,
+      "tolerance": 0.001,
+      "unit": "USD",
+      "explain": "Chi phí cho mỗi task thành công = tổng chi phí / số task thành công = 46 / 150 ≈ **$0,307**. Bẫy: chia cho 200 ra $0,23, tức *cost per attempt*. Con số này đánh giá thấp chi phí thật để có một kết quả đúng, vì các lần chạy thất bại vẫn tốn tiền. Các chỉ số khác từ cùng dữ liệu: success rate = 150/200 = 75%; tool-call success rate = 1 − 93/1.240 = 92,5%; số tool call trung bình mỗi task = 6,2. Khi so sánh hai phiên bản agent, hãy theo dõi đồng thời success rate, cost per successful task, step count và p95 latency: một prompt có success rate tăng nhẹ nhưng step count gấp đôi có thể không đáng triển khai. Tool error rate cao thường chỉ ra mô tả tool hoặc schema tham số cần sửa."
+    },
+    {
+      "id": "agentsys-047",
+      "sub": "Trajectory vs outcome eval",
+      "level": 3,
+      "type": "single",
+      "trap": true,
+      "q": "Team chấm trajectory bằng **exact match** với *một* trajectory tham chiếu cho mỗi task. Prompt mới làm điểm exact match giảm từ 80% xuống 45%, trong khi outcome (state cuối đúng, kiểm bằng code) **tăng** từ 85% lên 90%. Kết luận và hành động hợp lý nhất?",
+      "options": [
+        "Prompt mới tệ hơn rõ rệt; trajectory là chỉ số chính nên phải rollback ngay lập tức, dù outcome có tăng 5 điểm",
+        "Exact match giảm hoàn toàn do non-determinism; đặt temperature = 0 là trajectory sẽ khớp trở lại",
+        "Exact match phạt cả đường đi hợp lệ khác; nên chấm theo ràng buộc (tool bắt buộc, thứ tự cấm, số bước tối đa)",
+        "Outcome tăng cho thấy grader outcome bị lỗi; nên bỏ outcome eval và chỉ giữ exact match trajectory"
+      ],
+      "answer": 2,
+      "explain": "Agent thường có **nhiều đường hợp lệ** tới cùng kết quả: đổi thứ tự hai lần tra cứu độc lập, gộp bước, hoặc bỏ một bước thừa. Exact match với một trajectory duy nhất phạt cả những khác biệt vô hại này. Anthropic khi đánh giá hệ multi-agent research cũng ghi nhận các agent có thể đi những đường khác nhau mà vẫn hợp lệ, nên tập trung vào **end-state** và việc quy trình có hợp lý không. Trajectory eval vẫn cần, nhưng nên dưới dạng ràng buộc: tool bắt buộc (vd `verify_identity` trước `issue_refund`), tool cấm, số bước hoặc chi phí tối đa, kiểu so khớp in-order/any-order, hoặc LLM judge chấm theo rubric và được hiệu chỉnh với nhãn người. Temperature 0 không bảo đảm tất định và cũng không sửa được việc có nhiều đường đúng. Outcome kiểm bằng code là tín hiệu đáng tin; chỉ bỏ khi chứng minh được grader sai."
+    },
+    {
+      "id": "agentsys-048",
+      "sub": "Tool-set precision/recall",
+      "level": 2,
+      "type": "numeric",
+      "trap": false,
+      "q": "Trajectory tham chiếu yêu cầu tập tool: `{search_kb, get_order, verify_identity, issue_refund}`. Agent đã gọi lần lượt: `search_kb, get_order, get_order, check_weather, list_faq, issue_refund`.\n\nTính trên **tập tên tool duy nhất** (bỏ lặp): precision = |gọi ∩ tham chiếu| / |gọi|, recall = |gọi ∩ tham chiếu| / |tham chiếu|. Tính **F1** (làm tròn 3 chữ số thập phân).",
+      "answer": 0.667,
+      "tolerance": 0.002,
+      "unit": "",
+      "explain": "Tập tool duy nhất đã gọi = {search_kb, get_order, check_weather, list_faq, issue_refund}, gồm 5 tool. Giao với tham chiếu = {search_kb, get_order, issue_refund}, gồm 3 tool. Precision = 3/5 = 0,6. Recall = 3/4 = 0,75, vì thiếu `verify_identity`. F1 = 2·0,6·0,75 / (0,6 + 0,75) = 0,9/1,35 ≈ **0,667**. Bẫy: đếm `get_order` hai lần, khiến mẫu số precision thành 6. Đề định nghĩa trên tập duy nhất; việc gọi lặp nên đo bằng chỉ số riêng (redundant call rate). Lưu ý điểm F1 cao vẫn có thể che lỗi nghiêm trọng: ở đây agent hoàn tiền mà **không xác minh danh tính**. Vì vậy cần thêm ràng buộc cứng (tool bắt buộc, thứ tự) bên cạnh các chỉ số tổng hợp."
+    },
+    {
+      "id": "agentsys-049",
+      "sub": "Online monitoring",
+      "level": 3,
+      "type": "multi",
+      "trap": false,
+      "q": "Agent đã lên production. Chọn TẤT CẢ cơ chế giám sát và giới hạn HỢP LÝ.",
+      "options": [
+        "Theo dõi phân phối step count, cost/task, p95 latency, tool error rate theo version prompt/model và cảnh báo khi lệch baseline",
+        "Đặt max steps/max turns và ngân sách token/cost cho mỗi task; vượt ngưỡng thì dừng có kiểm soát và đánh dấu kết quả",
+        "Đã có max steps thì không cần loop detection, vì max steps luôn giữ chi phí ở mức chấp nhận được",
+        "Khi chạm max steps thì lấy output của bước cuối làm câu trả lời cuối, không cần đánh dấu gì thêm",
+        "Chạy LLM-as-judge online trên một mẫu trace thay vì toàn bộ, để theo dõi chất lượng mà vẫn kiểm soát chi phí",
+        "Phát hiện vòng lặp bằng cách đếm call trùng (cùng tool, args đã chuẩn hoá) trong cửa sổ các bước gần nhất"
+      ],
+      "answer": [
+        0,
+        1,
+        4,
+        5
+      ],
+      "explain": "Giới hạn cứng là lưới an toàn bắt buộc. OpenAI Agents SDK ném `MaxTurnsExceeded` khi vượt `max_turns` (source openai-agents 0.23.1 đặt `DEFAULT_MAX_TURNS = 10`; truyền `max_turns=None` là tắt giới hạn); smolagents có `max_steps` (mặc định 20 trong 1.26.0); LangGraph có `recursion_limit`. Khi chạm giới hạn, phải coi đó là **thất bại có kiểm soát**: trả thông điệp phù hợp, log lại, có thể chuyển cho người xử lý. Trả output dở dang như câu trả lời hợp lệ là sai. Max steps chỉ chặn trên: nếu mỗi bước tốn 30k token và giới hạn là 50 bước thì một vòng lặp vẫn đốt khoảng 1,5M token. Vì vậy cần **loop detection** sớm cộng với ngân sách token/cost. Các dashboard theo version giúp bắt regression sau mỗi lần đổi prompt/model. Có thể bổ sung LLM-as-judge online trên một mẫu trace để kiểm soát chi phí."
+    },
+    {
+      "id": "agentsys-050",
+      "sub": "Golden regression & flakiness",
+      "level": 3,
+      "type": "numeric",
+      "trap": true,
+      "q": "Bộ regression gồm **120** golden task. Với agent hiện tại, mỗi lần chạy một task thành công độc lập với xác suất **0,8** (ở mọi task, và chất lượng không đổi). Quy tắc gate: mỗi task chạy **3 lần**, task được tính **pass nếu ít nhất 2/3 lần thành công**.\n\nTính **số task kỳ vọng bị đánh fail** trong một lần chạy suite, dù agent không hề regress (làm tròn 2 chữ số thập phân).",
+      "answer": 12.48,
+      "tolerance": 0.01,
+      "unit": "task",
+      "explain": "P(task pass) = P(3 lần đúng) + P(đúng 2 lần) = 0,8³ + C(3,2)·0,8²·0,2 = 0,512 + 0,384 = 0,896. P(fail) = 0,104. Số task fail kỳ vọng = 120 × 0,104 = **12,48**. Nếu gate chỉ chạy 1 lần thì kỳ vọng là 120 × 0,2 = 24 task fail. Majority-of-3 giảm nhiễu nhưng vẫn còn khoảng 12 task \"đỏ\" mà không phải regression. Bẫy: tưởng chất lượng không đổi thì suite phải xanh hoàn toàn, rồi chặn release hoặc sửa nhãn golden. Cách làm đúng: so số task fail với **phân phối baseline** (vd fail nhiều hơn mức nhiễu một cách có ý nghĩa thống kê, hoặc dùng kiểm định cặp như McNemar trên cùng bộ task), theo dõi từng task flaky, và tách task tất định (có thể yêu cầu 3/3) khỏi task vốn nhiễu."
+    }
+  ]
+}

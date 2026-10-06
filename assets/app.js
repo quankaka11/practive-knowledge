@@ -12,6 +12,14 @@
     t.questions.forEach(q => { q.topic = t.id; ALLQ.push(q); QMAP[q.id] = q; });
   });
 
+  // order >= 10 marks a foundation (review) topic; the rest are interview deep-dives
+  const GROUPS = [
+    { id: 'base', name: 'Nền tảng', desc: 'Ôn lại và củng cố lý thuyết gốc: toán, ML/DL, NLP/LLM/RAG/Agent, AI tổng quát.' },
+    { id: 'adv', name: 'Chuyên sâu', desc: 'Câu hỏi phỏng vấn kỹ thuật: nhiều bẫy, tính toán, tình huống thực chiến.' },
+  ];
+  const groupOf = t => ((t.order || 0) >= 10 ? 'base' : 'adv');
+  const shortName = t => t.name.replace(/^Nền tảng:\s*/, '');
+  const BASE_IDS = BANK.filter(t => groupOf(t) === 'base').map(t => t.id);
   const LEVEL_W = { 1: 1, 2: 2, 3: 3 };
   const LEVEL_NAME = { 1: 'Cơ bản', 2: 'Trung cấp', 3: 'Nâng cao' };
   const TYPE_NAME = { single: 'Một đáp án', multi: 'Nhiều đáp án', numeric: 'Tính toán' };
@@ -268,7 +276,7 @@
 
   // ---------------------------------------------------------------- routing
   let view = 'home';
-  let notesTopic = BANK[0] ? BANK[0].id : null;
+  let notesTopic = BASE_IDS[0] || (BANK[0] ? BANK[0].id : null);
   let notesQuery = '';
   let bankFilter = { topic: 'all', level: 0, type: 'all', trap: false, q: '', open: false };
   let reviewFilter = 'all';
@@ -332,19 +340,25 @@
       <section class="panel">
         <div class="row" style="margin-bottom:12px">
           <h2 style="font-size:18px">1. Chọn chủ đề</h2><span class="spacer"></span>
+          ${BASE_IDS.length ? '<button class="btn sm ghost" data-act="preset-base" title="Các chủ đề Nền tảng, mức Cơ bản + Trung cấp, chế độ Luyện tập">Ôn nền tảng</button>' : ''}
           <button class="btn sm ghost" data-act="topics-focus" title="NLP, LLM, Inference, RAG, Agent, Eval">Trọng tâm GenAI</button>
           <button class="btn sm ghost" data-act="topics-all">Chọn hết</button>
           <button class="btn sm ghost" data-act="topics-none">Bỏ chọn</button>
         </div>
-        <div class="topics">${BANK.map(t => {
+        ${GROUPS.map(g => {
+          const ts = BANK.filter(t => groupOf(t) === g.id);
+          if (!ts.length) return '';
+          return `<div class="tgroup"><div class="tgroup-head"><b>${g.name}</b><span class="muted small">${g.desc}</span></div>
+          <div class="topics">${ts.map(t => {
           const m = topicMastery(t.id);
           return `<label class="topic"><input type="checkbox" name="topic" value="${t.id}" ${settings.topics.includes(t.id) ? 'checked' : ''}>
             <span class="ic" aria-hidden="true">${esc(t.icon || '•')}</span>
-            <span style="min-width:0;flex:1"><span class="tt">${esc(t.name)}</span>
+            <span style="min-width:0;flex:1"><span class="tt">${esc(shortName(t))}</span>
               <span class="meta num" style="display:block">${t.questions.length} câu · đã làm ${m.seen}${m.seen ? ` · đúng ${Math.round(m.acc)}%` : ''}</span>
               <span class="mastery"><i style="width:${(m.seen / m.total) * 100}%;background:${m.seen ? colorFor(m.acc) : 'var(--accent)'}"></i></span></span>
             <span class="tick" aria-hidden="true">✓</span></label>`;
-        }).join('')}</div>
+          }).join('')}</div></div>`;
+        }).join('')}
 
         <h2 style="font-size:18px;margin:26px 0 14px">2. Cấu hình đề</h2>
         <div class="settings">
@@ -673,8 +687,11 @@
     app.innerHTML = `<div class="split">
       <aside class="side">
         <input class="search" id="notesSearch" type="search" placeholder="Tìm trong kiến thức…" value="${esc(notesQuery)}" style="margin-bottom:8px">
-        ${BANK.map(tp => `<button type="button" data-act="notes-topic" data-id="${tp.id}" class="${tp.id === t.id && !qstr ? 'active' : ''}">
-          <span aria-hidden="true">${esc(tp.icon || '•')}</span><span>${esc(tp.name)}</span><span class="cnt">${tp.notes.length}</span></button>`).join('')}
+        ${GROUPS.map(g => {
+          const ts = BANK.filter(tp => groupOf(tp) === g.id);
+          return ts.length ? `<div class="side-head eyebrow">${g.name}</div>` + ts.map(tp => `<button type="button" data-act="notes-topic" data-id="${tp.id}" class="${tp.id === t.id && !qstr ? 'active' : ''}">
+          <span aria-hidden="true">${esc(tp.icon || '•')}</span><span>${esc(shortName(tp))}</span><span class="cnt">${tp.notes.length}</span></button>`).join('') : '';
+        }).join('')}
       </aside>
       <section class="panel" style="min-width:0">${content}</section></div>`;
     const s = $('#notesSearch');
@@ -693,7 +710,7 @@
       <section class="panel stack" style="gap:12px">
         <input class="search" id="bankSearch" type="search" placeholder="Tìm theo nội dung, ví dụ: RRF, LoRA, MCP, IoU…" value="${esc(f.q)}">
         <div class="row">
-          ${seg('btopic', [['all', 'Tất cả'], ...BANK.map(t => [t.id, esc(t.name.split(/[:,&]/)[0].trim())])], f.topic)}
+          ${seg('btopic', [['all', 'Tất cả'], ...BANK.map(t => [t.id, esc(shortName(t).split(/[:,&]/)[0].trim())])], f.topic)}
         </div>
         <div class="row">
           ${seg('blevel', [[0, 'Mọi độ khó'], [1, 'Cơ bản'], [2, 'Trung cấp'], [3, 'Nâng cao']], f.level)}
@@ -816,6 +833,9 @@
     const b = e.target.closest('[data-act]'); if (!b) return;
     const act = b.dataset.act;
     switch (act) {
+      case 'preset-base':
+        settings = Object.assign(settings, { topics: BASE_IDS.slice(), levels: [1, 2], mode: 'practice', source: settings.source === 'flagged' ? 'all' : settings.source });
+        store.set('settings', settings); renderHome(); break;
       case 'topics-all': case 'topics-none': case 'topics-focus':
         $$('input[name="topic"]', app).forEach(c => { c.checked = act === 'topics-all' || (act === 'topics-focus' && FOCUS.includes(c.value)); });
         readSettingsFromForm(); updatePoolInfo(); break;
@@ -823,7 +843,7 @@
         readSettingsFromForm();
         const pool = buildPool(settings); if (!pool.length) return;
         const n = settings.count ? Math.min(settings.count, pool.length) : pool.length;
-        const names = settings.topics.length === BANK.length ? 'Tất cả chủ đề' : settings.topics.map(id => TOPIC[id].name.split(/[:,&]/)[0].trim()).join(', ');
+        const names = settings.topics.length === BANK.length ? 'Tất cả chủ đề' : settings.topics.map(id => shortName(TOPIC[id]).split(/[:,&]/)[0].trim()).join(', ');
         startQuiz(shuffle(pool).slice(0, n), settings, names);
         break;
       }

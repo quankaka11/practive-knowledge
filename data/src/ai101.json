@@ -1,0 +1,897 @@
+{
+  "id": "ai101",
+  "name": "Nền tảng: Lý thuyết AI tổng quát",
+  "icon": "🎓",
+  "order": 13,
+  "notes": [
+    {
+      "title": "Mốc lịch sử AI cần nhớ",
+      "md": "| Năm | Mốc | Ý nghĩa |\n|---|---|---|\n| 1950 | Turing, 'Computing Machinery and Intelligence' | Imitation game / Turing test – tiêu chí **hành vi** |\n| 1956 | Hội thảo Dartmouth | Khai sinh lĩnh vực, tên 'artificial intelligence' (McCarthy) |\n| 1958 | Perceptron (Rosenblatt) | Mạng nơ-ron một lớp học trọng số từ dữ liệu (perceptron learning rule) |\n| 1970s | AI winter #1 | Báo cáo Lighthill (1973), giới hạn perceptron một lớp, bùng nổ tổ hợp |\n| 1970–80s | Expert systems (MYCIN, XCON) | Symbolic AI thương mại hoá |\n| 1986 | Backprop (Rumelhart, Hinton, Williams) | Train được mạng nhiều lớp |\n| cuối 1980s | AI winter #2 | Expert system khó bảo trì, thị trường Lisp machine sụp đổ (1987) |\n| 1997 | Deep Blue thắng Kasparov | Tìm kiếm alpha-beta + hàm đánh giá viết tay, **không** phải deep learning |\n| 2012 | AlexNet thắng ImageNet | Mở đầu kỷ nguyên deep learning (CNN + GPU) |\n| 2014 | GAN | Mô hình sinh đối kháng |\n| 2016 | AlphaGo thắng Lee Sedol | Policy/value network (SL từ ván người + RL self-play) + MCTS |\n| 2017 | Transformer ('Attention Is All You Need') | Nền tảng của LLM |\n| 2020 | GPT-3 (175B) | Few-shot / in-context learning |\n| 2022 | ChatGPT (30/11) | GPT-3.5 + RLHF, AI phổ cập đại chúng |\n\n- **Narrow AI**: giỏi một nhiệm vụ hẹp (AlphaGo, model phân loại ảnh). **AGI**: năng lực tổng quát ngang người trên nhiều nhiệm vụ – chưa có định nghĩa/tiêu chí thống nhất.\n- **Chinese Room** (Searle 1980): vượt Turing test về hành vi ≠ hiểu thật."
+    },
+    {
+      "title": "Trường phái AI & intelligent agent",
+      "md": "| Trường phái | Tri thức nằm ở đâu | Mạnh | Yếu | Ví dụ |\n|---|---|---|---|---|\n| Symbolic (GOFAI) | ký hiệu, luật, logic do người viết | minh bạch, suy luận chặt | khó mở rộng, giòn, nút thắt thu nhận tri thức | expert system, Prolog |\n| Connectionism | trọng số mạng nơ-ron | học từ dữ liệu thô, chịu nhiễu | khó giải thích, cần nhiều dữ liệu | MLP, CNN, Transformer |\n| Statistical learning | mô hình xác suất, tối ưu loss | nền tảng lý thuyết (VC, PAC) | cần feature engineering | SVM, Naive Bayes, boosting |\n\n**Agent** = nhận percept qua sensors → chọn action qua actuators để tối đa performance measure. **PEAS**: Performance, Environment, Actuators, Sensors.\n\nTính chất môi trường:\n- fully vs **partially observable** (poker, xe tự lái)\n- deterministic vs **stochastic** (đối thủ chiến lược ≠ ngẫu nhiên: cờ vua vẫn deterministic)\n- episodic vs sequential; static vs dynamic; discrete vs continuous; single vs multi-agent."
+    },
+    {
+      "title": "Tìm kiếm: uninformed & informed",
+      "md": "| Thuật toán | Mở node theo | Complete | Optimal | Bộ nhớ |\n|---|---|---|---|---|\n| BFS | tầng nông nhất | có (b hữu hạn) | chỉ khi chi phí bước bằng nhau | O(b^d) |\n| DFS | sâu nhất | không (vô hạn/chu trình) | không | O(b·m) |\n| Iterative deepening | DFS giới hạn độ sâu tăng dần | có | như BFS | O(b·d) |\n| UCS | g(n) nhỏ nhất | có (chi phí ≥ ε > 0) | có | O(b^(1+C*/ε)) |\n| Greedy best-first | h(n) nhỏ nhất | không | không | – |\n| A* | f = g + h nhỏ nhất | có | có nếu h admissible (tree) / consistent (graph) | lớn |\n\n- **Admissible**: h(n) ≤ chi phí thật tới goal (lạc quan). **Consistent**: h(n) ≤ c(n, n') + h(n').\n- h = 0 → A* thành UCS; h càng sát h* (vẫn admissible) → mở càng ít node.\n- A* chỉ dừng khi **lấy** goal ra khỏi hàng đợi, không phải khi vừa sinh ra goal.\n- Số node cây đầy đủ tới độ sâu d: (b^(d+1) − 1)/(b − 1), tầng cuối chiếm phần lớn."
+    },
+    {
+      "title": "Adversarial search, CSP & biểu diễn tri thức",
+      "md": "- **Minimax**: MAX chọn max, MIN chọn min, truyền từ lá lên. **Alpha-beta**: cắt nhánh khi α ≥ β → kết quả **y hệt** minimax; thứ tự tốt nhất O(b^(d/2)) (tìm sâu gấp đôi), ngẫu nhiên ≈ O(b^(3d/4)).\n- **MCTS**: selection – expansion – simulation – backpropagation (UCT); AlphaGo = MCTS + policy/value network.\n- **CSP**: biến + miền giá trị + ràng buộc (Sudoku, tô màu bản đồ, xếp lịch). Giải bằng backtracking + MRV + forward checking + arc consistency (AC-3).\n- **Logic mệnh đề**: mệnh đề đúng/sai + ∧ ∨ ¬ →. **Logic vị từ bậc nhất (FOL)**: thêm đối tượng, vị từ, lượng từ ∀ ∃ → biểu diễn tổng quát gọn hơn.\n- **Knowledge graph**: triple (subject, relation, object); **ontology**: lược đồ lớp, thuộc tính, quan hệ, ràng buộc (OWL, schema.org). Dùng cho tìm kiếm, QA, GraphRAG.\n- **Bayesian network**: DAG + bảng CPT, P(X₁…Xₙ) = Π P(Xᵢ | cha(Xᵢ)); mã hoá độc lập có điều kiện, suy luận xác suất 'nguyên nhân → triệu chứng'."
+    },
+    {
+      "title": "Reinforcement Learning: khái niệm & công thức",
+      "md": "**Vòng lặp**: state s → agent chọn action a theo policy π → môi trường trả reward r và state s'. Mục tiêu: tối đa **return** G_t = r_{t+1} + γ·r_{t+2} + γ²·r_{t+3} + …\n\n- **MDP** (S, A, P, R, γ) + **Markov property**: tương lai chỉ phụ thuộc (s, a) hiện tại. Markov ≠ deterministic.\n- **V^π(s)** = E[G | s]; **Q^π(s, a)** = E[G | s, a]; V^π(s) = Σ_a π(a|s)·Q^π(s, a).\n- **Bellman**: V(s) = E[r + γ·V(s')]; tối ưu: Q*(s, a) = E[r + γ·max_a' Q*(s', a')].\n- γ → 0: thiển cận; γ → 1: nhìn xa, khó học hơn. G_t = r_{t+1} + γ·G_{t+1} (tính ngược từ cuối).\n- **Q-learning**: Q ← Q + α·[r + γ·max_a' Q(s', a') − Q] (off-policy). **SARSA**: dùng Q(s', a') của action thực tế (on-policy).\n- **ε-greedy** (ngẫu nhiên trên mọi action): P(greedy) = 1 − ε + ε/|A|.\n- **Exploration vs exploitation**: ε-greedy, softmax, UCB, Thompson sampling; thường giảm ε dần.\n- Khác supervised: không có nhãn hành động đúng, reward trễ/thưa (credit assignment), dữ liệu phụ thuộc policy."
+    },
+    {
+      "title": "RL: các họ thuật toán, reward & liên hệ LLM",
+      "md": "| Họ | Học gì | Ví dụ | Ghi chú |\n|---|---|---|---|\n| Value-based | Q(s, a) → policy = argmax | Q-learning, DQN | action rời rạc; DQN: replay buffer + target network |\n| Policy-based | π_θ trực tiếp | REINFORCE | action liên tục được, variance cao |\n| Actor-critic | π (actor) + V/advantage (critic) | A2C, PPO, SAC | critic giảm variance |\n| Model-based | mô hình P(s'∣s,a), R để lập kế hoạch | Dyna, AlphaZero, MuZero | hiệu quả mẫu cao, sai model thì lệch |\n\n- **On-policy** (SARSA, REINFORCE, PPO): học từ dữ liệu của chính policy hiện tại. **Off-policy** (Q-learning, DQN, SAC): học từ dữ liệu của policy khác → tái sử dụng replay, offline RL.\n- Cliff walking: SARSA chọn đường an toàn, Q-learning chọn đường sát vực (tối ưu cho greedy) nhưng reward online thấp hơn khi còn khám phá.\n- **Reward hacking / specification gaming**: tối ưu proxy lệch mục tiêu (thuyền CoastRunners chạy vòng). **Potential-based shaping** F = γΦ(s') − Φ(s) không đổi policy tối ưu → giúp học nhanh nhưng **không** sửa được reward gốc đã lệch; chữa hacking phải sửa đặc tả reward.\n- **RLHF ↔ RL**: policy = LLM; state = prompt + token đã sinh; action = token kế tiếp; reward = reward model cuối câu − β·KL so với model tham chiếu; PPO (actor-critic, value head)."
+    },
+    {
+      "title": "Mô hình sinh: 4 họ + autoregressive",
+      "md": "**Generative** học p(x) hoặc p(x, y) (sinh được mẫu); **discriminative** học p(y|x) / ranh giới. Naive Bayes ↔ logistic regression là cặp kinh điển.\n\n| Họ | Ý tưởng | Sinh | Likelihood | Ưu | Nhược |\n|---|---|---|---|---|---|\n| Autoregressive | p(x) = Π p(x_t ∣ x_<t) | tuần tự | chính xác | đơn giản, mạnh (GPT) | chậm theo độ dài |\n| VAE | encoder q(z∣x), decoder p(x∣z), tối đa ELBO | 1 bước | cận dưới | ổn định, latent có cấu trúc | mẫu mờ |\n| GAN | G vs D chơi minimax | 1 bước | không có | sắc nét, nhanh | train bất ổn, mode collapse |\n| Flow | biến đổi khả nghịch, đổi biến | 1 bước | chính xác | likelihood chính xác | ràng buộc kiến trúc, giữ số chiều |\n| Diffusion | thêm nhiễu dần, học khử nhiễu (dự đoán ε) | nhiều bước | cận dưới | chất lượng + đa dạng cao, ổn định | chậm (giảm bằng DDIM, distillation, latent) |\n| EBM | p(x) ∝ exp(−E(x)) | MCMC | Z khó tính | linh hoạt | train/sample khó |\n\n- **ELBO** = E_q[log p(x|z)] − KL(q(z|x) ‖ p(z)) ≤ log p(x). **Reparameterization**: z = μ + σ·ε để backprop.\n- GAN: D quá mạnh → gradient G biến mất → loss **non-saturating** (max log D(G(z))); WGAN, spectral norm.\n- Đánh giá: **FID** (thấp = tốt, so ảnh thật vs sinh), **IS** (cao = tốt, chỉ ảnh sinh), CLIPScore cho text–image, đánh giá của người."
+    },
+    {
+      "title": "Lý thuyết học máy",
+      "md": "- **True risk** R(h) = E[L] trên phân phối thật; **empirical risk** R̂(h) = trung bình trên train. **ERM**: chọn h tối thiểu R̂. **Generalization gap** = R − R̂.\n- **VC dimension**: số điểm lớn nhất lớp H shatter được. Siêu phẳng có bias trong R^d: **d + 1**. VC ≠ số tham số (sign(sin(ωx)) có VC vô hạn).\n- **PAC**: với xác suất ≥ 1 − δ, lỗi ≤ ε, số mẫu đa thức theo 1/ε, 1/δ. H hữu hạn (realizable): m ≥ (1/ε)(ln|H| + ln(1/δ)).\n- **Curse of dimensionality**: hypercube con chứa tỷ lệ p dữ liệu có cạnh p^(1/d) (d = 10, p = 10% → 0.79); khoảng cách mất ý nghĩa, cần dữ liệu tăng theo hàm mũ. Cứu cánh: manifold hypothesis, giảm chiều, inductive bias.\n- **Occam's razor**: ưu tiên giải thích đơn giản khi khớp như nhau (ưu tiên, không phải bảo đảm).\n- **No Free Lunch**: trung bình trên mọi bài toán, không thuật toán nào tốt hơn → hiệu quả đến từ giả định khớp bài toán.\n- **Double descent**: test error giảm → đỉnh tại ngưỡng nội suy (#tham số ≈ #mẫu) → giảm lại khi over-parameterized; có cả theo epoch và theo lượng dữ liệu.\n- **Lottery ticket** (Frankle & Carbin 2019): có mạng con thưa train lại từ khởi tạo gốc đạt độ chính xác tương đương; tìm bằng iterative magnitude pruning (tốn kém)."
+    },
+    {
+      "title": "Inductive bias, representation & self-supervised",
+      "md": "| Kiến trúc | Inductive bias | Hệ quả |\n|---|---|---|\n| MLP | gần như không có | cần nhiều dữ liệu, không khai thác cấu trúc |\n| CNN | locality + weight sharing → translation **equivariance**; pooling → bất biến xấp xỉ | hiệu quả dữ liệu cao cho ảnh |\n| RNN | tuần tự, hidden state tóm tắt quá khứ | hợp chuỗi, khó song song, khó phụ thuộc xa |\n| Transformer | attention toàn cục, permutation-equivariant nếu không có PE | bias yếu → cần nhiều dữ liệu, scale rất tốt |\n| GNN | bất biến hoán vị node | hợp dữ liệu đồ thị |\n\n- **Representation learning**: học feature tự động thay vì viết tay; biểu diễn tốt → linear probe/fine-tune ít nhãn.\n- **Self-supervised**: nhãn tự sinh từ dữ liệu. **Contrastive** (SimCLR, MoCo; CLIP cho ảnh–text): kéo gần positive, đẩy xa negative (InfoNCE). **Masked/generative** (BERT, MAE, GPT next-token).\n- **Scaling hypothesis / The Bitter Lesson** (Sutton 2019): phương pháp tổng quát + nhiều compute/data thắng tri thức viết tay về lâu dài.\n- **Emergent abilities**: năng lực 'xuất hiện đột ngột' ở model lớn – đang tranh luận, một phần có thể do chọn metric không liên tục."
+    },
+    {
+      "title": "Ứng dụng: bài toán → input/output → metric",
+      "md": "| Miền | Bài toán | Output | Metric chính |\n|---|---|---|---|\n| CV | classification | 1 nhãn/ảnh | accuracy, top-k |\n| CV | detection | box + class | mAP (theo ngưỡng IoU) |\n| CV | semantic / instance / panoptic segmentation | lớp mỗi pixel / mask từng vật | mIoU, Dice / mask AP / PQ |\n| CV | generation | ảnh | FID, IS, CLIPScore |\n| Speech | ASR / TTS | text / audio | WER, CER / MOS |\n| Speech | speaker verification (1:1) / identification (1:N) / diarization | chấp nhận/từ chối / ai / ai nói lúc nào | EER / accuracy / DER |\n| OCR | detection + recognition (CRNN + CTC, TrOCR) | chuỗi ký tự | CER, WER |\n| RecSys | retrieval + ranking | danh sách xếp hạng | NDCG@k, MAP@k, Recall@k; CTR online |\n| Time-series | forecasting / anomaly detection | giá trị tương lai / cờ bất thường | MAE, RMSE, MAPE, MASE / precision–recall |\n| Multimodal | CLIP (embedding chung) / VLM (vision encoder + LLM) | similarity / văn bản | retrieval recall, zero-shot acc / VQA acc |\n\n- Ít nhãn bất thường → anomaly detection không giám sát (autoencoder, forecasting residual, Isolation Forest).\n- CLIP không tự sinh văn bản; VLM sinh văn bản."
+    },
+    {
+      "title": "Responsible AI: bias, fairness, XAI",
+      "md": "**Các loại bias**: historical (dữ liệu phản ánh bất công quá khứ), representation/sampling (thiếu nhóm), selection, measurement (proxy đo lệch), label, aggregation, automation bias (người tin máy quá mức). Đừng nhầm với *bias thống kê* trong bias–variance.\n\n| Tiêu chí | Điều kiện bằng nhau giữa các nhóm |\n|---|---|\n| Demographic parity | P(ŷ = 1) |\n| Equal opportunity | TPR |\n| Equalized odds | TPR **và** FPR |\n| Calibration theo nhóm | P(y = 1 ∣ score = s) |\n\n- Disparate impact = tỷ lệ dương nhóm thấp / nhóm cao; quy tắc 4/5 (≥ 0.8).\n- **Impossibility** (Kleinberg 2016, Chouldechova 2017): base rate khác nhau → không thể vừa calibration vừa cân bằng FPR/FNR.\n- Bỏ thuộc tính nhạy cảm không đủ: proxy (mã bưu chính, tên…).\n- **XAI**: SHAP (Shapley, additive, cục bộ + toàn cục), LIME (surrogate tuyến tính cục bộ), permutation importance (lệch khi feature tương quan), Grad-CAM cho CNN. **Attention ≠ explanation**; importance ≠ nhân quả."
+    },
+    {
+      "title": "Privacy, robustness, safety & quy định + trả lời 30 giây",
+      "md": "- **Differential privacy**: output gần như không đổi khi thêm/bớt 1 bản ghi; ε nhỏ → riêng tư mạnh; DP-SGD = clip gradient từng mẫu + nhiễu Gauss.\n- **Federated learning**: dữ liệu ở lại máy, gửi cập nhật; gradient vẫn rò rỉ → secure aggregation + DP. Thách thức non-IID.\n- **PII**: phát hiện/che (masking), tối thiểu hoá dữ liệu, kiểm soát truy cập, không đưa PII vào prompt/log.\n- **Adversarial example**: nhiễu nhỏ được tối ưu (FGSM x + ε·sign(∇ₓL)); khác data poisoning (tấn công lúc train) và distribution shift. Phòng thủ: adversarial training.\n- **Alignment**: hành vi khớp ý định/giá trị con người (helpful, honest, harmless); RLHF, Constitutional AI, red teaming, guardrail.\n- **Hallucination** mitigation: RAG + trích dẫn, cho phép 'không biết', verify, eval liên tục; temperature 0 không chữa được.\n- **Model card** (Mitchell 2019), **datasheet/data card** (Gebru): mục đích, giới hạn, dữ liệu, hiệu năng theo nhóm. **Human-in-the-loop** cho quyết định rủi ro cao.\n- **EU AI Act** (hiệu lực 8/2024): cấm (social scoring) / rủi ro cao (tuyển dụng, tín dụng, y tế, giáo dục) / minh bạch (chatbot, deepfake) / tối thiểu; áp dụng cả nhà cung cấp ngoài EU. Lộ trình: điều cấm từ 2/2/2025; nghĩa vụ GPAI từ 2/8/2025; minh bạch (Điều 50) từ 2/8/2026; nghĩa vụ high-risk vốn từ 2/8/2026 đã được **Digital Omnibus on AI** (Regulation (EU) 2026/1744, hiệu lực 27/7/2026) lùi sang 2/12/2027 (Annex III) và 2/8/2028 (Annex I).\n\n**Trả lời 30 giây**\n- *RL khác supervised?* Không có nhãn đúng, chỉ có reward trễ; hành động ảnh hưởng dữ liệu; phải cân bằng explore/exploit.\n- *On- vs off-policy?* Học giá trị của policy đang hành động (SARSA) vs của policy khác/greedy (Q-learning) → off-policy dùng được replay.\n- *GAN vs diffusion?* GAN nhanh, sắc nét nhưng train bất ổn/mode collapse; diffusion ổn định, đa dạng, chất lượng cao nhưng sinh chậm.\n- *Vì sao ViT cần nhiều data?* Ít inductive bias hơn CNN (không có locality/equivariance sẵn)."
+    }
+  ],
+  "questions": [
+    {
+      "id": "ai101-001",
+      "sub": "Turing test",
+      "level": 1,
+      "type": "single",
+      "trap": true,
+      "q": "Alan Turing (1950, 'Computing Machinery and Intelligence') đề xuất 'imitation game' – sau này gọi là **Turing test**. Phát biểu nào ĐÚNG về phép thử này?",
+      "options": [
+        "Là benchmark chuẩn hoá với bộ câu hỏi cố định, được dùng làm thước đo chính để xếp hạng các LLM hiện nay",
+        "Yêu cầu máy giải đúng một bộ bài logic và chơi cờ vua ngang con người trong thời gian giới hạn cho trước",
+        "Là phép thử hành vi: giám khảo trò chuyện qua văn bản và phải phân biệt được đâu là máy, đâu là người",
+        "Là phép đo ý thức và khả năng hiểu thật sự, nên máy vượt qua nó được xem là đã chứng minh có trí tuệ như người"
+      ],
+      "answer": 2,
+      "explain": "Turing thay câu hỏi mơ hồ 'máy có thể suy nghĩ không?' bằng một tiêu chí **hành vi**: nếu giám khảo trò chuyện bằng văn bản mà không phân biệt được máy với người thì máy 'vượt qua'. Bẫy phổ biến là cho rằng vượt Turing test chứng minh máy có ý thức/hiểu thật: lập luận **Chinese Room** của Searle (1980) chỉ ra rằng thao tác ký hiệu đúng cú pháp không đồng nghĩa với hiểu nghĩa – phép thử chỉ đo hành vi bên ngoài. Turing test không phải benchmark chuẩn hoá với bộ câu hỏi cố định; LLM ngày nay được đánh giá bằng các benchmark như MMLU, GSM8K, HumanEval hoặc đánh giá theo cặp do người chấm. Phép thử cũng không yêu cầu chơi cờ hay giải bộ bài logic cụ thể nào."
+    },
+    {
+      "id": "ai101-002",
+      "sub": "Các mốc lịch sử",
+      "level": 1,
+      "type": "multi",
+      "trap": false,
+      "q": "Chọn TẤT CẢ các mốc lịch sử AI được nêu ĐÚNG.",
+      "options": [
+        "Hội thảo Dartmouth 1956 được xem là điểm khai sinh lĩnh vực; tên 'artificial intelligence' do McCarthy đặt trong đề xuất hội thảo",
+        "Paper 'Attention Is All You Need' (2017) giới thiệu Transformer, ban đầu được đánh giá trên bài toán dịch máy",
+        "ChatGPT ra mắt năm 2020 cùng lúc với GPT-3 và là bản công bố đầu tiên của dòng mô hình GPT của OpenAI",
+        "AlexNet (2012) thắng ImageNet ILSVRC với top-5 error thấp hơn hẳn đội thứ hai, mở đầu làn sóng deep learning cho CV",
+        "Deep Blue thắng Kasparov năm 1997 nhờ mạng neural sâu tự học từ hàng triệu ván cờ do chính nó tự chơi"
+      ],
+      "answer": [
+        0,
+        1,
+        3
+      ],
+      "explain": "Dartmouth Summer Research Project (1956) do McCarthy, Minsky, Rochester, Shannon khởi xướng; thuật ngữ 'artificial intelligence' xuất hiện trong bản đề xuất năm 1955. AlexNet (Krizhevsky, Sutskever, Hinton) đạt top-5 error ≈ 15.3% so với ≈ 26.2% của đội thứ hai – nhờ CNN sâu + GPU + ReLU + dropout. Transformer (Vaswani et al., 2017) bỏ hẳn recurrence, chỉ dùng attention, thử nghiệm đầu tiên là dịch Anh–Đức/Anh–Pháp. Deep Blue (1997) **không** dùng deep learning: nó là tìm kiếm alpha-beta cực sâu trên phần cứng chuyên dụng với hàm đánh giá viết tay; tự học qua self-play là AlphaGo Zero/AlphaZero (2017). GPT-1 ra năm 2018, GPT-3 (175B tham số, nổi tiếng với few-shot) năm 2020, còn ChatGPT ra mắt 30/11/2022 dựa trên GPT-3.5 tinh chỉnh bằng RLHF."
+    },
+    {
+      "id": "ai101-003",
+      "sub": "Các trường phái AI",
+      "level": 1,
+      "type": "single",
+      "trap": false,
+      "q": "Ba trường phái lớn trong lịch sử AI là **symbolic AI**, **connectionism** và **statistical learning**. Mô tả nào ĐÚNG?",
+      "options": [
+        "Statistical learning không dùng dữ liệu mà dựa hoàn toàn vào logic hình thức để chứng minh tính đúng của từng suy luận",
+        "Connectionism chỉ ra đời sau năm 2012 cùng AlexNet; trước đó AI chỉ gồm symbolic và các phương pháp thống kê cổ điển",
+        "Symbolic biểu diễn tri thức bằng ký hiệu và luật do người viết; connectionism học từ dữ liệu qua trọng số mạng nơ-ron",
+        "Symbolic học trọng số từ dữ liệu bằng backprop; connectionism dùng các luật if-then do chuyên gia viết tay để suy luận từng bước"
+      ],
+      "answer": 2,
+      "explain": "**Symbolic AI** (GOFAI): tri thức là ký hiệu + luật/logic do người viết, suy luận bằng tìm kiếm/chứng minh – minh bạch nhưng khó mở rộng và dễ gãy. **Connectionism**: tri thức nằm phân tán trong trọng số mạng nơ-ron, học từ dữ liệu – mạnh với dữ liệu nhiễu, phi cấu trúc nhưng khó giải thích. **Statistical learning** (SVM, mô hình Bayes, boosting…): mô hình xác suất/tối ưu hoá loss trên dữ liệu, có nền tảng lý thuyết như VC, PAC. Connectionism không hề mới: perceptron của Rosenblatt có từ 1958, backprop được phổ biến năm 1986 – năm 2012 chỉ là lúc nó bùng nổ nhờ dữ liệu lớn và GPU. Phương án đảo vai symbolic/connectionism là nhầm khái niệm; ngày nay xu hướng là kết hợp (neuro-symbolic, LLM gọi tool/solver)."
+    },
+    {
+      "id": "ai101-004",
+      "sub": "Expert systems & AI winter",
+      "level": 2,
+      "type": "single",
+      "trap": false,
+      "q": "Expert system thập niên 1970–80 (MYCIN, XCON) từng thành công thương mại rồi suy giảm, góp phần vào **AI winter** thứ hai. Nguyên nhân cốt lõi được nhắc nhiều nhất là gì?",
+      "options": [
+        "Expert system dùng xác suất Bayes thuần nên không biểu diễn được luật if-then, chuyên gia không kiểm tra được",
+        "Nút thắt thu nhận tri thức: luật phải phỏng vấn chuyên gia rồi viết tay, khó mở rộng, dễ gãy với ca ngoài luật",
+        "Các chính phủ cấm thương mại hoá expert system sau một sự cố y tế, khiến mọi dự án bị đóng cửa cùng một lúc",
+        "Phần cứng thời đó không đủ bộ nhớ GPU để huấn luyện mạng nơ-ron sâu mà expert system cần dùng khi suy luận thời gian thực"
+      ],
+      "answer": 1,
+      "explain": "Expert system = **knowledge base** (luật if-then do chuyên gia cung cấp) + **inference engine** (forward/backward chaining). Điểm yếu chí mạng là **knowledge acquisition bottleneck**: mỗi luật phải trích từ chuyên gia, hệ thống hàng nghìn luật rất tốn công bảo trì, và gặp tình huống ngoài luật thì 'gãy' (brittle) thay vì suy giảm từ từ. Cùng với sự sụp đổ thị trường Lisp machine (1987) và kỳ vọng bị thổi phồng, đầu tư rút mạnh → AI winter thứ hai (cuối 1980s – đầu 1990s). AI winter thứ nhất (giữa 1970s) gắn với báo cáo Lighthill (1973) và giới hạn của perceptron một lớp. Expert system là symbolic, không dùng mạng nơ-ron hay GPU; và nó chính là luật if-then nên phương án 'không biểu diễn được if-then' sai. Bài học cho hôm nay: khoảng cách giữa hype và năng lực thực tế."
+    },
+    {
+      "id": "ai101-005",
+      "sub": "Intelligent agent & môi trường",
+      "level": 1,
+      "type": "multi",
+      "trap": false,
+      "q": "Phân loại môi trường của **intelligent agent** (theo Russell & Norvig). Chọn TẤT CẢ phát biểu ĐÚNG.",
+      "options": [
+        "AlphaGo là một AGI vì vượt kỳ thủ hàng đầu ở trò chơi đòi hỏi trực giác chiến lược rất cao",
+        "PEAS mô tả một bài toán agent qua Performance measure, Environment, Actuators và Sensors",
+        "Xe tự lái có môi trường fully observable vì đã có đủ camera, LiDAR và radar quan sát xung quanh",
+        "Poker là partially observable và stochastic: không thấy bài đối thủ, còn việc chia bài là ngẫu nhiên",
+        "Cờ vua là stochastic vì đối thủ có thể chọn nước đi bất ngờ mà agent không đoán trước được"
+      ],
+      "answer": [
+        1,
+        3
+      ],
+      "explain": "Agent nhận percept qua **sensors** và tác động qua **actuators**; PEAS là khung mô tả bài toán (vd taxi tự lái: P = an toàn, nhanh, hợp luật; E = đường, xe khác; A = vô lăng, phanh; S = camera, GPS). Poker: không thấy bài đối thủ → partially observable; chia bài ngẫu nhiên → stochastic. Cờ vua (không đồng hồ) là fully observable, **deterministic**, multi-agent: hành động của đối thủ là yếu tố *chiến lược* (xử lý bằng minimax), không phải ngẫu nhiên của môi trường – đây là bẫy nhầm 'không đoán được' với 'stochastic'. Xe tự lái vẫn partially observable (vật bị che khuất, ý định người đi đường không quan sát được) dù có nhiều cảm biến. AlphaGo là **narrow AI** – siêu giỏi đúng một nhiệm vụ; AGI là hệ thống đạt năng lực tổng quát ngang người trên rất nhiều nhiệm vụ."
+    },
+    {
+      "id": "ai101-006",
+      "sub": "BFS / DFS / UCS",
+      "level": 1,
+      "type": "multi",
+      "trap": false,
+      "q": "Tìm kiếm không có thông tin (uninformed search) trên đồ thị có branching factor hữu hạn. Chọn TẤT CẢ phát biểu ĐÚNG.",
+      "options": [
+        "DFS luôn complete và tối ưu vì nó đi sâu tới tận cùng mỗi nhánh trước khi quay lui",
+        "BFS vẫn tối ưu khi chi phí các cạnh khác nhau, vì luôn dừng ở độ sâu nhỏ nhất có goal",
+        "UCS luôn mở node có g(n) nhỏ nhất, tối ưu khi mọi chi phí bước đều dương (≥ ε > 0)",
+        "BFS complete và tìm được lời giải nông nhất; tối ưu về chi phí khi mọi bước có cùng chi phí",
+        "DFS cần bộ nhớ O(b·m) thay vì O(b^d) như BFS – iterative deepening tận dụng ưu điểm này"
+      ],
+      "answer": [
+        2,
+        3,
+        4
+      ],
+      "explain": "**BFS** mở theo tầng → complete (b hữu hạn) và tìm lời giải ít bước nhất; điều đó chỉ trùng với chi phí nhỏ nhất khi mọi bước cùng chi phí – nếu cạnh có trọng số khác nhau, đường ít bước có thể đắt hơn, nên BFS mất tính tối ưu. **UCS** (Dijkstra cho tìm kiếm) mở node có chi phí tích luỹ g(n) nhỏ nhất → tối ưu khi chi phí dương. **DFS** không complete trên không gian vô hạn/có chu trình (nếu không kiểm tra lặp) và không tối ưu (trả về lời giải đầu tiên gặp, có thể rất sâu), nhưng bộ nhớ chỉ O(b·m) với m là độ sâu tối đa. **Iterative deepening** chạy DFS với giới hạn độ sâu tăng dần: complete và tối ưu như BFS (chi phí đều) nhưng bộ nhớ như DFS."
+    },
+    {
+      "id": "ai101-007",
+      "sub": "A* & admissible heuristic",
+      "level": 2,
+      "type": "single",
+      "trap": true,
+      "q": "Heuristic h(n) của **A*** (f(n) = g(n) + h(n)) được gọi là **admissible** khi nào, và hệ quả là gì?",
+      "options": [
+        "Khi h(n) không bao giờ vượt chi phí thật nhỏ nhất từ n tới goal; khi đó A* tree search trả về lời giải tối ưu",
+        "Khi h(n) đúng bằng chi phí thật tới goal; mọi heuristic khác đều khiến A* mất tính tối ưu của lời giải",
+        "Khi h(n) luôn lớn hơn hoặc bằng chi phí thật tới goal, giúp A* cắt tỉa mạnh hơn mà vẫn đảm bảo tối ưu",
+        "Khi h(n) = 0 tại mọi node; đó là điều kiện duy nhất để A* tối ưu, lúc này A* trở thành thuật toán greedy best-first"
+      ],
+      "answer": 0,
+      "explain": "**Admissible** = lạc quan: h(n) ≤ h*(n) (chi phí thật nhỏ nhất tới goal), ví dụ khoảng cách đường chim bay trên bản đồ. Với tree search, A* + admissible luôn trả về lời giải tối ưu; với graph search (có tập đã đóng) cần thêm **consistency**: h(n) ≤ c(n, n') + h(n'). Bẫy là đảo chiều bất đẳng thức: heuristic *đánh giá quá cao* có thể khiến A* bỏ qua đường tốt nhất. h = h* là trường hợp lý tưởng (A* chỉ mở node trên đường tối ưu) chứ không phải điều kiện bắt buộc. h = 0 cũng admissible nhưng khi đó A* suy biến thành **UCS** (f = g), không phải greedy best-first (greedy dùng f = h). Heuristic càng sát h* (mà vẫn admissible) thì càng mở ít node."
+    },
+    {
+      "id": "ai101-008",
+      "sub": "Kích thước cây tìm kiếm",
+      "level": 1,
+      "type": "numeric",
+      "trap": false,
+      "q": "Cây tìm kiếm đầy đủ có branching factor **b = 3**, gốc ở độ sâu 0. Tổng số node của cây tính đến hết độ sâu **d = 4** (kể cả gốc) là bao nhiêu? Nhập số nguyên.",
+      "answer": 121,
+      "tolerance": 0,
+      "unit": "node",
+      "explain": "Số node ở độ sâu i là 3^i, nên tổng = 3⁰ + 3¹ + 3² + 3³ + 3⁴ = 1 + 3 + 9 + 27 + 81 = **121** (công thức (b^(d+1) − 1)/(b − 1) = (243 − 1)/2). Để ý riêng tầng cuối đã chiếm 81/121 ≈ 67% số node: chi phí của BFS bị chi phối bởi tầng sâu nhất, tức O(b^d). Đó cũng là lý do iterative deepening chỉ tốn thêm ít: các tầng nông bị duyệt lại nhiều lần nhưng tổng của chúng nhỏ so với tầng cuối. Lỗi hay gặp là quên tính gốc (ra 120) hoặc chỉ đếm tầng cuối (81)."
+    },
+    {
+      "id": "ai101-009",
+      "sub": "Minimax & alpha-beta",
+      "level": 3,
+      "type": "single",
+      "trap": true,
+      "q": "So với minimax thuần, **alpha-beta pruning** mang lại điều gì?",
+      "options": [
+        "Kết quả chỉ xấp xỉ minimax nhưng nhanh hơn, vì cắt bỏ các nhánh có xác suất thắng thấp theo hàm đánh giá heuristic",
+        "Luôn giảm số node xuống O(b^(d/2)) bất kể thứ tự duyệt các nước đi, nên độ sâu tìm kiếm luôn tăng gấp đôi",
+        "Thay hàm đánh giá tĩnh bằng các lượt mô phỏng ngẫu nhiên tới cuối ván, giống cách Monte Carlo Tree Search hoạt động trong AlphaGo",
+        "Cùng giá trị và nước đi như minimax; nếu thứ tự nước đi lý tưởng, số node xét giảm từ O(b^d) xuống khoảng O(b^(d/2))"
+      ],
+      "answer": 3,
+      "explain": "Minimax: MAX chọn nhánh có giá trị lớn nhất, MIN chọn nhỏ nhất, truyền giá trị từ lá lên gốc. Alpha-beta giữ α (giá trị tốt nhất MAX đã chắc chắn có) và β (tốt nhất của MIN); khi α ≥ β thì nhánh còn lại **không thể** ảnh hưởng quyết định nên được cắt. Vì chỉ bỏ những nhánh chứng minh được là vô ích, kết quả **giống hệt** minimax – bẫy là nghĩ alpha-beta là xấp xỉ heuristic. Mức tiết kiệm phụ thuộc thứ tự duyệt: tốt nhất O(b^(d/2)) (cùng thời gian tìm sâu gấp đôi), thứ tự ngẫu nhiên khoảng O(b^(3d/4)), tệ nhất không cắt được gì. Mô phỏng ngẫu nhiên tới cuối ván là ý tưởng của MCTS (dùng trong AlphaGo), một kỹ thuật khác."
+    },
+    {
+      "id": "ai101-010",
+      "sub": "A* tính tay",
+      "level": 2,
+      "type": "numeric",
+      "trap": false,
+      "q": "Đồ thị có hướng với chi phí cạnh: S→X = 1, S→Y = 4, X→Y = 2, X→G = 12, Y→G = 5. Heuristic: h(S) = 7, h(X) = 6, h(Y) = 4, h(G) = 0 (admissible và consistent). Chạy **A*** (graph search, dừng khi lấy G ra khỏi hàng đợi) từ S tới goal G. **Tổng chi phí** của đường đi A* trả về là bao nhiêu? Nhập số nguyên.",
+      "answer": 8,
+      "tolerance": 0,
+      "unit": "",
+      "explain": "Theo dõi f = g + h:\n\n1. Mở S (g = 0, f = 7) → sinh X (g = 1, f = 1 + 6 = 7), Y (g = 4, f = 4 + 4 = 8).\n2. Mở X (f = 7) → Y qua X có g = 3, f = 7 (tốt hơn g = 4 cũ, cập nhật); G qua X có g = 13, f = 13.\n3. Mở Y (g = 3, f = 7) → G qua Y có g = 3 + 5 = 8, f = 8 (tốt hơn 13).\n4. Lấy G ra (f = 8) → dừng. Đường S→X→Y→G, chi phí **8**.\n\nSo sánh: greedy best-first chỉ dùng h nên mở Y (h = 4) ngay từ S và trả về S→Y→G với chi phí 9 – nhanh nhưng không tối ưu. Lỗi thường gặp là dừng ngay khi *sinh ra* G lần đầu (g = 13); A* chỉ được dừng khi *lấy* G khỏi hàng đợi ưu tiên."
+    },
+    {
+      "id": "ai101-011",
+      "sub": "Biểu diễn tri thức & suy luận",
+      "level": 1,
+      "type": "multi",
+      "trap": false,
+      "q": "Về biểu diễn tri thức và suy luận cổ điển, chọn TẤT CẢ phát biểu ĐÚNG.",
+      "options": [
+        "Ontology chỉ là danh sách từ khoá phẳng, không định nghĩa lớp, quan hệ hay ràng buộc giữa các khái niệm",
+        "CSP chỉ giải được bằng vét cạn mọi tổ hợp giá trị; không có heuristic nào giúp giảm không gian tìm kiếm",
+        "Knowledge graph lưu tri thức dạng bộ ba (subject, relation, object), vd (Hà Nội, thủ_đô_của, Việt Nam)",
+        "Logic mệnh đề diễn đạt 'mọi người đều có mẹ' gọn như logic vị từ, vì cũng có sẵn lượng từ ∀ và ∃",
+        "Bayesian network là đồ thị có hướng không chu trình (DAG), mỗi node kèm bảng xác suất có điều kiện theo các node cha"
+      ],
+      "answer": [
+        2,
+        4
+      ],
+      "explain": "**Knowledge graph** (Wikidata, Google KG) biểu diễn thực thể là node, quan hệ là cạnh, đơn vị cơ bản là triple; **ontology** là lược đồ định nghĩa lớp, thuộc tính, quan hệ và ràng buộc (vd 'Thành phố' là lớp con của 'Địa điểm') – không phải danh sách từ khoá phẳng. **Bayesian network**: DAG + bảng CPT, phân rã joint P(X₁…Xₙ) = Π P(Xᵢ | cha(Xᵢ)), mã hoá các quan hệ độc lập có điều kiện để suy luận xác suất gọn. **Logic mệnh đề** chỉ có mệnh đề đúng/sai và phép nối (∧, ∨, ¬, →); lượng từ ∀, ∃ thuộc **logic vị từ bậc nhất** – đó là lý do FOL biểu diễn tri thức tổng quát gọn hơn nhiều. **CSP** (biến, miền giá trị, ràng buộc – vd tô màu bản đồ, Sudoku, xếp lịch) có backtracking kết hợp heuristic MRV, forward checking, arc consistency (AC-3) giúp cắt tỉa rất mạnh."
+    },
+    {
+      "id": "ai101-012",
+      "sub": "RL vs supervised",
+      "level": 1,
+      "type": "single",
+      "trap": false,
+      "q": "Điểm khác biệt cốt lõi giữa **reinforcement learning** và **supervised learning** là gì?",
+      "options": [
+        "RL dùng nhãn đúng cho từng hành động như supervised, chỉ khác ở chỗ các nhãn được cung cấp theo thứ tự thời gian",
+        "RL chỉ áp dụng được cho game và robot vì cần mô phỏng vật lý; không dùng được cho các bài toán ngôn ngữ tự nhiên",
+        "RL học từ reward (thường trễ, thưa) qua tương tác; hành động của agent ảnh hưởng tới dữ liệu nó thấy tiếp theo",
+        "RL không cần bất kỳ tín hiệu phản hồi nào từ môi trường; agent tự khám phá cấu trúc dữ liệu giống như clustering"
+      ],
+      "answer": 2,
+      "explain": "Trong supervised learning, mỗi input có nhãn đúng và dữ liệu thường i.i.d., cố định. Trong RL, agent ở **state** s chọn **action** a, môi trường trả về **reward** r và state mới; mục tiêu là tối đa hoá tổng reward tích luỹ (return). Không ai nói 'hành động đúng là gì' – chỉ có reward, thường **trễ** (credit assignment: nước nào trong ván cờ dẫn tới thắng?) và **thưa**. Hơn nữa dữ liệu phụ thuộc vào chính policy (agent đi đâu thì thấy cái đó), nên phát sinh bài toán exploration vs exploitation. 'Không có phản hồi, tự tìm cấu trúc' là unsupervised learning. RL được dùng rộng rãi ngoài game/robot: RLHF cho LLM, recommendation, điều khiển hệ thống làm mát data center."
+    },
+    {
+      "id": "ai101-013",
+      "sub": "Markov property & MDP",
+      "level": 1,
+      "type": "single",
+      "trap": true,
+      "q": "Một bài toán được mô hình hoá bằng **MDP** (S, A, P, R, γ). **Tính chất Markov** nghĩa là gì?",
+      "options": [
+        "Reward của mỗi bước độc lập với hành động đã chọn và chỉ phụ thuộc vào thời điểm t trong episode",
+        "Môi trường phải deterministic: cùng một trạng thái và hành động thì luôn dẫn tới đúng một trạng thái kế tiếp",
+        "Agent phải ghi nhớ đầy đủ toàn bộ lịch sử các bước trước đó thì mới có thể chọn được hành động tối ưu",
+        "Trạng thái và reward kế tiếp chỉ phụ thuộc trạng thái và hành động hiện tại, không cần thêm lịch sử trước đó"
+      ],
+      "answer": 3,
+      "explain": "Markov: phân phối P(s', r | s, a, lịch sử) bằng đúng P(s', r | s, a); nghĩa là trạng thái hiện tại đã 'tóm tắt đủ' quá khứ. Bẫy phổ biến là đồng nhất Markov với deterministic: phân phối chuyển trạng thái P(s'|s, a), tức xác suất tới từng s', hoàn toàn có thể **ngẫu nhiên**, miễn là phân phối đó chỉ phụ thuộc (s, a). Nhờ tính Markov, policy tối ưu chỉ cần nhìn trạng thái hiện tại, không cần nhớ lịch sử – ngược với phương án đòi ghi nhớ toàn bộ. Khi quan sát không Markov (vd một khung hình Atari không cho biết vận tốc bóng) thì là POMDP; cách xử lý thực tế là ghép nhiều frame liên tiếp (DQN dùng 4 frame) hoặc dùng RNN/belief state. Reward nói chung phụ thuộc vào hành động, tức có dạng R(s, a)."
+    },
+    {
+      "id": "ai101-014",
+      "sub": "Discounted return",
+      "level": 1,
+      "type": "numeric",
+      "trap": false,
+      "q": "Một episode có chuỗi reward r₁ = 1, r₂ = 0, r₃ = 2, r₄ = 3 rồi kết thúc. Với discount factor **γ = 0.9**, return G₀ = r₁ + γ·r₂ + γ²·r₃ + γ³·r₄ bằng bao nhiêu? Làm tròn 3 chữ số thập phân.",
+      "answer": 4.807,
+      "tolerance": 0.001,
+      "unit": "",
+      "explain": "G₀ = 1 + 0.9·0 + 0.81·2 + 0.729·3 = 1 + 0 + 1.62 + 2.187 = **4.807**. Discount γ ∈ [0, 1) làm reward càng xa càng có trọng số nhỏ: vừa đảm bảo tổng hữu hạn với task không kết thúc, vừa phản ánh 'phần thưởng sớm đáng giá hơn'. γ gần 0 → agent thiển cận (chỉ quan tâm reward tức thời); γ gần 1 → nhìn xa nhưng học khó hơn (variance lớn, credit assignment xa). Return cũng tính được đệ quy từ cuối về: G₃ = 3, G₂ = 2 + 0.9·3 = 4.7, G₁ = 0 + 0.9·4.7 = 4.23, G₀ = 1 + 0.9·4.23 = 4.807 – chính là dạng Bellman G_t = r_{t+1} + γ·G_{t+1}. Lỗi hay gặp: cộng thẳng không chiết khấu (ra 6) hoặc nhân γ ngay cho r₁."
+    },
+    {
+      "id": "ai101-015",
+      "sub": "Policy, value, Q & Bellman",
+      "level": 1,
+      "type": "multi",
+      "trap": false,
+      "q": "Chọn TẤT CẢ phát biểu ĐÚNG về các khái niệm cơ bản trong RL.",
+      "options": [
+        "Bellman equation viết giá trị đệ quy: V(s) = E[r + γ·V(s')], tức reward tức thời cộng giá trị chiết khấu của bước sau",
+        "Discount factor γ = 0 khiến agent nhìn xa nhất, vì mọi reward tương lai được tính đủ trọng số",
+        "Value function V(s) chỉ là reward tức thời nhận được ngay khi vào s, không tính bất kỳ bước nào sau đó",
+        "Policy π(a|s) là quy tắc chọn hành động – xác suất chọn từng action khi agent đang ở trạng thái s",
+        "Q^π(s, a) là return kỳ vọng khi làm action a tại s rồi đi theo π; V^π(s) = Σ_a π(a|s)·Q^π(s, a)",
+        "γ < 1 giúp return hữu hạn với task không kết thúc và khiến reward gần được ưu tiên hơn reward xa"
+      ],
+      "answer": [
+        0,
+        3,
+        4,
+        5
+      ],
+      "explain": "**Policy** π ánh xạ state → (phân phối) action. **Value** V^π(s) = E_π[G_t | s_t = s] là return *kỳ vọng* từ s trở đi – không phải reward tức thời, đó chính là khác biệt giữa 'reward' (tín hiệu một bước) và 'value' (dự báo dài hạn). **Q-function** Q^π(s, a), khác V ở chỗ cố định action đầu tiên; lấy trung bình theo policy thì ra V. **Bellman equation** là quan hệ đệ quy giữa giá trị hiện tại và giá trị trạng thái kế tiếp; dạng tối ưu Q*(s,a)=E[r + γ·max_a' Q*(s', a')] là nền tảng của Q-learning/DQN. γ = 0 cho agent hoàn toàn thiển cận (chỉ tối đa reward tức thời), ngược hẳn với 'nhìn xa nhất'; γ < 1 vừa giữ return hữu hạn vừa ưu tiên reward gần."
+    },
+    {
+      "id": "ai101-016",
+      "sub": "Q-learning update",
+      "level": 2,
+      "type": "numeric",
+      "trap": false,
+      "q": "Q-learning dạng bảng với α = 0.1, γ = 0.9. Giá trị hiện tại Q(s,a)=2.0. Agent thực hiện a tại s, nhận r = 1 và tới s' có Q(s', ·) = [5.0, 3.0, 4.0]. Do khám phá ε-greedy, action thực sự được chọn ở s' là action có Q = 3.0. Tính giá trị **Q(s,a)** mới theo Q-learning (làm tròn 2 chữ số thập phân).",
+      "answer": 2.35,
+      "tolerance": 0.005,
+      "unit": "",
+      "explain": "Cập nhật Q-learning:\n\n```\nQ(s,a) ← Q(s,a) + α·[r + γ·max_a' Q(s',a') − Q(s,a)]\n```\n\n- TD target = 1 + 0.9·max(5, 3, 4) = 1 + 4.5 = 5.5\n- TD error = 5.5 − 2.0 = 3.5\n- Q mới = 2.0 + 0.1·3.5 = **2.35**\n\nĐiểm mấu chốt: Q-learning là **off-policy** – target luôn dùng max (policy greedy), bất kể action thực sự được chọn ở s' là gì. Nếu dùng SARSA (on-policy) thì target là r + γ·Q(s', a') với a' là action thực tế: 1 + 0.9·3 = 3.7 → Q mới = 2.0 + 0.1·1.7 = 2.17. α điều chỉnh mức 'tin' vào target mới; α = 1 thì ghi đè hẳn bằng target."
+    },
+    {
+      "id": "ai101-017",
+      "sub": "ε-greedy",
+      "level": 2,
+      "type": "numeric",
+      "trap": true,
+      "q": "Agent có **5 action**, dùng ε-greedy với **ε = 0.2**: với xác suất 1 − ε chọn action có Q lớn nhất; với xác suất ε chọn ngẫu nhiên đều trong **tất cả 5 action** (kể cả action tốt nhất). Xác suất agent chọn đúng action greedy ở một bước là bao nhiêu? Làm tròn 2 chữ số thập phân.",
+      "answer": 0.84,
+      "tolerance": 0.005,
+      "unit": "",
+      "explain": "P(greedy) = (1 − ε) + ε/|A| = 0.8 + 0.2/5 = 0.8 + 0.04 = **0.84**; mỗi action còn lại có xác suất 0.04. Bẫy: trả lời 0.8 vì quên rằng nhánh ngẫu nhiên cũng có thể rơi trúng action greedy (một số tài liệu định nghĩa nhánh ngẫu nhiên chỉ chọn trong các action *khác* – khi đó mới là 0.8, nên luôn đọc kỹ định nghĩa). ε-greedy là cách đơn giản nhất cân bằng **exploration** (thử action chưa chắc chắn để có thể tìm ra cái tốt hơn) và **exploitation** (khai thác cái đang tốt nhất). Thực tế thường giảm dần ε (vd từ 1.0 xuống 0.05) theo thời gian; các lựa chọn khác gồm softmax/Boltzmann exploration, UCB, Thompson sampling."
+    },
+    {
+      "id": "ai101-018",
+      "sub": "On-policy vs off-policy",
+      "level": 2,
+      "type": "single",
+      "trap": false,
+      "q": "Bài toán **cliff walking** (Sutton & Barto): đi sát mép vực là đường ngắn nhất, nhưng rơi xuống bị phạt −100. Hai agent đều dùng ε-greedy với ε = 0.1 cố định trong lúc học. Nhận định nào ĐÚNG?",
+      "options": [
+        "Q-learning học đường an toàn xa vực vì phép max khiến nó thận trọng hơn; SARSA học đường sát vực vì cập nhật theo action thực tế",
+        "SARSA (on-policy) học đường xa mép vực vì tính cả rủi ro khám phá; Q-learning (off-policy) học đường sát vực, tối ưu cho greedy",
+        "SARSA là off-policy vì học được từ dữ liệu của policy khác, còn Q-learning là on-policy vì chính nó dùng ε-greedy để hành động",
+        "Hai thuật toán hội tụ về cùng một đường đi và cùng mức reward trung bình mỗi episode trong suốt quá trình huấn luyện"
+      ],
+      "answer": 1,
+      "explain": "**On-policy** (SARSA): học giá trị của chính policy đang hành động – target r + γ·Q(s', a') với a' do ε-greedy chọn, nên giá trị các ô sát vực bị kéo xuống bởi những lần 'trượt chân' khám phá → SARSA chọn đường vòng an toàn. **Off-policy** (Q-learning): hành động bằng ε-greedy nhưng học giá trị của policy *greedy* (target dùng max) → học được đường sát vực tối ưu, nhưng trong lúc train vẫn thỉnh thoảng rơi vực nên reward trung bình online **thấp hơn** SARSA. Hai thuật toán chỉ hội tụ về cùng policy tối ưu nếu ε giảm dần về 0. Ưu điểm của off-policy: tái sử dụng dữ liệu cũ/của policy khác (experience replay trong DQN, offline RL)."
+    },
+    {
+      "id": "ai101-019",
+      "sub": "Các họ thuật toán RL",
+      "level": 2,
+      "type": "multi",
+      "trap": false,
+      "q": "Chọn TẤT CẢ phát biểu ĐÚNG về các họ thuật toán RL.",
+      "options": [
+        "Actor-critic: actor là policy, critic ước lượng value để giảm variance của gradient (vd A2C, PPO)",
+        "DQN xử lý tự nhiên action liên tục vì chỉ cần lấy argmax của Q trên vô số giá trị action có thể",
+        "REINFORCE là policy gradient: tối ưu trực tiếp tham số policy, áp dụng được cho action space liên tục",
+        "DQN là value-based: học Q(s, a) bằng mạng nơ-ron, kèm experience replay và target network để ổn định",
+        "Model-based nghĩa là agent dùng mạng nơ-ron lớn; model-free là dùng bảng Q, không có tham số học"
+      ],
+      "answer": [
+        0,
+        2,
+        3
+      ],
+      "explain": "**Value-based** (Q-learning, DQN): học Q rồi suy ra policy = argmax_a Q; DQN (DeepMind, Atari) ổn định hoá bằng experience replay (phá tương quan mẫu) và target network (target ít dịch chuyển). Vì cần argmax trên mọi action, DQN hợp với action **rời rạc**; action liên tục cần DDPG/SAC hoặc policy gradient. **Policy-based** (REINFORCE): tăng log π(a|s) theo return – không thiên lệch nhưng variance cao. **Actor-critic** kết hợp: critic (V hoặc advantage) làm baseline giảm variance; PPO, A2C/A3C, SAC thuộc nhóm này. **Model-based vs model-free** phân biệt theo việc agent có học/dùng **mô hình môi trường** P(s'|s, a), R để lập kế hoạch (Dyna, AlphaZero với luật chơi biết trước, MuZero tự học model) hay không – không liên quan tới kích thước mạng hay dùng bảng."
+    },
+    {
+      "id": "ai101-020",
+      "sub": "Reward hacking & reward shaping",
+      "level": 2,
+      "type": "single",
+      "trap": false,
+      "q": "Agent đua thuyền (CoastRunners, OpenAI 2016) được thưởng điểm mỗi khi chạm các mục tiêu trên đường đua. Nó học cách chạy vòng tròn mãi trong một khu vực để ăn điểm lặp lại thay vì về đích. Hiện tượng này là gì và hướng xử lý đúng?",
+      "options": [
+        "Exploration chưa đủ; đặt ε = 1.0 suốt quá trình train giúp agent khám phá ra rằng về đích có lợi hơn nhiều",
+        "Reward hacking: reward chỉ là proxy lệch khỏi mục tiêu thật; cần sửa đặc tả reward, vd thưởng theo tiến độ thật về đích",
+        "γ đang quá nhỏ; đặt γ = 1 thì agent sẽ ưu tiên phần thưởng về đích hơn mọi phần thưởng nhặt được dọc giữa đường đua",
+        "Overfitting của policy network; chỉ cần thêm dropout và train thêm nhiều episode thì agent sẽ tự học cách về đích"
+      ],
+      "answer": 1,
+      "explain": "Đây là **reward hacking / specification gaming**: agent tối ưu đúng reward được viết ra, nhưng reward chỉ là *proxy* của mục tiêu thật (thắng cuộc đua) nên nó khai thác lỗ hổng. Cách xử lý là sửa chính đặc tả reward: thưởng theo tiến độ thật/về đích, phạt hành vi vòng lặp, hoặc học reward từ phản hồi của người. Lưu ý: **reward shaping dạng potential-based** F = γ·Φ(s') − Φ(s) (Ng, Harada & Russell 1999) được chứng minh *không làm thay đổi policy tối ưu* – nó chỉ giúp học nhanh hơn, nên không tự sửa được một reward gốc đã lệch. Đây không phải overfitting nên dropout vô ích. ε = 1 nghĩa là hành động hoàn toàn ngẫu nhiên, agent không bao giờ khai thác được điều đã học. Đặt γ = 1 còn tệ hơn: vòng lặp vô hạn cho tổng reward không bị chặn, càng hấp dẫn hơn về đích. Hiện tượng tương tự ở LLM: policy RLHF khai thác điểm yếu của reward model."
+    },
+    {
+      "id": "ai101-021",
+      "sub": "RL nhìn từ RLHF",
+      "level": 3,
+      "type": "single",
+      "trap": false,
+      "q": "Khi nhìn **RLHF** (huấn luyện LLM bằng PPO với reward model) dưới lăng kính RL kinh điển, ánh xạ nào ĐÚNG?",
+      "options": [
+        "Policy là reward model, còn LLM đóng vai critic ước lượng value; PPO chủ yếu cập nhật trọng số của reward model",
+        "State là bộ trọng số của LLM, action là một bước cập nhật gradient, reward là mức giảm loss cross-entropy trên dữ liệu SFT",
+        "Môi trường là người gán nhãn ngồi chấm reward cho từng token theo thời gian thực trong lúc thuật toán PPO đang train policy",
+        "State là prompt + các token đã sinh, action là token kế tiếp, reward chủ yếu từ reward model chấm cả câu trả lời ở cuối episode"
+      ],
+      "answer": 3,
+      "explain": "Trong RLHF, **policy** là chính LLM π_θ(token | ngữ cảnh). Mỗi câu trả lời là một **episode**: state = prompt + phần đã sinh, action = token tiếp theo (action space = vocabulary), chuyển trạng thái là deterministic (nối token vào). **Reward** thưa: reward model (học từ so sánh cặp của người gán nhãn, offline) chấm cả câu ở cuối, cộng với phạt KL theo từng token so với model tham chiếu để policy không trôi xa và hạn chế reward hacking. PPO là thuật toán **actor-critic**: actor là LLM, critic là value head ước lượng V(s) để tính advantage. Người gán nhãn không chấm theo thời gian thực – họ chỉ tạo dữ liệu preference để train reward model trước. Reward model được giữ cố định khi PPO cập nhật policy."
+    },
+    {
+      "id": "ai101-022",
+      "sub": "Generative vs discriminative",
+      "level": 1,
+      "type": "single",
+      "trap": false,
+      "q": "Phát biểu nào ĐÚNG về mô hình **generative** và **discriminative**?",
+      "options": [
+        "Discriminative học p(y|x) hay ranh giới quyết định; generative mô hình hoá p(x) hoặc p(x, y) nên sinh được mẫu x",
+        "Discriminative luôn cần ít dữ liệu hơn generative ở mọi bài toán, vì số tham số của nó luôn nhỏ hơn đáng kể",
+        "Naive Bayes là discriminative còn logistic regression là generative, vì logistic regression dùng hàm sigmoid ở đầu ra",
+        "Generative chỉ dùng được cho sinh ảnh và văn bản, không thể dùng để phân loại; mô hình discriminative thì ngược lại"
+      ],
+      "answer": 0,
+      "explain": "**Discriminative** (logistic regression, SVM, CNN phân loại) học p(y|x) hoặc trực tiếp ranh giới quyết định – chỉ trả lời 'x thuộc lớp nào'. **Generative** học phân phối dữ liệu p(x) hoặc p(x, y) = p(x|y)·p(y), nên vừa sinh được mẫu mới, vừa phân loại được qua Bayes: p(y|x) ∝ p(x|y)·p(y). Ví dụ kinh điển: **Naive Bayes** là generative (mô hình p(x|y)), logistic regression là cặp discriminative tương ứng – phương án đảo ngược là sai. Ng & Jordan (2001): generative thường hội tụ nhanh hơn khi ít dữ liệu, discriminative thường có lỗi tiệm cận thấp hơn – không có 'luôn luôn'. LLM, diffusion, GAN, VAE đều là generative."
+    },
+    {
+      "id": "ai101-023",
+      "sub": "Autoregressive model",
+      "level": 1,
+      "type": "single",
+      "trap": false,
+      "q": "Mô hình sinh **autoregressive** (GPT, PixelCNN, WaveNet) hoạt động dựa trên nguyên lý nào?",
+      "options": [
+        "Phân rã p(x) = Π p(x_t | x_<t) theo chain rule; sinh tuần tự từng phần tử, likelihood tính được chính xác",
+        "Học một biến đổi khả nghịch từ phân phối Gauss sang dữ liệu, nên phải giữ nguyên số chiều qua mọi lớp mạng",
+        "Huấn luyện hai mạng đối kháng: mạng sinh cố đánh lừa mạng phân biệt thật–giả trong một trò chơi minimax",
+        "Sinh song song toàn bộ chuỗi trong một bước từ vector nhiễu, rồi tinh chỉnh lặp đi lặp lại cho tới khi hội tụ"
+      ],
+      "answer": 0,
+      "explain": "Autoregressive dùng chain rule xác suất: p(x₁, …, x_T) = Π_t p(x_t | x₁, …, x_{t−1}); một mạng (Transformer có causal mask, PixelCNN có masked convolution, WaveNet có dilated causal conv) dự đoán phân phối phần tử kế tiếp. Ưu điểm: train đơn giản bằng maximum likelihood (teacher forcing), **likelihood chính xác**, chất lượng cao. Nhược điểm: sinh **tuần tự** nên chậm theo độ dài, lỗi có thể tích luỹ. Các phương án còn lại mô tả họ khác: tinh chỉnh lặp từ nhiễu gần với diffusion/non-autoregressive, biến đổi khả nghịch là normalizing flow, hai mạng đối kháng là GAN."
+    },
+    {
+      "id": "ai101-024",
+      "sub": "VAE",
+      "level": 2,
+      "type": "multi",
+      "trap": false,
+      "q": "Chọn TẤT CẢ phát biểu ĐÚNG về **Variational Autoencoder (VAE)**.",
+      "options": [
+        "Mẫu sinh từ VAE thường sắc nét hơn GAN vì VAE tối ưu likelihood chính xác thay vì một cận xấp xỉ",
+        "Loss là −ELBO = reconstruction loss + KL(q(z|x) ‖ p(z)), với prior p(z) thường chọn là N(0, I)",
+        "Reparameterization trick: z = μ + σ·ε với ε ~ N(0, I), đưa phần ngẫu nhiên ra ngoài để backprop qua μ, σ",
+        "Encoder xuất tham số phân phối q(z|x) (thường μ, σ của Gauss) thay vì một vector z cố định như autoencoder thường",
+        "ELBO là cận trên của log-likelihood, nên tối thiểu hoá ELBO tương đương với tối đa hoá likelihood dữ liệu"
+      ],
+      "answer": [
+        1,
+        2,
+        3
+      ],
+      "explain": "Autoencoder thường nén x → z cố định; không gian latent có thể 'lỗ chỗ' nên lấy z ngẫu nhiên rồi decode thường ra rác – không phải mô hình sinh tốt. **VAE** cho encoder xuất phân phối q(z|x) và ép nó gần prior N(0, I) bằng số hạng **KL**, nên latent liên tục, lấy mẫu z ~ N(0, I) rồi decode là sinh được dữ liệu mới. **ELBO** là *cận dưới* của log p(x): log p(x) ≥ E_q[log p(x|z)] − KL(q(z|x) ‖ p(z)); ta **tối đa** ELBO (tức tối thiểu −ELBO = reconstruction + KL). Lấy mẫu z không đạo hàm được, nên **reparameterization** viết z = μ + σ·ε để gradient chảy qua μ, σ. VAE chỉ tối ưu cận dưới, và reconstruction loss kiểu MSE khiến ảnh thường **mờ** hơn GAN/diffusion."
+    },
+    {
+      "id": "ai101-025",
+      "sub": "GAN training",
+      "level": 2,
+      "type": "single",
+      "trap": false,
+      "q": "Train GAN: ngay từ đầu discriminator D gần như phân biệt hoàn hảo thật/giả (D(G(z)) ≈ 0). Với loss minimax gốc `min_G max_D E[log D(x)] + E[log(1 − D(G(z)))]`, hệ quả và cách xử lý phổ biến là gì?",
+      "options": [
+        "log(1 − D(G(z))) bão hoà nên gradient cho G rất nhỏ; dùng loss non-saturating, tức G tối đa hoá log D(G(z))",
+        "Đây là điểm cân bằng Nash mong muốn; nên dừng train ngay vì G đã sinh được dữ liệu giống thật hoàn toàn",
+        "G nhận gradient rất lớn và bị phát nổ; cách xử lý là tăng learning rate của D để D luôn thắng hẳn ở mỗi bước",
+        "D quá mạnh luôn gây mode collapse tức thì; cách duy nhất là bỏ D đi và chỉ train G bằng loss MSE với ảnh thật"
+      ],
+      "answer": 0,
+      "explain": "GAN là trò chơi hai người: **generator** G biến nhiễu z thành mẫu, **discriminator** D phân biệt thật/giả. Khi D(G(z)) ≈ 0, hàm log(1 − D(G(z))) gần như phẳng → gradient cho G biến mất, G không học được. Goodfellow et al. (2014) đề xuất ngay heuristic **non-saturating**: G tối đa hoá log D(G(z)), cho gradient mạnh đúng lúc G còn kém. Ở cân bằng Nash lý thuyết, D(x) = 1/2 ở mọi nơi (không phân biệt được) – D thắng tuyệt đối là dấu hiệu mất cân bằng, không phải thành công. Các kỹ thuật ổn định khác: WGAN (Wasserstein distance, gradient penalty), spectral normalization, cân bằng tốc độ học G/D (TTUR). Mode collapse (G chỉ sinh vài kiểu mẫu) là một vấn đề riêng, và bỏ D để train bằng MSE thì không còn là GAN, ảnh sẽ mờ."
+    },
+    {
+      "id": "ai101-026",
+      "sub": "Diffusion model",
+      "level": 1,
+      "type": "single",
+      "trap": false,
+      "q": "**Diffusion model** (DDPM) sinh ảnh như thế nào, và vì sao sampling chậm?",
+      "options": [
+        "Generator biến nhiễu thành ảnh trong một lần forward; chậm vì lúc sinh vẫn phải chạy song song cùng discriminator",
+        "Sinh từng pixel theo thứ tự raster như mô hình ngôn ngữ; chậm vì ảnh có hàng triệu pixel phải sinh tuần tự từng cái một",
+        "Encoder nén ảnh thành z rồi decoder giải mã một lần; chậm vì encoder phải chạy lại hàng nghìn lần cho mỗi ảnh được sinh",
+        "Học đảo ngược quá trình thêm nhiễu Gauss từng chút: mạng dự đoán nhiễu ở mỗi bước, sampling phải lặp nhiều bước khử nhiễu"
+      ],
+      "answer": 3,
+      "explain": "**Forward process** cố định: thêm nhiễu Gauss qua T bước (vd T = 1000) cho tới khi ảnh thành nhiễu thuần. **Reverse process** được học: một mạng (thường U-Net hoặc Transformer) nhận x_t và t, dự đoán nhiễu ε đã thêm (loss MSE đơn giản). Sinh ảnh = bắt đầu từ nhiễu thuần rồi khử nhiễu dần qua nhiều bước, mỗi bước một lần forward mạng lớn → **chậm** hơn GAN/VAE (một lần forward). Chất lượng cao vì mỗi bước chỉ là bài toán khử nhiễu nhỏ, dễ học, train ổn định và phủ phân phối tốt (ít mode collapse). Tăng tốc: sampler ít bước (DDIM, DPM-Solver), distillation, chạy trong latent space (Stable Diffusion). Các phương án khác mô tả VAE, GAN và autoregressive."
+    },
+    {
+      "id": "ai101-027",
+      "sub": "Normalizing flow & EBM",
+      "level": 3,
+      "type": "single",
+      "trap": false,
+      "q": "Phát biểu nào ĐÚNG về **normalizing flows** và **energy-based models (EBM)**?",
+      "options": [
+        "Flow dùng chuỗi biến đổi khả nghịch có Jacobian dễ tính nên likelihood chính xác; EBM đặt p(x) ∝ exp(−E(x)) với hằng số chuẩn hoá khó tính",
+        "EBM gán năng lượng cao cho dữ liệu thật và thấp cho dữ liệu giả, nên mật độ p(x) tỷ lệ thuận với năng lượng E(x)",
+        "Flow và EBM đều là biến thể của GAN, chỉ khác ở chỗ discriminator được thay bằng một hàm năng lượng học được từ dữ liệu",
+        "Flow nén dữ liệu xuống latent có số chiều nhỏ hơn nhiều để sinh nhanh; EBM có likelihood chính xác vì hằng số Z luôn có công thức đóng đơn giản"
+      ],
+      "answer": 0,
+      "explain": "**Normalizing flow** (RealNVP, Glow): x = f(z) với f khả nghịch, z ~ N(0, I); theo công thức đổi biến, log p(x) = log p(z) + log|det ∂z/∂x|. Kiến trúc được thiết kế (vd coupling layer) để định thức Jacobian rẻ → **likelihood chính xác**; cái giá là f phải khả nghịch nên số chiều z **bằng** số chiều x, kiến trúc bị ràng buộc. **EBM**: p(x) = exp(−E(x))/Z – dữ liệu thật có năng lượng **thấp** (mật độ cao); Z = ∫ exp(−E(x)) dx gần như không tính được, nên train/sample cần MCMC (Langevin dynamics), contrastive divergence hoặc score matching. Ý tưởng score matching của EBM chính là một nguồn gốc của diffusion/score-based models. Cả hai không phải biến thể của GAN."
+    },
+    {
+      "id": "ai101-028",
+      "sub": "So sánh các họ mô hình sinh",
+      "level": 2,
+      "type": "multi",
+      "trap": false,
+      "q": "So sánh 4 họ mô hình sinh: VAE, GAN, normalizing flow, diffusion. Chọn TẤT CẢ phát biểu ĐÚNG.",
+      "options": [
+        "Flow cho log-likelihood chính xác nhưng bị ràng buộc kiến trúc khả nghịch và giữ nguyên số chiều",
+        "GAN sinh nhanh (một lần forward) và mẫu sắc nét, nhưng train kém ổn định và dễ bị mode collapse",
+        "GAN cho phép tính chính xác log-likelihood từng mẫu nên thường được đánh giá bằng perplexity",
+        "Diffusion sinh nhanh nhất trong bốn họ vì lúc inference chỉ cần đúng một bước khử nhiễu duy nhất",
+        "VAE train ổn định và có latent space có cấu trúc, nhưng mẫu ảnh thường mờ hơn GAN và diffusion"
+      ],
+      "answer": [
+        0,
+        1,
+        4
+      ],
+      "explain": "Bảng nhớ nhanh (trade-off giữa **chất lượng – đa dạng – tốc độ sinh**):\n\n| Họ | Sinh | Chất lượng | Likelihood | Nhược điểm |\n|---|---|---|---|---|\n| VAE | 1 bước | thường mờ | cận dưới (ELBO) | mẫu mờ |\n| GAN | 1 bước | sắc nét | không có | train bất ổn, mode collapse |\n| Flow | 1 bước | khá | chính xác | ràng buộc kiến trúc |\n| Diffusion | nhiều bước | rất cao, đa dạng | cận dưới | chậm |\n\nDiffusion là họ **chậm nhất** khi sinh (hàng chục tới hàng nghìn bước), không phải nhanh nhất. GAN không có likelihood tường minh (implicit model), nên được đánh giá bằng FID/IS chứ không phải perplexity – perplexity dùng cho mô hình ngôn ngữ autoregressive."
+    },
+    {
+      "id": "ai101-029",
+      "sub": "FID & IS",
+      "level": 2,
+      "type": "single",
+      "trap": true,
+      "q": "Đánh giá mô hình sinh ảnh bằng **FID** và **Inception Score (IS)**. Phát biểu nào ĐÚNG?",
+      "options": [
+        "IS thấp nghĩa là mô hình tốt vì khi đó các ảnh sinh ra có phân phối nhãn đồng đều giống tập ImageNet",
+        "FID càng cao càng tốt vì nó đo độ đa dạng; còn IS so sánh trực tiếp từng cặp pixel giữa ảnh sinh và ảnh thật",
+        "Cả hai đều đo mức khớp giữa ảnh sinh và prompt văn bản, nên là thước đo chính cho text-to-image alignment",
+        "FID so mean, covariance feature Inception của ảnh thật và ảnh sinh: càng thấp càng tốt; IS không dùng ảnh thật"
+      ],
+      "answer": 3,
+      "explain": "**FID** (Fréchet Inception Distance, Heusel et al. 2017): trích feature bằng Inception-v3 cho ảnh thật và ảnh sinh, xấp xỉ mỗi tập bằng một Gauss (μ, Σ) rồi tính khoảng cách Fréchet – **càng thấp càng tốt**, phản ánh cả chất lượng lẫn đa dạng. **IS** (Salimans et al. 2016) chỉ dùng ảnh sinh: IS = exp(E_x KL(p(y|x) ‖ p(y))), **càng cao càng tốt** – mỗi ảnh nên được phân loại tự tin (p(y|x) nhọn) và tổng thể phủ nhiều lớp (p(y) phẳng). Bẫy là nhớ ngược chiều của hai metric. Cả hai không đo mức khớp với prompt; với text-to-image người ta dùng thêm CLIPScore và đánh giá của người. Lưu ý: FID nhạy với số mẫu và cách resize, chỉ so được khi cùng thiết lập."
+    },
+    {
+      "id": "ai101-030",
+      "sub": "ERM & generalization",
+      "level": 1,
+      "type": "single",
+      "trap": false,
+      "q": "Trong lý thuyết học máy, **empirical risk minimization (ERM)** nghĩa là gì?",
+      "options": [
+        "Chọn model có ít tham số nhất bất kể loss trên dữ liệu, theo đúng tinh thần nguyên lý Occam's razor trong học máy",
+        "Chọn model tối thiểu loss trung bình trên tập train, xem đó như ước lượng của true risk trên phân phối thật",
+        "Chọn model có true risk bằng 0 bằng cách thêm tham số cho tới khi loss trên tập train bằng 0 tuyệt đối",
+        "Chọn model tối thiểu loss trên tập test, vì loss trên test chính là true risk trên phân phối dữ liệu thật"
+      ],
+      "answer": 1,
+      "explain": "**True risk** R(h) = E_(x,y)~D[L(h(x), y)] là lỗi kỳ vọng trên phân phối thật D – thứ ta quan tâm nhưng không tính được. **Empirical risk** R̂(h) = (1/n)·Σ L(h(xᵢ), yᵢ) là trung bình trên mẫu train. ERM chọn h trong lớp giả thuyết H tối thiểu R̂. **Generalization gap** = R − R̂; lớp H quá giàu thì R̂ có thể về 0 mà R vẫn lớn (overfitting) – nên train loss = 0 không có nghĩa true risk = 0. Thêm regularization (structural risk minimization) để cân bằng độ khớp và độ phức tạp. Test set chỉ dùng để *ước lượng* true risk một lần ở cuối; chọn model theo test là rò rỉ và làm ước lượng lạc quan. Occam ưu tiên model đơn giản *khi khớp dữ liệu như nhau*, không phải bỏ qua loss."
+    },
+    {
+      "id": "ai101-031",
+      "sub": "Curse of dimensionality",
+      "level": 3,
+      "type": "numeric",
+      "trap": false,
+      "q": "Dữ liệu phân bố đều trong hypercube đơn vị [0, 1]^d với **d = 10**. Muốn một hypercube con (cạnh ℓ) chứa trung bình **10%** số điểm thì ℓ phải bằng bao nhiêu? Làm tròn 2 chữ số thập phân.",
+      "answer": 0.79,
+      "tolerance": 0.01,
+      "unit": "",
+      "explain": "Thể tích hypercube con là ℓ^d, cần ℓ^10 = 0.1 → ℓ = 0.1^(1/10) ≈ **0.794 ≈ 0.79**. Tức là để gom chỉ 10% dữ liệu, 'vùng lân cận' phải trải tới ~80% chiều dài trên **mỗi** trục – nó không còn 'cục bộ' nữa (ví dụ kinh điển trong sách ESL). Đó là **curse of dimensionality**: số chiều tăng thì thể tích bùng nổ, dữ liệu trở nên thưa, khoảng cách tới điểm gần nhất và xa nhất xấp xỉ nhau → kNN, kernel, phân cụm dựa trên khoảng cách suy giảm, và cần lượng dữ liệu tăng theo hàm mũ để phủ không gian. Lối thoát thực tế: dữ liệu thật thường nằm gần một **manifold** số chiều thấp, cộng với feature selection, giảm chiều (PCA, embedding) và inductive bias của kiến trúc. Lỗi hay gặp: trả lời 0.1 (quên căn bậc d)."
+    },
+    {
+      "id": "ai101-032",
+      "sub": "VC dimension",
+      "level": 2,
+      "type": "numeric",
+      "trap": false,
+      "q": "**VC dimension** của lớp classifier tuyến tính (siêu phẳng có bias, dạng sign(w·x + b)) trong không gian **10 chiều** là bao nhiêu? Nhập số nguyên.",
+      "answer": 11,
+      "tolerance": 0,
+      "unit": "",
+      "explain": "VC dimension là số điểm **lớn nhất** mà lớp giả thuyết **shatter** được – tức với *mọi* cách gán nhãn ±1 cho các điểm đó, luôn có một giả thuyết phân tách đúng. Với siêu phẳng có bias trong R^d, VC = **d + 1**, nên d = 10 → **11**. Trực giác ở R²: 3 điểm không thẳng hàng shatter được bằng đường thẳng, nhưng không có bộ 4 điểm nào shatter được (vd cấu hình XOR) → VC = 3 = 2 + 1. VC dimension đo 'độ giàu' của lớp giả thuyết và xuất hiện trong cận tổng quát hoá: gap ~ O(√(VC/n)) (bỏ qua log). Cẩn thận: VC không phải lúc nào cũng bằng số tham số – hàm sign(sin(ωx)) chỉ có 1 tham số nhưng VC vô hạn."
+    },
+    {
+      "id": "ai101-033",
+      "sub": "PAC learning",
+      "level": 3,
+      "type": "single",
+      "trap": false,
+      "q": "Ý tưởng cốt lõi của **PAC learning** (Probably Approximately Correct, Valiant 1984) là gì?",
+      "options": [
+        "Thuật toán phải đạt lỗi bằng 0 trên mọi phân phối với xác suất 1; nếu không đạt thì bài toán coi như không học được",
+        "Model được gọi là PAC khi xác suất dự đoán đã được calibrate, tức độ tin cậy khớp với tỷ lệ đúng quan sát thực tế",
+        "Với xác suất ≥ 1 − δ, thuật toán trả về giả thuyết có lỗi tổng quát ≤ ε khi số mẫu đủ lớn (đa thức theo 1/ε và 1/δ)",
+        "Số mẫu cần thiết luôn tỷ lệ thuận với số tham số của model, hoàn toàn không phụ thuộc vào ε hay δ mong muốn"
+      ],
+      "answer": 2,
+      "explain": "PAC hình thức hoá câu hỏi 'cần bao nhiêu dữ liệu để học được?'. **Approximately correct**: lỗi tổng quát ≤ ε (không đòi hoàn hảo). **Probably**: điều đó đúng với xác suất ≥ 1 − δ (vì mẫu train ngẫu nhiên có thể không đại diện). Một lớp H là PAC-learnable nếu có thuật toán đạt điều này với số mẫu đa thức theo 1/ε, 1/δ. Ví dụ với H hữu hạn, trường hợp realizable: m ≥ (1/ε)·(ln|H| + ln(1/δ)) là đủ; với H vô hạn thì ln|H| được thay bằng đại lượng theo **VC dimension**. Thông điệp phỏng vấn: muốn sai số nhỏ hơn và chắc chắn hơn thì cần nhiều mẫu hơn, lớp giả thuyết càng giàu thì càng cần nhiều mẫu. PAC không liên quan tới calibration và không đòi lỗi bằng 0."
+    },
+    {
+      "id": "ai101-034",
+      "sub": "Double descent",
+      "level": 3,
+      "type": "single",
+      "trap": true,
+      "q": "Hiện tượng **double descent** (Belkin et al. 2019; Nakkiran et al. 2019, 'Deep Double Descent') mô tả điều gì?",
+      "options": [
+        "Test error luôn tăng đơn điệu khi model vượt ngưỡng nội suy, đúng như đường cong chữ U của lý thuyết bias–variance cổ điển",
+        "Train error giảm theo hai đợt riêng biệt vì learning rate schedule có hai giai đoạn là warmup và decay khác nhau",
+        "Khi tăng độ phức tạp, test error giảm, rồi tăng vọt quanh ngưỡng nội suy (vừa đủ khớp hết train), sau đó lại giảm tiếp",
+        "Ensemble hai model nhỏ luôn có test error thấp hơn một model lớn gấp đôi số tham số, trên mọi tập dữ liệu"
+      ],
+      "answer": 2,
+      "explain": "Lý thuyết bias–variance cổ điển dự đoán đường cong chữ U: quá phức tạp → overfit → test error tăng mãi. Thực nghiệm với mạng sâu, random features, thậm chí linear regression cho thấy: test error tăng tới **đỉnh quanh ngưỡng nội suy** (số tham số ≈ số mẫu – model vừa đủ khớp hết train, nghiệm rất nhạy với nhiễu), rồi **giảm lần nữa** trong vùng over-parameterized – vì giữa vô số nghiệm nội suy, optimizer (SGD) có xu hướng chọn nghiệm 'đơn giản'/norm nhỏ. Nakkiran et al. còn thấy double descent theo **số epoch** và theo **lượng dữ liệu** (có lúc thêm dữ liệu lại tệ hơn quanh ngưỡng). Đỉnh rõ hơn khi nhãn nhiễu và có thể bị san phẳng bằng regularization phù hợp. Bẫy: cho rằng 'model lớn hơn luôn overfit hơn' – đúng ở chế độ cổ điển nhưng không đúng ở chế độ hiện đại."
+    },
+    {
+      "id": "ai101-035",
+      "sub": "Inductive bias của kiến trúc",
+      "level": 2,
+      "type": "multi",
+      "trap": false,
+      "q": "Chọn TẤT CẢ phát biểu ĐÚNG về **inductive bias** của các kiến trúc mạng.",
+      "options": [
+        "Transformer có inductive bias mạnh hơn CNN nên khi train từ đầu cho ảnh luôn cần ít dữ liệu hơn CNN",
+        "RNN mang bias tuần tự: xử lý từng bước, hidden state tóm tắt quá khứ, phù hợp với dữ liệu có thứ tự thời gian",
+        "Self-attention không có position encoding là permutation-equivariant: hoán vị token vào thì output hoán vị tương ứng",
+        "Convolution có tính cục bộ và chia sẻ trọng số, dẫn tới translation equivariance: dịch ảnh thì feature map dịch theo",
+        "Inductive bias càng mạnh càng tốt trong mọi trường hợp, kể cả khi giả định đó không khớp với dữ liệu"
+      ],
+      "answer": [
+        1,
+        2,
+        3
+      ],
+      "explain": "**Inductive bias** là các giả định có sẵn giúp model tổng quát hoá từ dữ liệu hữu hạn. **CNN**: kernel nhỏ (locality) + dùng chung trọng số trên mọi vị trí (weight sharing) → translation equivariance; pooling thêm tính bất biến xấp xỉ – rất hợp ảnh, cần ít dữ liệu. **RNN**: giả định tuần tự, xử lý theo thời gian. **Transformer**: attention toàn cục, không có giả định cục bộ, và không có PE thì không phân biệt được thứ tự → bias **yếu**, linh hoạt nhưng cần nhiều dữ liệu (ViT train từ đầu trên ImageNet-1k thường thua ResNet, vượt lên khi pretrain dữ liệu lớn). **GNN**: bất biến với cách đánh số node. Bias mạnh có lợi khi giả định đúng và ít dữ liệu, nhưng sẽ trở thành giới hạn khi giả định sai hoặc khi dữ liệu dồi dào – không có 'càng mạnh càng tốt'."
+    },
+    {
+      "id": "ai101-036",
+      "sub": "Self-supervised learning",
+      "level": 1,
+      "type": "single",
+      "trap": false,
+      "q": "**Self-supervised learning** tạo tín hiệu học từ chính dữ liệu không nhãn. Cách phân loại hai hướng chính nào ĐÚNG?",
+      "options": [
+        "Contrastive (BERT, MAE): che token hoặc patch rồi đoán lại; masked prediction (SimCLR, MoCo): so sánh hai ảnh đã augment",
+        "Contrastive cần nhãn lớp do người gán để biết cặp nào positive; masked prediction cần nhãn bounding box cho từng vật thể",
+        "Cả hai hướng đều là supervised learning truyền thống, chỉ khác ở chỗ dùng thêm data augmentation mạnh trong quá trình train",
+        "Contrastive (SimCLR, MoCo): kéo gần cặp positive, đẩy xa negative; masked prediction (BERT, MAE): che một phần rồi đoán lại"
+      ],
+      "answer": 3,
+      "explain": "Ý tưởng chung của **representation learning** tự giám sát: thiết kế *pretext task* mà nhãn sinh tự động từ dữ liệu, học biểu diễn tốt rồi fine-tune/linear probe cho bài toán đích ít nhãn. **Contrastive** (SimCLR, MoCo): hai view augment của cùng một ảnh là cặp positive, ảnh khác là negative; loss InfoNCE kéo gần positive, đẩy xa negative (BYOL/DINO là biến thể không cần negative). **Masked prediction / generative**: BERT che token rồi đoán, MAE che ~75% patch ảnh rồi tái tạo, GPT dự đoán token kế tiếp cũng là tự giám sát. Positive trong contrastive đến từ augmentation, không cần nhãn người gán. Phương án hoán đổi tên phương pháp là bẫy nhầm nhóm."
+    },
+    {
+      "id": "ai101-037",
+      "sub": "Các nguyên lý & giả thuyết",
+      "level": 2,
+      "type": "multi",
+      "trap": true,
+      "q": "Chọn TẤT CẢ phát biểu ĐÚNG về các nguyên lý/giả thuyết hay được nhắc trong phỏng vấn.",
+      "options": [
+        "No Free Lunch: lấy trung bình trên mọi bài toán có thể, không thuật toán học nào tốt hơn thuật toán nào",
+        "Lottery ticket: mạng lớn chứa mạng con thưa, nếu train lại từ khởi tạo gốc thì đạt độ chính xác tương đương",
+        "Occam's razor đảm bảo model đơn giản nhất luôn có test error thấp nhất, nên cứ chọn model ít tham số nhất",
+        "'The Bitter Lesson' (Sutton 2019): phương pháp tổng quát tận dụng tính toán thắng dần tri thức viết tay",
+        "Theo paper lottery ticket gốc, 'vé trúng' được tìm rẻ ngay lúc khởi tạo, không cần train mạng đầy đủ trước"
+      ],
+      "answer": [
+        0,
+        1,
+        3
+      ],
+      "explain": "**No Free Lunch** (Wolpert 1996): không có thuật toán tốt nhất cho mọi bài toán – hiệu quả đến từ việc giả định (inductive bias) khớp với bài toán thực tế. **Occam's razor**: giữa các giải thích khớp dữ liệu như nhau, ưu tiên cái đơn giản hơn – đó là nguyên tắc ưu tiên, không phải bảo đảm, và 'đơn giản' không đồng nghĩa với 'ít tham số' (xem double descent). **Lottery ticket hypothesis** (Frankle & Carbin, ICLR 2019): trong mạng dày đặc có các mạng con thưa ('vé trúng') mà khi reset về *khởi tạo gốc* và train riêng thì đạt độ chính xác tương đương; nhưng paper gốc tìm chúng bằng **iterative magnitude pruning** – phải train, prune, reset nhiều vòng, tốn kém hơn train một lần. **The Bitter Lesson**: lịch sử 70 năm AI cho thấy search và learning được scale bằng compute thắng dần các cách nhúng tri thức con người – tinh thần của **scaling hypothesis**."
+    },
+    {
+      "id": "ai101-038",
+      "sub": "Các bài toán Computer Vision",
+      "level": 1,
+      "type": "single",
+      "trap": false,
+      "q": "Ứng dụng camera giao thông cần **mask chính xác cho TỪNG chiếc xe** (hai xe chồng lên nhau vẫn phải tách riêng) để đếm và đo diện tích. Bài toán phù hợp nhất là gì?",
+      "options": [
+        "Image classification: dự đoán nhãn 'có xe' cho cả ảnh rồi suy ra số xe từ xác suất đầu ra của model",
+        "Instance segmentation (vd Mask R-CNN): mỗi đối tượng có class, box và mask riêng của nó",
+        "Semantic segmentation: gán lớp 'xe' cho mọi pixel, như vậy là đủ để tách từng chiếc xe chồng nhau",
+        "Object detection thuần: bounding box là đủ để có mask đúng theo hình dạng thật của từng chiếc xe"
+      ],
+      "answer": 1,
+      "explain": "Các bài toán CV theo mức chi tiết của output: **classification** (1 nhãn/ảnh, metric accuracy/top-k) → **detection** (box + class cho mỗi đối tượng, metric mAP) → **semantic segmentation** (lớp cho mỗi pixel, không phân biệt cá thể, metric mIoU) → **instance segmentation** (mask riêng cho từng đối tượng, metric mask AP) → **panoptic** (gộp cả hai: 'things' đếm được theo instance, 'stuff' như đường, trời theo semantic). Semantic segmentation gộp mọi pixel 'xe' thành một vùng nên hai xe chồng nhau không tách được. Detection chỉ cho hình chữ nhật, không cho hình dạng thật. Classification không định vị được gì. Ngoài ra còn image generation (GAN/diffusion, metric FID)."
+    },
+    {
+      "id": "ai101-039",
+      "sub": "Các bài toán Speech",
+      "level": 1,
+      "type": "single",
+      "trap": false,
+      "q": "Ngân hàng muốn xác thực khách gọi tổng đài bằng giọng nói: so khớp giọng người gọi với **mẫu giọng đã đăng ký** của chính chủ tài khoản. Đây là bài toán gì?",
+      "options": [
+        "ASR: chuyển giọng nói thành văn bản rồi so khớp nội dung câu nói với câu mật khẩu đã lưu trong hệ thống",
+        "Speaker diarization: chia đoạn audio theo người nói để biết ai nói vào lúc nào trong suốt cuộc gọi",
+        "Speaker verification: so embedding giọng (vd x-vector) với mẫu đăng ký, chấp nhận nếu điểm vượt ngưỡng",
+        "TTS: tổng hợp lại giọng của khách hàng từ văn bản rồi so khớp waveform đó với tín hiệu cuộc gọi đến"
+      ],
+      "answer": 2,
+      "explain": "Bản đồ bài toán speech: **ASR** (audio → text, metric WER/CER), **TTS** (text → audio, đánh giá MOS), **speaker verification** (1:1 – có phải đúng người này không?, metric EER), **speaker identification** (1:N – là ai trong danh sách?), **diarization** ('who spoke when', metric DER). Xác thực chủ tài khoản là verification: trích speaker embedding (i-vector, x-vector, ECAPA-TDNN) rồi so cosine với mẫu đăng ký theo ngưỡng chọn từ trade-off FAR/FRR. ASR chỉ kiểm tra *nội dung* nói gì, ai đọc đúng câu mật khẩu cũng qua. Thực tế cần thêm anti-spoofing vì giọng clone bằng TTS ngày càng giống thật."
+    },
+    {
+      "id": "ai101-040",
+      "sub": "Bài toán ↔ metric",
+      "level": 1,
+      "type": "multi",
+      "trap": false,
+      "q": "Chọn TẤT CẢ cặp (bài toán → metric chính) phù hợp.",
+      "options": [
+        "Object detection → mAP",
+        "Dự báo doanh số theo ngày → accuracy",
+        "OCR nhận dạng chữ → CER",
+        "Gợi ý sản phẩm dạng ranking → NDCG@k",
+        "Semantic segmentation → BLEU",
+        "Nhận dạng tiếng nói (ASR) → WER"
+      ],
+      "answer": [
+        0,
+        2,
+        3,
+        5
+      ],
+      "explain": "Nhớ theo dạng output: **ASR** và **OCR** sinh chuỗi → so với chuỗi đúng bằng edit distance: WER (theo từ), CER (theo ký tự – hợp với tiếng Việt/OCR). **Detection** → mAP (trung bình AP theo lớp, ở các ngưỡng IoU). **Segmentation** → mIoU, Dice; BLEU là metric n-gram cho dịch máy/sinh văn bản, không dùng cho mask. **RecSys** dạng ranking → NDCG@k, MAP@k, Recall@k (offline) và CTR/conversion qua A/B test (online). **Forecasting** là hồi quy theo thời gian → MAE, RMSE, MAPE/sMAPE, MASE; accuracy chỉ dành cho phân loại. Khi phỏng vấn, luôn nói thêm metric business và metric online bên cạnh metric offline."
+    },
+    {
+      "id": "ai101-041",
+      "sub": "Chọn hướng tiếp cận",
+      "level": 2,
+      "type": "single",
+      "trap": false,
+      "q": "Nhà máy có dữ liệu cảm biến rung theo thời gian từ 200 máy, gần như **không có nhãn hỏng hóc** (vài ca mỗi năm). Cần cảnh báo sớm hành vi bất thường. Hướng tiếp cận hợp lý nhất là gì?",
+      "options": [
+        "Anomaly detection không giám sát: học hành vi bình thường (autoencoder, forecasting) rồi cảnh báo khi lỗi tái tạo/dự báo lớn",
+        "Collaborative filtering giữa các máy, gợi ý máy nào nên bảo trì dựa trên lịch sử bảo trì của các máy tương tự nhau trong xưởng",
+        "Classification có giám sát hai lớp, dùng accuracy làm metric, vì 99,9% dữ liệu là bình thường nên accuracy sẽ rất cao",
+        "Object detection trên ảnh chụp các máy, vì tín hiệu cảm biến rung không chứa thông tin hữu ích nào về hỏng hóc"
+      ],
+      "answer": 0,
+      "explain": "Khi nhãn sự cố cực hiếm, hướng chuẩn là **anomaly detection**: học mô hình của trạng thái *bình thường* rồi đo độ lệch – autoencoder (lỗi tái tạo), mô hình forecasting (sai số dự báo lớn), Isolation Forest/One-Class SVM trên đặc trưng cửa sổ (RMS, FFT). Ngưỡng cảnh báo chọn theo chi phí báo động giả vs bỏ sót, đánh giá trên vài ca hỏng đã biết bằng precision/recall. Classifier có giám sát với vài mẫu dương không học được, và accuracy 99,9% vô nghĩa (model luôn đoán 'bình thường' cũng đạt). Collaborative filtering là kỹ thuật RecSys, không phù hợp. Nguyên tắc chung: xác định input/output, lượng nhãn và metric trước khi chọn model."
+    },
+    {
+      "id": "ai101-042",
+      "sub": "CLIP vs VLM",
+      "level": 2,
+      "type": "single",
+      "trap": true,
+      "q": "So sánh **CLIP** và một **VLM** kiểu LLaVA. Phát biểu nào ĐÚNG?",
+      "options": [
+        "CLIP có hai encoder ảnh/văn bản chung một không gian embedding, không tự sinh văn bản; VLM nối vision encoder với LLM để sinh câu trả lời",
+        "CLIP tự sinh caption chi tiết cho ảnh nhờ có sẵn text decoder; còn VLM chỉ so khớp ảnh với danh sách nhãn có sẵn bằng cosine similarity",
+        "CLIP được train bằng cross-entropy trên nhãn ImageNet 1.000 lớp, vì vậy nó chỉ nhận ra được đúng 1.000 khái niệm có trong tập đó",
+        "VLM không cần vision encoder, vì LLM có thể đọc trực tiếp giá trị pixel thô dưới dạng một chuỗi số rất dài nằm ngay trong prompt"
+      ],
+      "answer": 0,
+      "explain": "**CLIP** (OpenAI, 2021) gồm image encoder và text encoder, train **contrastive** trên ~400 triệu cặp ảnh–caption từ web: kéo gần embedding của cặp khớp, đẩy xa cặp không khớp. Kết quả là không gian embedding chung dùng cho zero-shot classification, image–text retrieval, làm encoder cho model khác – nhưng CLIP **không có decoder** nên không tự viết caption. **VLM** (LLaVA, GPT-4V, Gemini, Qwen-VL): vision encoder (thường chính là CLIP/SigLIP ViT) → projector → LLM, sinh văn bản trả lời câu hỏi về ảnh (VQA, mô tả, đọc tài liệu). Bẫy là đảo vai hai loại model. CLIP mạnh chính vì không bị giới hạn bởi 1.000 nhãn ImageNet mà học từ ngôn ngữ tự nhiên mở."
+    },
+    {
+      "id": "ai101-043",
+      "sub": "Các loại bias",
+      "level": 1,
+      "type": "multi",
+      "trap": false,
+      "q": "Chọn TẤT CẢ ví dụ được gọi tên ĐÚNG loại bias.",
+      "options": [
+        "Dataset khuôn mặt chủ yếu gồm người da sáng nên model nhận diện kém với người da tối → representation bias",
+        "Model có train loss cao vì quá đơn giản so với dữ liệu → đây là bias xã hội có sẵn trong dữ liệu",
+        "Khảo sát online chỉ tiếp cận được người dùng smartphone nên thiếu người cao tuổi → confirmation bias",
+        "Model tuyển dụng học từ hồ sơ 10 năm khi đa số người được tuyển là nam, nên ưu ái ứng viên nam → historical bias",
+        "Bác sĩ làm theo gợi ý của AI kể cả khi trái với dấu hiệu lâm sàng rõ ràng trước mắt → automation bias"
+      ],
+      "answer": [
+        0,
+        3,
+        4
+      ],
+      "explain": "**Historical bias**: dữ liệu phản ánh đúng một thế giới vốn bất công, model học và tái tạo nó (ví dụ tuyển dụng nổi tiếng của Amazon). **Representation / sampling bias**: một số nhóm bị thiếu trong dữ liệu train (nghiên cứu Gender Shades: hệ thống phân loại giới tính qua khuôn mặt sai nhiều nhất với phụ nữ da tối). Khảo sát chỉ qua smartphone là **selection/sampling bias**, không phải confirmation bias (xu hướng con người chỉ tìm bằng chứng ủng hộ niềm tin sẵn có). **Automation bias**: con người tin máy quá mức – rủi ro lớn của human-in-the-loop hình thức. Còn có **measurement bias** (proxy đo lệch, vd dùng 'số lần bị bắt' thay cho 'tỷ lệ phạm tội') và **label bias**. Train loss cao do model quá đơn giản là *bias thống kê* (underfitting trong bias–variance) – trùng chữ 'bias' nhưng khác hẳn khái niệm bias xã hội."
+    },
+    {
+      "id": "ai101-044",
+      "sub": "Demographic parity",
+      "level": 1,
+      "type": "numeric",
+      "trap": false,
+      "q": "Model duyệt vay: nhóm X có 200 hồ sơ, được duyệt 120; nhóm Y có 300 hồ sơ, được duyệt 135. Tính **demographic parity difference** = |P(ŷ = 1 | nhóm X) − P(ŷ = 1 | nhóm Y)| (làm tròn 2 chữ số thập phân).",
+      "answer": 0.15,
+      "tolerance": 0.005,
+      "unit": "",
+      "explain": "Tỷ lệ duyệt: nhóm X là 120/200 = 0.60; nhóm Y là 135/300 = 0.45. Demographic parity difference = |0.60 − 0.45| = **0.15** (15 điểm phần trăm). Một dạng tỷ số hay dùng là disparate impact = 0.45/0.60 = 0.75 < 0.8, vi phạm 'quy tắc 4/5' trong thực hành tuyển dụng ở Mỹ. Lưu ý: **demographic parity** chỉ so tỷ lệ dự đoán dương, *không* nhìn nhãn thật; nếu tỷ lệ người thực sự trả được nợ khác nhau giữa hai nhóm thì ép parity có thể làm giảm độ chính xác – khi đó người ta xét thêm **equal opportunity** (TPR bằng nhau) hoặc **equalized odds** (TPR và FPR bằng nhau). Lỗi hay gặp: chia theo tổng số hồ sơ (120/500 và 135/500) thay vì theo từng nhóm."
+    },
+    {
+      "id": "ai101-045",
+      "sub": "Fairness metrics & impossibility",
+      "level": 3,
+      "type": "single",
+      "trap": true,
+      "q": "Hai nhóm có tỷ lệ dương tính thật (base rate) khác nhau và classifier không hoàn hảo. Phát biểu nào ĐÚNG về các tiêu chí fairness?",
+      "options": [
+        "Chỉ cần bỏ cột thuộc tính nhạy cảm (giới tính, dân tộc) khỏi tập feature là đã tự động đảm bảo được mọi tiêu chí fairness quan trọng",
+        "Nói chung không thể đồng thời thoả calibration theo nhóm và cân bằng cả FPR lẫn FNR giữa các nhóm (Kleinberg 2016, Chouldechova 2017)",
+        "Equalized odds yêu cầu tỷ lệ dự đoán dương bằng nhau giữa các nhóm, không cần quan tâm nhãn thật là gì",
+        "Demographic parity và equalized odds luôn tương đương nhau: đạt được một tiêu chí thì tự động đạt luôn tiêu chí còn lại"
+      ],
+      "answer": 1,
+      "explain": "Ba nhóm tiêu chí chính: **demographic parity** – P(ŷ = 1) bằng nhau giữa các nhóm (không nhìn nhãn thật); **equalized odds** (Hardt et al. 2016) – TPR **và** FPR bằng nhau giữa các nhóm (equal opportunity chỉ đòi TPR); **calibration theo nhóm** – điểm 0.7 nghĩa là 70% thật sự dương ở mọi nhóm. Định lý bất khả (Kleinberg et al.; Chouldechova – từ tranh cãi COMPAS) cho thấy khi base rate khác nhau và model không hoàn hảo, không thể thoả đồng thời calibration và cân bằng FPR/FNR → phải chọn tiêu chí theo bối cảnh và chi phí sai lầm. Bỏ thuộc tính nhạy cảm ('fairness through unawareness') thất bại vì các **proxy** (mã bưu chính, tên, trường học) vẫn mang thông tin. Phương án mô tả equalized odds thực ra là định nghĩa demographic parity – bẫy nhầm khái niệm."
+    },
+    {
+      "id": "ai101-046",
+      "sub": "Explainability (XAI)",
+      "level": 2,
+      "type": "multi",
+      "trap": false,
+      "q": "Chọn TẤT CẢ phát biểu ĐÚNG về explainability.",
+      "options": [
+        "SHAP dựa trên Shapley value: đóng góp các feature cộng lại bằng chênh lệch giữa dự đoán và giá trị cơ sở (base value)",
+        "LIME giải thích cục bộ bằng cách xấp xỉ model quanh một mẫu bằng model đơn giản, train trên các mẫu nhiễu loạn",
+        "Permutation importance không bị ảnh hưởng khi các feature tương quan mạnh, vì mỗi feature được xáo trộn riêng",
+        "Attention weight cao chứng minh token đó là nguyên nhân của dự đoán, nên attention map là lời giải thích trung thực",
+        "Feature importance cao nghĩa là feature có quan hệ nhân quả với target, có thể dùng để can thiệp trực tiếp"
+      ],
+      "answer": [
+        0,
+        1
+      ],
+      "explain": "**SHAP** (Lundberg & Lee 2017): mỗi feature nhận Shapley value – đóng góp biên trung bình trên mọi tập con feature; tính chất *additivity*: base value + Σ SHAP = dự đoán; dùng được cả cục bộ (một mẫu) lẫn toàn cục (tổng hợp). **LIME** (Ribeiro et al. 2016): sinh mẫu nhiễu loạn quanh x, fit model tuyến tính có trọng số theo khoảng cách – trực quan nhưng kết quả có thể không ổn định. **Attention ≠ explanation** (Jain & Wallace 2019): có thể đổi phân phối attention mà dự đoán gần như không đổi, nên attention chỉ là gợi ý, không phải bằng chứng nhân quả. Mọi loại feature importance đều mô tả *model dùng gì*, không phải quan hệ nhân quả trong thế giới thật. **Permutation importance** bị sai lệch khi feature tương quan: xáo một feature tạo ra mẫu phi thực tế, và feature tương quan 'gánh hộ' thông tin khiến importance bị chia nhỏ."
+    },
+    {
+      "id": "ai101-047",
+      "sub": "Privacy: federated learning & DP",
+      "level": 2,
+      "type": "single",
+      "trap": true,
+      "q": "Một bệnh viện tham gia **federated learning**: dữ liệu bệnh nhân không rời bệnh viện, chỉ gửi cập nhật mô hình lên server. Phát biểu nào ĐÚNG?",
+      "options": [
+        "Differential privacy nghĩa là mã hoá dữ liệu bằng khoá riêng của từng bệnh viện trước khi gửi lên server tổng hợp",
+        "Gradient/cập nhật gửi đi vẫn có thể làm lộ thông tin dữ liệu gốc; nên kết hợp secure aggregation và/hoặc differential privacy",
+        "Federated learning bắt buộc dữ liệu mọi bệnh viện cùng phân phối (i.i.d.); nếu không thì hoàn toàn không train được",
+        "Vì dữ liệu không rời bệnh viện nên federated learning tự động bảo đảm privacy tuyệt đối, không cần thêm biện pháp kỹ thuật nào khác"
+      ],
+      "answer": 1,
+      "explain": "**Federated learning** (FedAvg, McMahan et al. 2017): mỗi bên train cục bộ, server chỉ tổng hợp cập nhật – giảm việc di chuyển dữ liệu nhưng **không tự động** bảo đảm privacy: các tấn công như 'Deep Leakage from Gradients' có thể khôi phục mẫu train từ gradient, ngoài ra còn membership inference. Bổ sung: **secure aggregation** (server chỉ thấy tổng đã mã hoá) và **differential privacy**. DP là một bảo đảm *toán học*: kết quả thuật toán gần như không đổi khi thêm/bớt một bản ghi bất kỳ, tham số ε càng nhỏ thì privacy càng mạnh (đổi lại độ chính xác giảm); thực hiện bằng cách thêm nhiễu, vd DP-SGD = clip gradient từng mẫu + thêm nhiễu Gauss. DP không phải mã hoá. Dữ liệu non-IID là thách thức lớn (hội tụ chậm, lệch) nhưng vẫn train được với FedProx, cá nhân hoá… Bẫy: đồng nhất 'dữ liệu không rời máy' với 'privacy tuyệt đối'."
+    },
+    {
+      "id": "ai101-048",
+      "sub": "Adversarial examples",
+      "level": 1,
+      "type": "single",
+      "trap": false,
+      "q": "**Adversarial example** là gì?",
+      "options": [
+        "Prompt dài vượt quá context window khiến model cắt bớt nội dung và trả lời thiếu nhiều thông tin quan trọng",
+        "Mẫu bị gán nhãn sai trong tập train do annotator cố ý phá hoại, khiến model học sai ngay từ giai đoạn huấn luyện",
+        "Đầu vào bị thêm nhiễu nhỏ, gần như không nhận ra bằng mắt, được tối ưu để model dự đoán sai với độ tự tin cao",
+        "Ảnh chất lượng thấp (mờ, thiếu sáng) xuất hiện tự nhiên trong production mà model chưa từng gặp khi huấn luyện"
+      ],
+      "answer": 2,
+      "explain": "Adversarial example (Szegedy et al. 2013) là input x' = x + δ với ‖δ‖ rất nhỏ nhưng được **tối ưu có chủ đích** để model sai, vd FGSM (Goodfellow et al. 2014): x' = x + ε·sign(∇ₓL). Chúng thường **transfer** được sang model khác và tồn tại cả trong thế giới vật lý (sticker trên biển báo). Phòng thủ: adversarial training, input preprocessing, certified robustness – chưa có cách triệt để. Phân biệt các khái niệm gần: nhãn sai cố ý trong train là **data poisoning** (tấn công lúc train); ảnh mờ tự nhiên là **distribution shift / natural corruption** (vấn đề robustness nhưng không có kẻ tấn công tối ưu nhiễu); cắt prompt là giới hạn context. Với LLM, tương tự adversarial là jailbreak và prompt injection."
+    },
+    {
+      "id": "ai101-049",
+      "sub": "EU AI Act",
+      "level": 1,
+      "type": "single",
+      "trap": false,
+      "q": "**EU AI Act** (có hiệu lực từ 8/2024, áp dụng dần theo lộ trình) quản lý AI theo cách tiếp cận nào?",
+      "options": [
+        "Chỉ áp dụng cho công ty có trụ sở tại EU; doanh nghiệp ngoài EU phục vụ người dùng EU không chịu sự điều chỉnh",
+        "Cấm toàn bộ các mô hình vượt một ngưỡng số tham số nhất định, bất kể ứng dụng cụ thể hay mức độ ảnh hưởng của nó tới xã hội",
+        "Mọi hệ thống AI đều phải được cơ quan nhà nước cấp phép trước khi triển khai, kể cả bộ lọc spam hay game",
+        "Phân tầng theo rủi ro: cấm (vd social scoring), rủi ro cao (vd lọc CV tuyển dụng), minh bạch (vd chatbot), tối thiểu"
+      ],
+      "answer": 3,
+      "explain": "EU AI Act là khung pháp lý toàn diện đầu tiên về AI, tiếp cận **dựa trên rủi ro** của *ứng dụng*: (1) **rủi ro không chấp nhận được** – bị cấm (social scoring, thao túng gây hại, một số dạng nhận diện sinh trắc học từ xa theo thời gian thực ở nơi công cộng); (2) **rủi ro cao** – được phép nhưng phải có quản lý rủi ro, chất lượng dữ liệu, tài liệu kỹ thuật, giám sát của con người (tuyển dụng, chấm điểm tín dụng, giáo dục, hạ tầng trọng yếu, thiết bị y tế); (3) **nghĩa vụ minh bạch** – chatbot phải cho người dùng biết họ đang tương tác với AI, nội dung deepfake phải được gắn nhãn; (4) **rủi ro tối thiểu** (lọc spam, game) – không thêm nghĩa vụ. Luật áp dụng cả với nhà cung cấp ngoài EU đưa hệ thống vào thị trường EU. Mô hình general-purpose (GPAI) có nghĩa vụ riêng, nặng hơn với mô hình có 'rủi ro hệ thống', nhưng không bị cấm theo số tham số."
+    },
+    {
+      "id": "ai101-050",
+      "sub": "Triển khai AI có trách nhiệm",
+      "level": 2,
+      "type": "multi",
+      "trap": false,
+      "q": "Triển khai trợ lý AI trả lời câu hỏi về chính sách bảo hiểm cho khách hàng. Chọn TẤT CẢ thực hành ĐÚNG về responsible AI.",
+      "options": [
+        "Viết model card: mục đích sử dụng, giới hạn, dữ liệu đánh giá, hiệu năng theo từng nhóm và các rủi ro đã biết",
+        "Model nền đã qua RLHF thì đã aligned, nên không cần guardrail hay giám sát gì thêm sau khi triển khai",
+        "Human-in-the-loop: chuyển nhân viên duyệt các câu trả lời ảnh hưởng quyền lợi khách hoặc có độ tin cậy thấp",
+        "Grounding bằng tài liệu chính thức (RAG) kèm trích dẫn, cho phép trả lời 'không đủ thông tin' khi không tìm thấy",
+        "Đặt temperature = 0 là đủ loại bỏ hallucination, nên có thể bỏ bước đánh giá trên bộ câu hỏi thực tế"
+      ],
+      "answer": [
+        0,
+        2,
+        3
+      ],
+      "explain": "**Hallucination** giảm (không biến mất) nhờ grounding vào nguồn tin cậy, bắt buộc trích dẫn, cho phép từ chối/nói 'không biết', kiểm tra lại câu trả lời (self-check, verifier) và đánh giá liên tục trên dữ liệu thật. Temperature = 0 chỉ làm output tất định – model vẫn có thể tự tin trả lời sai. **Human-in-the-loop** dành cho quyết định rủi ro cao hoặc độ tin cậy thấp, nhưng cần thiết kế để tránh automation bias. **Model card** (Mitchell et al. 2019) và **datasheet/data card** (Gebru et al.) ghi rõ mục đích, giới hạn, dữ liệu, hiệu năng theo nhóm – nền tảng cho minh bạch và kiểm toán. **Alignment** là làm cho hành vi model khớp ý định và giá trị con người (helpful, honest, harmless); RLHF giúp nhưng không tuyệt đối (jailbreak, reward hacking), nên vẫn cần guardrail, giám sát sau triển khai và kênh phản hồi từ người dùng."
+    }
+  ]
+}

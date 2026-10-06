@@ -40,3 +40,9 @@ Mỗi chủ đề là 1 file `data/src/<id>.json`, UTF-8, đúng schema:
 - `notes`: phần tổng hợp kiến thức của chủ đề (cheat-sheet ôn tập), 6–12 mục, mỗi mục Markdown súc tích nhưng đầy đủ: định nghĩa, công thức, so sánh dạng bảng, con số cần nhớ, câu hỏi phỏng vấn hay gặp, lỗi thường gặp.
 - Tính đúng đắn là ưu tiên số 1. Với kiến thức thay đổi nhanh (MCP spec, model mới, API), chỉ hỏi điều đã được xác minh; nếu không chắc, kiểm tra bằng web search hoặc bỏ câu đó.
 - Validate: `python tools/validate.py data/src/<id>.json` phải ra `[OK]`.
+
+## Quy tắc bổ sung (rút ra từ vòng kiểm định)
+- UI **xáo trộn thứ tự options**: trong `q`/`explain` không nhắc phương án bằng chữ cái/vị trí ("A sai", "phương án 2"); nhắc bằng nội dung. Options không tham chiếu lẫn nhau. Tránh viết `(a)`, `b)`, `c)` trong văn bản (audit hiểu nhầm là nhãn). Bắt buộc giữ thứ tự thì thêm `"noShuffle": true`.
+- **Chống đoán theo độ dài**: đáp án đúng KHÔNG được thường xuyên là phương án dài nhất (mục tiêu ≤ 35% câu single) và cũng không thường xuyên ngắn nhất; độ dài TB đáp án đúng ≈ sai (chênh ≤ 15%), áp dụng cả câu multi. Distractor phải cụ thể, "nghe hợp lý".
+- Không dùng ký tự `U+FFFD` (�) thô trong nội dung.
+- Kiểm tra: `python tools/validate.py <file>` và `python tools/audit.py <file>`.

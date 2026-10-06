@@ -1,0 +1,837 @@
+{
+  "id": "math",
+  "name": "Nền tảng: Toán & Thống kê cho AI",
+  "icon": "∑",
+  "order": 10,
+  "notes": [
+    {
+      "title": "Vector, norm & similarity",
+      "md": "- **Dot product** a·b = Σ aᵢbᵢ = ‖a‖‖b‖·cos θ. Dương: cùng phía, 0: **trực giao**, âm: ngược phía.\n- **Norm**: ‖v‖₁ = Σ|vᵢ| · ‖v‖₂ = √Σvᵢ² · ‖v‖∞ = max|vᵢ|. Ví dụ (3, −4, 0, 12): 19 / 13 / 12.\n- **Cosine** = a·b / (‖a‖₂‖b‖₂) ∈ [−1, 1], chỉ đo hướng. Embedding đã L2-normalize → cosine = dot product (vector DB dùng inner product).\n- Khoảng cách Euclid với vector đơn vị: ‖a − b‖² = 2 − 2cos θ → xếp hạng theo L2 và cosine **trùng nhau**.\n- Pearson correlation = cosine của hai vector đã trừ mean.\n- Liên hệ: L1 → Lasso/sparse; L2 → weight decay, gradient clipping; L∞ → adversarial ε-ball."
+    },
+    {
+      "title": "Ma trận: shape, chi phí, tính chất",
+      "md": "| Phép | Shape | Ghi chú |\n|---|---|---|\n| (m×k)·(k×n) | m×n | m·k·n phép nhân, ≈ 2mkn FLOP |\n| outer u·vᵀ (u∈ℝᵐ, v∈ℝⁿ) | m×n | rank 1 |\n| Q·Kᵀ (T×d)(d×T) | T×T | O(T²d) mỗi head |\n\n- Nhân n×n thông thường O(n³). LLM forward ≈ 2·N FLOP/token.\n- **Không giao hoán**: AB ≠ BA. (AB)ᵀ = BᵀAᵀ, (AB)⁻¹ = B⁻¹A⁻¹.\n- 2×2: det[[a, b], [c, d]] = ad − bc; nghịch đảo = (1/det)·[[d, −b], [−c, a]]. det = 0 ⇔ rank < n ⇔ không khả nghịch ⇔ Ax = b vô nghiệm hoặc vô số nghiệm.\n- **Rank** = số hàng/cột độc lập tuyến tính.\n- **Broadcasting**: so từ chiều cuối, bằng nhau hoặc một bên = 1; thiếu chiều thì thêm 1 ở đầu. Bẫy kinh điển: (32, 1) − (32,) → (32, 32)."
+    },
+    {
+      "title": "Eigen, SVD, PCA, low-rank (LoRA)",
+      "md": "- **Eigen**: Av = λv. 2×2: λ² − (trace)·λ + det = 0; Σλ = trace, Πλ = det. Ví dụ [[4, 1], [2, 3]] → λ = 5 (v = (1, 1)), λ = 2 (v = (1, −2)).\n- Ma trận đối xứng: trị riêng thực, vector riêng trực giao.\n- **SVD**: A = UΣVᵀ cho mọi ma trận; σᵢ = √eig(AᵀA) ≥ 0. σᵢ = |λᵢ| chỉ đúng với ma trận đối xứng (tổng quát: normal), không đúng cho ma trận bất kỳ.\n- **Eckart–Young**: giữ k singular value lớn nhất = xấp xỉ rank-k tốt nhất.\n- **PCA** = SVD của X đã **center**; trục chính = cột V, phương sai giải thích = σᵢ²/(n − 1).\n- **LoRA**: ΔW = B·A, B ∈ ℝ^(d×r), A ∈ ℝ^(r×k) → r(d + k) tham số, rank ≤ r. d = k = 4096, r = 16 → 131,072 (≈ 0.78% của W)."
+    },
+    {
+      "title": "Đạo hàm & backprop",
+      "md": "| Hàm | Đạo hàm | Ghi chú |\n|---|---|---|\n| σ(z) | σ(1 − σ) | max 0.25 tại 0 → vanishing |\n| tanh z | 1 − tanh² | max 1, output (−1, 1) |\n| ReLU | 0 (z<0), 1 (z>0) | dead ReLU |\n| ln x | 1/x | |\n| eˣ | eˣ | |\n\n- **Chain rule**: ∂L/∂w = ∂L/∂h · ∂h/∂z · ∂z/∂w. Backprop = chain rule ngược, tái sử dụng gradient upstream.\n- **Softmax + cross-entropy**: ∂L/∂z = p − y (tổng = 0). Logistic + BCE: ∂L/∂w = (p − y)·x. Truyền **logits** vào `CrossEntropyLoss`.\n- **Jacobian** f: ℝⁿ→ℝᵐ: m×n. **Hessian**: n×n đối xứng; PD → min, ND → max, trị riêng trái dấu → saddle.\n- **Taylor bậc 1**: f(x + Δ) ≈ f(x) + f'(x)Δ → cơ sở của GD: L(θ − ηg) ≈ L(θ) − η‖g‖²."
+    },
+    {
+      "title": "Tối ưu: GD, learning rate, momentum, Lagrange",
+      "md": "- GD: θ ← θ − η∇L. f = (w − 3)², w₀ = 0, η = 0.1 → 0.6 → 1.08.\n- **Ổn định**: với hàm bậc hai có độ cong lớn nhất L, cần η < 2/L. f = w²: η < 1; η = 1 dao động, η > 1 phân kỳ. Đổi dấu ≠ phân kỳ.\n- **Lồi**: f'' ≥ 0 / Hessian PSD → local min = global min (linear/logistic regression). Neural net: không lồi, saddle phổ biến hơn local min tồi.\n- **Batch GD** chính xác nhưng đắt; **SGD/mini-batch** nhiễu không chệch, rẻ, giúp thoát saddle.\n- **Momentum** v ← βv + g: làm mượt, giữ quán tính; gradient không đổi → v → g/(1 − β) (β = 0.9 → 10g). Adam = momentum + chia √v (thích nghi theo từng tham số).\n- **Lagrange**: tối ưu có ràng buộc g = 0 ⇒ ∇f = λ∇g; λ = độ nhạy của giá trị tối ưu theo ràng buộc. Max entropy + ràng buộc → softmax/Gibbs."
+    },
+    {
+      "title": "Xác suất cơ bản & Bayes",
+      "md": "- P(A | B) = P(A ∩ B)/P(B). **Độc lập**: P(A ∩ B) = P(A)P(B). **Xung khắc** (P > 0) ⇒ KHÔNG độc lập.\n- **Bayes**: P(H | E) = P(E | H)P(H)/P(E); posterior ∝ likelihood × prior.\n- Bài kinh điển: prevalence 1%, sensitivity 99%, specificity 95% → P(bệnh | +) = 0.0099/0.0594 ≈ **16.7%** (không phải 99%: base rate neglect).\n- Mẹo: đếm trên 10,000 người thay vì dùng công thức.\n- Liên hệ: precision trên lớp hiếm thấp dù recall/specificity cao; Naive Bayes; diễn giải p-value sai cũng là nhầm P(E | H) với P(H | E)."
+    },
+    {
+      "title": "Phân phối, kỳ vọng, phương sai, CLT",
+      "md": "| Phân phối | E | Var | Dùng ở đâu |\n|---|---|---|---|\n| Bernoulli(p) | p | p(1−p) | BCE |\n| Binomial(n,p) | np | np(1−p) | pass@k, đếm thành công |\n| Poisson(λ) | λ | λ | số request/phút |\n| Uniform[a,b] | (a+b)/2 | (b−a)²/12 | random init |\n| N(μ,σ²) | μ | σ² | init, nhiễu diffusion, MSE |\n| Categorical(p) | – | – | softmax, next-token |\n\n- Var(aX + c) = a²Var(X); Var(X ± Y) = VarX + VarY ± 2Cov. Độc lập ⇒ Cov = 0 (ngược lại sai: Y = X²).\n- ρ = Cov/(σxσy) ∈ [−1, 1], chỉ đo tuyến tính, bất biến khi đổi đơn vị.\n- 68-95-99.7 cho ±1σ/±2σ/±3σ. Một đuôi > μ + 2σ ≈ 2.5%.\n- **LLN**: x̄ → μ. **CLT**: x̄ ≈ N(μ, σ²/n) với mọi phân phối có phương sai hữu hạn; dữ liệu gốc KHÔNG trở thành chuẩn.\n- q·k của vector d chiều (thành phần độc lập, mean 0, var 1) có Var = d → chia √d trong attention."
+    },
+    {
+      "title": "MLE & MAP ↔ loss & regularization",
+      "md": "- **MLE**: θ̂ = argmax Σ log p(xᵢ | θ) = argmin NLL.\n  - Bernoulli: p̂ = k/n; NLL = BCE. Categorical: NLL = cross-entropy (train LLM).\n  - Gaussian: μ̂ = x̄, σ̂² = (1/n)Σ(xᵢ − x̄)² (chệch); với σ cố định, MLE ⇔ MSE.\n- **MAP**: argmax [log p(D | θ) + log p(θ)].\n  - Prior Gaussian N(0, τ²) → **L2/Ridge/weight decay**, λ = σ²/τ².\n  - Prior Laplace → **L1/Lasso** (sparse).\n  - Prior đều → MAP = MLE.\n- Phương sai mẫu không chệch chia n − 1 (Bessel). NumPy `std` mặc định ddof=0, pandas/torch mặc định chia n − 1."
+    },
+    {
+      "title": "Lý thuyết thông tin cho LLM",
+      "md": "- **Entropy** H(P) = −Σp log p (bit nếu log₂, nats nếu ln). (1/2, 1/4, 1/8, 1/8) → 1.75 bit; đều K lớp → log₂K.\n- **Cross-entropy** H(P, Q) = −Σp log q = H(P) + KL(P ‖ Q) → train bằng CE = minimize forward KL.\n- **KL** = Σp log(p/q) ≥ 0, = 0 ⇔ P = Q, **bất đối xứng**, = ∞ nếu q = 0 mà p > 0. Ví dụ P = (0.5, 0.5), Q = (0.9, 0.1): 0.511 vs đảo chiều 0.368 nats.\n- Forward KL(P‖Q): mode-covering (MLE). Reverse KL(Q‖P): mode-seeking (VI, phạt KL trong RLHF).\n- **Mutual information** I(X; Y) = H(X) − H(X|Y) = KL(p(x,y) ‖ p(x)p(y)); = 0 ⇔ độc lập; InfoNCE tối đa cận dưới của MI.\n- **Perplexity** = exp(CE trung bình/token) cùng cơ số: loss 2.0 nats → e² ≈ 7.39.\n- **Temperature**: softmax(z/T); T < 1 nhọn, T > 1 phẳng, argmax không đổi.\n- **Log-sum-exp**: LSE(z) = m + log Σe^(zᵢ − m), m = max z; softmax(z) = softmax(z − c)."
+    },
+    {
+      "title": "Thống kê mô tả & suy diễn",
+      "md": "- Mean nhạy outlier; **median** bền (breakdown 50%); mode = giá trị hay gặp nhất. MSE ↔ mean, MAE ↔ median.\n- Std mẫu s = √(Σ(x − x̄)²/(n − 1)). **z** = (x − μ)/σ; Φ(1.5) ≈ 0.933, Φ(1.96) = 0.975.\n- **SE** = s/√n; CI 95% ≈ x̄ ± 1.96·SE. CI nói về **tham số** (mean), không phải từng quan sát. Giảm một nửa CI cần gấp 4 lần mẫu.\n- **p-value** = P(dữ liệu cực đoan như vậy | H₀), KHÔNG phải P(H₀ đúng). p lớn ≠ chứng minh H₀.\n- **Loại I** (α): bác bỏ H₀ đúng – false positive. **Loại II** (β): bỏ sót hiệu ứng thật. Power = 1 − β.\n- **A/B** hai tỷ lệ: z = (p₂ − p₁)/√(p̂(1 − p̂)(1/n₁ + 1/n₂)); |z| > 1.96 → có ý nghĩa ở 5%. Tránh peeking và multiple testing.\n- **Correlation ≠ causation** (confounder). **Simpson's paradox**: xu hướng trong từng nhóm đảo ngược khi gộp → so trên cùng eval set/phân tầng.\n- **Sampling/selection bias**: mẫu tự nguyện, survivorship, eval contamination."
+    },
+    {
+      "title": "Số thực trên máy tính",
+      "md": "| Kiểu | Sign/Exp/Mantissa | Max | eps (quanh 1) | Ghi chú |\n|---|---|---|---|---|\n| fp32 | 1/8/23 | ~3.4e38 | 2⁻²³ ≈ 1.2e-7 | master weights |\n| fp16 | 1/5/10 | 65504 | 2⁻¹⁰ ≈ 9.8e-4 | cần loss scaling |\n| bf16 | 1/8/7 | ~3.4e38 | 2⁻⁷ ≈ 7.8e-3 | range như fp32 |\n| fp64 | 1/11/52 | ~1.8e308 | 2⁻⁵² | khoa học |\n\n- Exponent → **range**, mantissa → **precision**.\n- Overflow: exp(z) tràn fp32 khi z > ~88.7, fp16 khi z > ~11.1 → trừ max trong softmax.\n- Underflow: gradient < ~6e-8 thành 0 trong fp16 → loss scaling.\n- bf16: 256 + 1 = 256 (khoảng cách 2 trong [256, 512)) → accumulate ở fp32.\n- Bộ nhớ: 7B tham số × 2 byte = 14 GB (bf16)."
+    }
+  ],
+  "questions": [
+    {
+      "id": "math-001",
+      "sub": "Cosine similarity",
+      "level": 1,
+      "type": "numeric",
+      "trap": false,
+      "q": "Hai embedding (rút gọn còn 3 chiều) là `a = (1, 2, 2)` và `b = (2, 0, 1)`. Tính **cosine similarity** cos(a, b). Làm tròn 3 chữ số thập phân.",
+      "answer": 0.596,
+      "tolerance": 0.002,
+      "unit": "",
+      "explain": "Công thức: cos θ = a·b / (‖a‖₂ · ‖b‖₂). Tích vô hướng: a·b = 1·2 + 2·0 + 2·1 = 4. Norm: ‖a‖₂ = √(1 + 4 + 4) = 3; ‖b‖₂ = √(4 + 0 + 1) = √5 ≈ 2.236. Vậy cos ≈ 4 / (3 · 2.236) = 4 / 6.708 ≈ **0.596** (góc ≈ 53.4°). Trực giác: cosine chỉ đo **hướng**, bỏ qua độ dài; giá trị trong [−1, 1], bằng 0 khi hai vector trực giao. Trong RAG, nếu embedding đã L2-normalize (‖v‖ = 1) thì cosine = dot product, nên vector DB hay dùng inner product cho nhanh. Lỗi hay gặp: quên chia norm (ra 4) hoặc lấy nhầm norm L1 (‖a‖₁ = 5, ‖b‖₁ = 3 → 0.267)."
+    },
+    {
+      "id": "math-002",
+      "sub": "Norm L1/L2/L∞",
+      "level": 1,
+      "type": "single",
+      "trap": false,
+      "q": "Cho vector `v = (3, −4, 0, 12)`. Bộ giá trị nào đúng cho ‖v‖₁, ‖v‖₂, ‖v‖∞?",
+      "options": [
+        "‖v‖₁ = 11, ‖v‖₂ = 13, ‖v‖∞ = 12",
+        "‖v‖₁ = 19, ‖v‖₂ = 169, ‖v‖∞ = 12",
+        "‖v‖₁ = 19, ‖v‖₂ = 13, ‖v‖∞ = 12",
+        "‖v‖₁ = 19, ‖v‖₂ = √19, ‖v‖∞ = 4"
+      ],
+      "answer": 2,
+      "explain": "‖v‖₁ = Σ|vᵢ| = 3 + 4 + 0 + 12 = 19. ‖v‖₂ = √(Σvᵢ²) = √(9 + 16 + 0 + 144) = √169 = 13. ‖v‖∞ = max|vᵢ| = 12. Các bẫy: cộng mà không lấy trị tuyệt đối cho 3 − 4 + 0 + 12 = 11; quên khai căn cho 169 (đó là ‖v‖₂², chính là đại lượng mà L2 regularization λ‖w‖₂² dùng); √19 là nhầm sang căn của norm L1, còn 4 là trị tuyệt đối của phần tử âm chứ không phải phần tử lớn nhất. Liên hệ ML: L1 → Lasso tạo trọng số thưa; L2 → weight decay, gradient clipping theo norm, chuẩn hoá embedding; L∞ → ràng buộc nhiễu adversarial (FGSM thay mỗi pixel tối đa ε)."
+    },
+    {
+      "id": "math-003",
+      "sub": "Shape & FLOP của matmul",
+      "level": 2,
+      "type": "numeric",
+      "trap": false,
+      "q": "Một lớp Linear trong FFN: input `X` shape (512, 768) (512 token, d_model = 768), trọng số `W` shape (768, 3072). Tính số FLOP của phép `X @ W`, với quy ước 1 phép nhân + 1 phép cộng = 2 FLOP, tức FLOP ≈ 2·m·k·n. Đơn vị **GFLOP** (1 GFLOP = 10⁹ FLOP), làm tròn 2 chữ số thập phân.",
+      "answer": 2.42,
+      "tolerance": 0.01,
+      "unit": "GFLOP",
+      "explain": "Quy tắc shape: (m×k)·(k×n) → (m×n), chiều trong k phải khớp và 'biến mất': (512×768)·(768×3072) → (512×3072). Mỗi phần tử output là một dot product dài k = 768, tức 768 phép nhân và khoảng 768 phép cộng. Số phần tử output m·n = 512·3072 = 1,572,864, nên số phép nhân = m·k·n = 512·768·3072 = 1,207,959,552. FLOP ≈ 2·m·k·n ≈ 2.416·10⁹ → **2.42 GFLOP**. Nhân hai ma trận n×n theo cách thông thường tốn O(n³). Đây cũng là gốc của quy tắc ước lượng 'forward ≈ 2·N FLOP mỗi token' cho LLM có N tham số: mỗi trọng số tham gia đúng 1 phép nhân + 1 phép cộng. Bẫy: quên hệ số 2 sẽ ra 1.21."
+    },
+    {
+      "id": "math-004",
+      "sub": "Shape trong attention",
+      "level": 1,
+      "type": "single",
+      "trap": false,
+      "q": "Trong self-attention, `Q` và `K` có shape (batch, heads, T, d_head) = (8, 12, 128, 64). Tính `scores = Q @ K.transpose(-2, -1)`. Shape của `scores` và chi phí tính toán theo T, d (mỗi head) là gì?",
+      "options": [
+        "(8, 12, 64, 64); chi phí O(T·d²) cho mỗi head",
+        "(8, 12, 128, 128); chi phí O(T²·d) cho mỗi head",
+        "(8, 12, 128, 64); chi phí O(T·d) cho mỗi head",
+        "(8, 12, 64, 128); chi phí O(T²·d²) cho mỗi head"
+      ],
+      "answer": 1,
+      "explain": "`transpose(-2, -1)` đổi chỗ hai chiều cuối của K → (8, 12, 64, 128). Với matmul batched, các chiều đầu (8, 12) được coi là batch; hai chiều cuối nhân như ma trận: (128×64)·(64×128) → (128×128). Ý nghĩa: mỗi token query có một điểm số với mọi token key, nên score là ma trận T×T. Chi phí mỗi head = T·d·T = O(T²·d), bộ nhớ cho ma trận score O(T²) – lý do context dài rất tốn và FlashAttention tránh lưu toàn bộ ma trận này. Shape (64, 64) sẽ là kết quả nếu nhân Qᵀ·K (cộng dồn theo chiều token) – không phải attention score. Shape (8, 12, 128, 64) là output của bước sau `softmax(scores) @ V`, không phải của `scores`."
+    },
+    {
+      "id": "math-005",
+      "sub": "Broadcasting",
+      "level": 2,
+      "type": "single",
+      "trap": true,
+      "q": "Bạn tự viết MSE trong PyTorch: `y_pred` có shape (32, 1) (output của `nn.Linear(..., 1)`), còn `y` có shape (32,). Code: `loss = ((y_pred - y) ** 2).mean()`. Điều gì xảy ra?",
+      "options": [
+        "Báo lỗi shape mismatch ngay lập tức vì (32, 1) và (32,) không có cùng số chiều",
+        "Chạy bình thường, `y_pred - y` có shape (32,) và loss đúng như mong muốn",
+        "Chạy được, kết quả có shape (32, 1) vì PyTorch tự squeeze các chiều kích thước 1",
+        "Broadcasting tạo tensor (32, 32) gồm mọi cặp chênh lệch; loss sai mà không hề báo lỗi"
+      ],
+      "answer": 3,
+      "explain": "Quy tắc broadcasting (NumPy/PyTorch): so khớp shape từ **chiều cuối** về trước; hai chiều tương thích nếu bằng nhau hoặc một bên bằng 1; tensor ít chiều hơn được thêm chiều 1 ở đầu. (32, 1) và (32,) → (32, 1) và (1, 32) → kết quả (32, 32), với phần tử [i, j] = y_pred[i] − y[j]. Loss trở thành trung bình của 1024 cặp chênh lệch thay vì 32 – model vẫn train nhưng học sai, và không có exception nào (riêng `F.mse_loss` chỉ in warning). Không có cơ chế tự squeeze, và cũng không báo lỗi vì hai shape tương thích theo quy tắc trên. Sửa: `y_pred.squeeze(-1)` hoặc `y.unsqueeze(-1)`, và luôn `assert` shape. Ví dụ broadcasting hữu ích: (3, 1) + (4,) → (3, 4), chính là 'outer sum'."
+    },
+    {
+      "id": "math-006",
+      "sub": "Determinant, rank, nghịch đảo",
+      "level": 1,
+      "type": "multi",
+      "trap": false,
+      "q": "Cho ma trận `M = [[2, 1], [4, 2]]`. Chọn TẤT CẢ phát biểu đúng.",
+      "options": [
+        "rank(M) = 1 vì hàng thứ hai bằng 2 lần hàng thứ nhất",
+        "M⁻¹ tồn tại và bằng (1/det)·[[2, −1], [−4, 2]]",
+        "det(M) = 2·2 − 1·4 = 0",
+        "rank(M) = 2 vì M có 2 hàng và không hàng nào toàn số 0",
+        "Hệ M·x = b có thể vô nghiệm hoặc vô số nghiệm tuỳ vector b"
+      ],
+      "answer": [
+        0,
+        2,
+        4
+      ],
+      "explain": "Determinant 2×2: det[[a, b], [c, d]] = ad − bc = 2·2 − 1·4 = 0. det = 0 ⇔ các hàng/cột phụ thuộc tuyến tính ⇔ rank < n ⇔ không khả nghịch. Hình học: M ép cả mặt phẳng xuống một đường thẳng (diện tích bị nhân với |det| = 0). Hàng 2 = 2 × hàng 1 nên chỉ có 1 hướng độc lập → rank = 1; rank đếm số hàng **độc lập tuyến tính**, không phải số hàng khác 0. Công thức nghịch đảo (1/det)·[[d, −b], [−c, a]] chỉ dùng được khi det ≠ 0, ở đây phải chia cho 0. Với M·x = b: nếu b nằm trong column space (vd b = (1, 2)) thì vô số nghiệm; nếu không (vd b = (1, 0)) thì vô nghiệm. So sánh: N = [[2, 1], [1, 1]] có det = 1, N⁻¹ = [[1, −1], [−1, 2]], hệ N·x = b luôn có nghiệm duy nhất x = N⁻¹b."
+    },
+    {
+      "id": "math-007",
+      "sub": "Eigenvalue / eigenvector 2×2",
+      "level": 2,
+      "type": "single",
+      "trap": false,
+      "q": "Cho `A = [[4, 1], [2, 3]]`. Trị riêng (eigenvalue) và vector riêng tương ứng của A là gì?",
+      "options": [
+        "λ = 5 với vector riêng (1, 1); λ = 2 với vector riêng (1, −2)",
+        "λ = 4 và λ = 3 (phần tử đường chéo), vector riêng (1, 0) và (0, 1)",
+        "λ = 7 và λ = 10 (trace và det), vector riêng (1, 1) và (1, −1)",
+        "λ = 5 với vector riêng (1, −2); λ = 2 với vector riêng (1, 1)"
+      ],
+      "answer": 0,
+      "explain": "Giải phương trình đặc trưng det(A − λI) = 0: (4 − λ)(3 − λ) − 1·2 = λ² − 7λ + 10 = 0 → λ = 5 hoặc λ = 2. Mẹo kiểm tra: tổng các λ = trace = 4 + 3 = 7, tích các λ = det = 12 − 2 = 10. Vector riêng: (A − 5I)v = 0 với A − 5I = [[−1, 1], [2, −2]] → v = (1, 1); kiểm tra A·(1, 1) = (5, 5) = 5·(1, 1). (A − 2I) = [[2, 1], [2, 1]] → v = (1, −2); A·(1, −2) = (2, −4) = 2·(1, −2). Phần tử đường chéo chỉ là trị riêng khi ma trận là đường chéo/tam giác; trace và det là tổng và tích của trị riêng chứ không phải trị riêng. Ghép ngược vector riêng thì A·(1, −2) = (2, −4) ≠ 5·(1, −2). Liên hệ AI: eigenvector của covariance matrix là các hướng thành phần chính (PCA); trị riêng lớn nhất của Hessian quyết định learning rate tối đa còn ổn định."
+    },
+    {
+      "id": "math-008",
+      "sub": "LoRA & low-rank",
+      "level": 2,
+      "type": "numeric",
+      "trap": false,
+      "q": "Ma trận chiếu `W` kích thước 4096×4096 được fine-tune bằng **LoRA rank r = 16**: ΔW = B·A với B ∈ ℝ^(4096×16), A ∈ ℝ^(16×4096), W đóng băng. Số tham số trainable của LoRA cho ma trận này là bao nhiêu? (số nguyên, đơn vị: tham số)",
+      "answer": 131072,
+      "tolerance": 0,
+      "unit": "tham số",
+      "explain": "B có 4096·16 = 65,536 tham số, A có 16·4096 = 65,536 → tổng r·(d + k) = 16·(4096 + 4096) = **131,072**. So với W đầy đủ 4096² = 16,777,216 tham số thì chỉ ≈ 0.78%. ΔW = B·A có rank ≤ 16 vì nó là tổng của 16 ma trận rank-1 (outer product của cột thứ i của B với hàng thứ i của A). Cơ sở toán: theo SVD và định lý Eckart–Young, giữ r singular value lớn nhất cho xấp xỉ rank-r tốt nhất; LoRA giả thuyết rằng phần cập nhật khi fine-tune có 'intrinsic rank' thấp nên chỉ cần học trực tiếp dạng low-rank. Bẫy: chỉ tính một ma trận (65,536) hoặc tính r² = 256; cũng lưu ý ΔW = BA có cùng shape 4096×4096 với W nên merge được vào W khi inference."
+    },
+    {
+      "id": "math-009",
+      "sub": "SVD & PCA",
+      "level": 3,
+      "type": "multi",
+      "trap": false,
+      "q": "Chọn TẤT CẢ phát biểu đúng về SVD và PCA.",
+      "options": [
+        "PCA trên dữ liệu đã center tương đương SVD của X; các trục chính là các cột của V",
+        "Singular value của A luôn bằng trị tuyệt đối eigenvalue của A với mọi ma trận vuông",
+        "Mọi ma trận thực, kể cả không vuông, đều có SVD A = UΣVᵀ với singular value ≥ 0",
+        "PCA không cần center dữ liệu vì SVD đã tự loại bỏ mean của từng feature",
+        "Giữ k singular value lớn nhất cho xấp xỉ rank-k tốt nhất theo Frobenius norm"
+      ],
+      "answer": [
+        0,
+        2,
+        4
+      ],
+      "explain": "SVD tồn tại cho mọi ma trận m×n: U, V trực giao, Σ đường chéo với σᵢ ≥ 0 xếp giảm dần; σᵢ = √(eigenvalue của AᵀA). Chỉ với ma trận đối xứng (tổng quát hơn là normal) thì σᵢ = |λᵢ|; phản ví dụ [[1, 1], [0, 1]] có trị riêng 1, 1 nhưng singular value ≈ 1.618 và 0.618. Eckart–Young: cắt SVD còn k thành phần cho xấp xỉ rank-k tối ưu theo Frobenius (và spectral) norm – nền tảng của nén ma trận, LSA, và trực giác cho LoRA. PCA: với X đã trừ mean, covariance C = XᵀX/(n − 1) = VΣ²Vᵀ/(n − 1), nên trục chính là cột của V và phương sai giải thích = σᵢ²/(n − 1). SVD không tự trừ mean; nếu quên center, thành phần đầu tiên thường chỉ trỏ về phía vector mean chứ không phải hướng biến thiên lớn nhất."
+    },
+    {
+      "id": "math-010",
+      "sub": "Outer product",
+      "level": 1,
+      "type": "single",
+      "trap": false,
+      "q": "Cho u ∈ ℝ³ và v ∈ ℝ⁴ là các vector cột khác 0. Ma trận M = u·vᵀ (outer product) có tính chất gì?",
+      "options": [
+        "M là một số vô hướng bằng Σ uᵢ·vᵢ",
+        "M có shape 4×3 và rank bằng 3",
+        "Không xác định vì u và v khác số chiều",
+        "M có shape 3×4 và rank bằng 1"
+      ],
+      "answer": 3,
+      "explain": "Outer product (3×1)·(1×4) → ma trận 3×4 với M[i, j] = uᵢ·vⱼ. Mỗi hàng của M là vᵀ nhân với một hệ số uᵢ, nên mọi hàng cùng phương → rank = 1. Ví dụ u = (1, 2, 3), v = (1, 0, −1, 2): hàng 1 = (1, 0, −1, 2), hàng 2 = (2, 0, −2, 4), hàng 3 = (3, 0, −3, 6). Inner product uᵀv mới ra số vô hướng, và nó đòi hai vector cùng số chiều; outer product thì không cần. Shape 4×3 là của v·uᵀ. Liên hệ AI: LoRA ΔW = B·A là tổng của r outer product nên rank ≤ r; covariance matrix là trung bình các outer product (x − μ)(x − μ)ᵀ; outer sum/product cũng xuất hiện khi broadcasting (3, 1) với (1, 4)."
+    },
+    {
+      "id": "math-011",
+      "sub": "Tính chất phép toán ma trận",
+      "level": 1,
+      "type": "single",
+      "trap": true,
+      "q": "Với A, B là các ma trận vuông cùng kích thước, chọn phát biểu **SAI**.",
+      "options": [
+        "AB = BA với mọi cặp ma trận vuông A, B cùng kích thước",
+        "(AB)ᵀ = BᵀAᵀ với mọi cặp ma trận vuông cùng kích thước",
+        "(AB)⁻¹ = B⁻¹A⁻¹ khi cả hai ma trận đều khả nghịch",
+        "(Aᵀ)ᵀ = A và IA = AI = A với I là ma trận đơn vị"
+      ],
+      "answer": 0,
+      "explain": "Phép nhân ma trận **không giao hoán**. Phản ví dụ: A = [[0, 1], [0, 0]], B = [[0, 0], [1, 0]] cho AB = [[1, 0], [0, 0]] còn BA = [[0, 0], [0, 1]]. Hệ quả: (A + B)² = A² + AB + BA + B² chứ không phải A² + 2AB + B², và thứ tự `x @ W` khác `W @ x`. Transpose của tích đảo thứ tự: kiểm bằng shape, (m×k)(k×n) chuyển vị thành (n×m) = (n×k)(k×m) = BᵀAᵀ. Nghịch đảo của tích cũng đảo thứ tự (như 'cởi giày trước rồi mới cởi tất'): (AB)(B⁻¹A⁻¹) = A(BB⁻¹)A⁻¹ = I. Ma trận đơn vị I là phần tử trung hoà của phép nhân và chuyển vị hai lần trả về ma trận gốc – đều đúng."
+    },
+    {
+      "id": "math-012",
+      "sub": "Đạo hàm sigmoid",
+      "level": 1,
+      "type": "numeric",
+      "trap": false,
+      "q": "Cho σ(z) = 1 / (1 + e^(−z)). Tính đạo hàm σ'(z) tại z = 2. Làm tròn 3 chữ số thập phân.",
+      "answer": 0.105,
+      "tolerance": 0.001,
+      "unit": "",
+      "explain": "Công thức gọn: σ'(z) = σ(z)·(1 − σ(z)). σ(2) = 1 / (1 + e^(−2)) = 1 / (1 + 0.1353) ≈ 0.8808 → σ'(2) ≈ 0.8808 · 0.1192 ≈ **0.105**. σ' đạt cực đại 0.25 tại z = 0 và tiến về 0 khi |z| lớn (sigmoid bão hoà). Mạng sâu dùng sigmoid nhân nhiều thừa số ≤ 0.25 khi backprop → **vanishing gradient**, lý do các mạng hiện đại dùng ReLU/GELU. Cũng nhờ σ' = σ(1 − σ) mà gradient của logistic regression với BCE rút gọn thành (p − y)·x. Bẫy: trả lời σ(2) ≈ 0.881 (giá trị hàm) thay vì đạo hàm."
+    },
+    {
+      "id": "math-013",
+      "sub": "Chain rule tính tay",
+      "level": 1,
+      "type": "numeric",
+      "trap": false,
+      "q": "Một neuron: z = w·x + b, h = ReLU(z), loss L = (h − t)². Với w = 2, x = 3, b = −1, t = 7, tính ∂L/∂w bằng chain rule (số nguyên).",
+      "answer": -12,
+      "tolerance": 0,
+      "unit": "",
+      "explain": "Forward: z = 2·3 − 1 = 5; h = ReLU(5) = 5; L = (5 − 7)² = 4. Backward theo chain rule ∂L/∂w = ∂L/∂h · ∂h/∂z · ∂z/∂w: ∂L/∂h = 2(h − t) = −4; ∂h/∂z = 1 vì z > 0; ∂z/∂w = x = 3. Tích = −4 · 1 · 3 = **−12**. Dấu âm nghĩa là tăng w sẽ giảm loss; gradient descent w ← w − η·(−12) đúng là tăng w. Nếu b = −10 thì z = −4 < 0, ReLU' = 0 và gradient bằng 0 – hiện tượng 'dead ReLU'. Backprop chính là chain rule áp dụng từ loss ngược về, tái sử dụng gradient 'upstream' (ở đây −4) cho mọi tham số phía trước, nên chi phí chỉ cỡ một lần forward."
+    },
+    {
+      "id": "math-014",
+      "sub": "Gradient softmax + cross-entropy",
+      "level": 2,
+      "type": "numeric",
+      "trap": false,
+      "q": "Logits cho 3 lớp là z = (2, 1, 0); nhãn đúng là lớp có logit 2 (one-hot y = (1, 0, 0)). Với L = CrossEntropy(softmax(z), y), tính ∂L/∂z₁ – đạo hàm theo logit của **lớp đúng**. Làm tròn 3 chữ số thập phân.",
+      "answer": -0.335,
+      "tolerance": 0.002,
+      "unit": "",
+      "explain": "softmax: e² ≈ 7.389, e¹ ≈ 2.718, e⁰ = 1, tổng ≈ 11.107 → p ≈ (0.665, 0.245, 0.090). Kết quả kinh điển: ∂L/∂z = p − y = (0.665 − 1, 0.245, 0.090) = (**−0.335**, 0.245, 0.090). Chứng minh: L = −z_y + log Σⱼ e^(zⱼ), nên ∂L/∂zᵢ = −1[i = y] + pᵢ. Trực giác: gradient đẩy logit lớp đúng lên và các lớp khác xuống, tỷ lệ với xác suất model đang gán sai; tổng các thành phần gradient luôn bằng 0. Vì gradient gọn và ổn định như vậy nên framework gộp log_softmax + NLL: `nn.CrossEntropyLoss` nhận **logits**, đừng tự softmax trước. Với LLM, đây chính là gradient tại mỗi vị trí token trên toàn bộ vocab. Bẫy: trả lời p₁ = 0.665 hoặc quên dấu."
+    },
+    {
+      "id": "math-015",
+      "sub": "Đạo hàm hàm kích hoạt",
+      "level": 1,
+      "type": "multi",
+      "trap": false,
+      "q": "Chọn TẤT CẢ phát biểu đúng về đạo hàm của các hàm kích hoạt.",
+      "options": [
+        "tanh(z) có output trong khoảng (0, 1) nên thường dùng ở lớp xác suất",
+        "σ'(z) = σ(z)·(1 − σ(z)), đạt cực đại 0.25 tại z = 0",
+        "ReLU'(z) = 0 khi z < 0 và bằng 1 khi z > 0",
+        "σ'(z) đạt cực đại bằng 1 nên sigmoid không gây vanishing gradient",
+        "tanh'(z) = 1 − tanh²(z), đạt cực đại bằng 1 tại z = 0"
+      ],
+      "answer": [
+        1,
+        2,
+        4
+      ],
+      "explain": "σ'(z) = σ(1 − σ) ≤ 0.25 (tại z = 0, σ = 0.5 → 0.5·0.5), nên mạng sâu toàn sigmoid dễ vanishing gradient; phát biểu 'cực đại bằng 1' là sai. tanh(z) = 2σ(2z) − 1 có output trong (−1, 1), zero-centered; tanh' = 1 − tanh² đạt 1 tại 0 nên gradient tốt hơn sigmoid nhưng vẫn bão hoà khi |z| lớn. Lớp xác suất dùng sigmoid (nhị phân) hoặc softmax (nhiều lớp), không dùng tanh. ReLU' = 1 khi z > 0 (gradient đi qua nguyên vẹn, không bão hoà) và 0 khi z < 0 (neuron có thể 'chết'); tại đúng z = 0 không khả vi, PyTorch quy ước dùng 0. LLM hiện đại dùng GELU/SiLU (SwiGLU) – các phiên bản trơn của ReLU, có gradient nhỏ khác 0 ở vùng âm."
+    },
+    {
+      "id": "math-016",
+      "sub": "Jacobian, Hessian, điểm dừng",
+      "level": 2,
+      "type": "multi",
+      "trap": false,
+      "q": "Chọn TẤT CẢ phát biểu đúng.",
+      "options": [
+        "Gradient bằng 0 tại một điểm luôn đảm bảo điểm đó là cực tiểu cục bộ",
+        "Jacobian của f: ℝⁿ → ℝᵐ là ma trận m×n, hàng thứ i là gradient của fᵢ",
+        "Tại điểm có gradient bằng 0, Hessian có cả trị riêng dương và âm thì đó là saddle point",
+        "Hessian của hàm vô hướng khả vi bậc hai liên tục là ma trận n×n đối xứng",
+        "Hessian của mạng n tham số chỉ tốn O(n) bộ nhớ nên thường được tính đầy đủ"
+      ],
+      "answer": [
+        1,
+        2,
+        3
+      ],
+      "explain": "Jacobian gom mọi đạo hàm riêng ∂fᵢ/∂xⱼ thành ma trận m×n; với hàm vô hướng (m = 1) nó chính là gradient (dạng hàng). Backprop thực chất là nhân chuỗi vector–Jacobian. Hessian H[i, j] = ∂²f/∂xᵢ∂xⱼ, đối xứng theo định lý Schwarz. Phân loại điểm dừng (∇f = 0): H xác định dương → cực tiểu; xác định âm → cực đại; có trị riêng trái dấu → saddle. Ví dụ 1 chiều f(x) = x³ − 3x: f'(x) = 3x² − 3 = 0 tại x = ±1; f''(1) = 6 > 0 → cực tiểu, f''(−1) = −6 < 0 → cực đại. Còn x³ tại 0 có f' = 0 nhưng chỉ là điểm uốn, nên 'gradient = 0 ⇒ cực tiểu' là sai. Ví dụ 2 chiều x² − y² có saddle tại gốc. Hessian cần n² phần tử: model 7B tham số → 4.9·10¹⁹ phần tử, không thể lưu; thực tế dùng Hessian-vector product hoặc xấp xỉ đường chéo (Adam có thể xem là một dạng tiền điều kiện đường chéo). Trong không gian rất nhiều chiều, saddle point phổ biến hơn nhiều so với local minimum tồi."
+    },
+    {
+      "id": "math-017",
+      "sub": "Taylor bậc 1",
+      "level": 1,
+      "type": "numeric",
+      "trap": false,
+      "q": "Dùng **xấp xỉ Taylor bậc 1** f(x + Δ) ≈ f(x) + f'(x)·Δ cho f(x) = √x quanh x = 4 để ước lượng √4.1. Làm tròn 3 chữ số thập phân.",
+      "answer": 2.025,
+      "tolerance": 0.001,
+      "unit": "",
+      "explain": "f'(x) = 1 / (2√x) → f'(4) = 1/4 = 0.25. Với Δ = 0.1: √4.1 ≈ 2 + 0.25 · 0.1 = **2.025**. Giá trị thật ≈ 2.02485; sai số ≈ 1.5·10⁻⁴ tỷ lệ với Δ² (đến từ số hạng bậc 2 f''(x)·Δ²/2 bị bỏ qua). Liên hệ tối ưu: gradient descent dựa trên chính xấp xỉ này. L(θ − η·g) ≈ L(θ) − η·‖g‖² < L(θ) khi η đủ nhỏ. Khi η lớn, xấp xỉ tuyến tính không còn đúng nên loss có thể tăng – đó là lý do learning rate quá lớn làm phân kỳ. Newton's method dùng thêm bậc 2 (Hessian) để chọn bước tốt hơn nhưng đắt."
+    },
+    {
+      "id": "math-018",
+      "sub": "Gradient descent tính tay",
+      "level": 1,
+      "type": "numeric",
+      "trap": false,
+      "q": "Tối thiểu f(w) = (w − 3)² bằng gradient descent, khởi tạo w₀ = 0, learning rate η = 0.1. Giá trị w₂ sau **2 bước** cập nhật là bao nhiêu? Làm tròn 2 chữ số thập phân.",
+      "answer": 1.08,
+      "tolerance": 0.005,
+      "unit": "",
+      "explain": "f'(w) = 2(w − 3); quy tắc cập nhật w ← w − η·f'(w). Bước 1: f'(0) = −6 → w₁ = 0 − 0.1·(−6) = 0.6. Bước 2: f'(0.6) = 2·(0.6 − 3) = −4.8 → w₂ = 0.6 + 0.48 = **1.08**. Nhận xét: khoảng cách tới nghiệm tối ưu w* = 3 bị nhân với (1 − 2η) = 0.8 mỗi bước: 3 → 2.4 → 1.92. Gradient âm nghĩa là phải **tăng** w; lỗi hay gặp là cộng gradient thay vì trừ (đi ngược hướng, w₁ = −0.6). Với hàm bậc hai, GD hội tụ tuyến tính (sai số giảm theo cấp số nhân); η càng gần ngưỡng ổn định thì càng nhanh, vượt ngưỡng thì phân kỳ."
+    },
+    {
+      "id": "math-019",
+      "sub": "Learning rate & ổn định",
+      "level": 3,
+      "type": "multi",
+      "trap": false,
+      "q": "Tối thiểu f(w) = w² bằng gradient descent từ w₀ = 1, cập nhật w ← w − η·2w = (1 − 2η)·w. Chọn TẤT CẢ phát biểu đúng.",
+      "options": [
+        "Với η = 0.5, w đạt đúng 0 chỉ sau 1 bước",
+        "Với η = 1.5, hội tụ nhanh hơn η = 0.5 vì bước đi lớn hơn",
+        "Với η = 0.1, w giảm đơn điệu về 0, mỗi bước nhân với 0.8",
+        "Với η = 0.75, phân kỳ vì w đổi dấu sau mỗi bước cập nhật",
+        "Với η = 1.0, w dao động mãi giữa 1 và −1, không hội tụ"
+      ],
+      "answer": [
+        0,
+        2,
+        4
+      ],
+      "explain": "Hệ số co là r = 1 − 2η; hội tụ ⇔ |r| < 1 ⇔ 0 < η < 1. η = 0.1 → r = 0.8 (giảm đơn điệu). η = 0.5 → r = 0, tới nghiệm sau 1 bước. η = 0.75 → r = −0.5: w đổi dấu mỗi bước (1, −0.5, 0.25, ...) nhưng |w| vẫn giảm nên vẫn **hội tụ** – đổi dấu không đồng nghĩa với phân kỳ. η = 1.0 → r = −1, dao động ±1 mãi mãi. η = 1.5 → r = −2, |w| gấp đôi mỗi bước → phân kỳ. Tổng quát: với hàm bậc hai có độ cong lớn nhất L (trị riêng lớn nhất của Hessian, ở đây L = 2), GD ổn định khi η < 2/L. Liên hệ thực tế: loss spike/NaN khi LR quá lớn, lý do cần warmup và LR schedule; hướng có độ cong lớn quyết định LR tối đa, còn hướng phẳng thì hội tụ chậm – động lực cho momentum và Adam."
+    },
+    {
+      "id": "math-020",
+      "sub": "Hàm lồi",
+      "level": 1,
+      "type": "multi",
+      "trap": false,
+      "q": "Hàm nào sau đây là **hàm lồi** (convex) trên miền xác định đã cho? (chọn tất cả)",
+      "options": [
+        "f(x) = x² trên toàn ℝ",
+        "f(x) = sin x trên toàn ℝ",
+        "f(x) = |x| trên toàn ℝ",
+        "f(x) = x³ trên toàn ℝ",
+        "f(x) = −log x với x > 0"
+      ],
+      "answer": [
+        0,
+        2,
+        4
+      ],
+      "explain": "Định nghĩa: f lồi nếu f(λx + (1 − λ)y) ≤ λf(x) + (1 − λ)f(y) – dây cung luôn nằm trên đồ thị. Với hàm khả vi bậc 2: lồi ⇔ f'' ≥ 0 (nhiều chiều: Hessian nửa xác định dương). x²: f'' = 2 > 0. |x|: lồi dù không khả vi tại 0 (kiểm bằng định nghĩa). −log x: f'' = 1/x² > 0 – vì vậy negative log-likelihood của logistic regression là bài toán lồi. sin x có f'' = −sin x đổi dấu; x³ có f'' = 6x < 0 khi x < 0, nên cả hai không lồi trên ℝ. Ý nghĩa: với hàm lồi, mọi cực tiểu địa phương đều là cực tiểu toàn cục, nên GD với LR phù hợp sẽ tìm được nghiệm tối ưu (linear/logistic regression, SVM). Loss của neural network theo tham số thì **không lồi**."
+    },
+    {
+      "id": "math-021",
+      "sub": "Momentum",
+      "level": 2,
+      "type": "numeric",
+      "trap": false,
+      "q": "SGD với momentum: v ← β·v + g, θ ← θ − η·v, với β = 0.9 và v₀ = 0. Gradient ở 3 bước liên tiếp là g₁ = 1, g₂ = 2, g₃ = −1. Tính v₃. Làm tròn 2 chữ số thập phân.",
+      "answer": 1.61,
+      "tolerance": 0.01,
+      "unit": "",
+      "explain": "v₁ = 0.9·0 + 1 = 1; v₂ = 0.9·1 + 2 = 2.9; v₃ = 0.9·2.9 + (−1) = 2.61 − 1 = **1.61**. Dù g₃ âm, v₃ vẫn dương: momentum 'nhớ' hướng cũ nên tham số vẫn tiếp tục đi theo hướng trước đó. Trực giác: hòn bi lăn có quán tính – làm mượt nhiễu của gradient mini-batch, giảm dao động qua lại ở thung lũng hẹp, và tăng tốc theo hướng nhất quán. Nếu gradient không đổi g thì v tiến tới g/(1 − β) = 10g, tức bước hiệu dụng gấp ~10 lần. So sánh: batch GD dùng gradient trên toàn bộ dữ liệu (chính xác nhưng đắt mỗi bước); SGD/mini-batch dùng ước lượng nhiễu không chệch, rẻ hơn và nhiễu còn giúp thoát saddle. Adam dùng EMA m = β₁m + (1 − β₁)g (có bias correction) kết hợp chia cho √v."
+    },
+    {
+      "id": "math-022",
+      "sub": "Nhân tử Lagrange",
+      "level": 2,
+      "type": "single",
+      "trap": false,
+      "q": "Tìm cực đại f(x, y) = x·y với ràng buộc x + y = 10 bằng **nhân tử Lagrange** (L = f − λ·g, với g = x + y − 10). Điều kiện tối ưu và nghiệm là gì?",
+      "options": [
+        "∇f = 0 cho x = y = 0, nên f = 0 là cực đại có ràng buộc",
+        "∇f = λ∇g cho y = λ và x = λ, suy ra x = y = 5 và f = 25",
+        "∇f vuông góc ∇g cho x = 10, y = 0, nên nghiệm nằm ở biên",
+        "λ = 0 nên ràng buộc không ảnh hưởng và f không bị chặn trên"
+      ],
+      "answer": 1,
+      "explain": "Tại điểm tối ưu có ràng buộc, gradient của f phải **song song** với gradient của ràng buộc: ∇f = λ∇g. Ở đây ∇f = (y, x), ∇g = (1, 1) → y = λ, x = λ → x = y; thay vào ràng buộc → x = y = 5, f = 25. Hình học: đường đồng mức của f tiếp xúc với đường ràng buộc. λ = 5 có nghĩa 'giá bóng': nếu ràng buộc là x + y = c thì f* = c²/4, df*/dc = c/2 = 5 = λ. Giải ∇f = 0 là bỏ qua ràng buộc (gốc toạ độ không thoả x + y = 10); điểm (10, 0) cho f = 0, rõ ràng kém hơn 25; λ = 5 ≠ 0 nên ràng buộc thực sự 'active'. Liên hệ AI: cực đại entropy với ràng buộc Σpᵢ = 1 và kỳ vọng năng lượng cố định cho ra phân phối Gibbs, tức softmax; SVM dual, KKT cho ràng buộc bất đẳng thức, ràng buộc KL trong TRPO đều dùng Lagrange."
+    },
+    {
+      "id": "math-023",
+      "sub": "Bayes – xét nghiệm bệnh",
+      "level": 1,
+      "type": "numeric",
+      "trap": true,
+      "q": "Một bệnh có tỷ lệ mắc 1% trong dân số. Xét nghiệm có sensitivity P(dương | bệnh) = 99% và specificity P(âm | không bệnh) = 95%. Một người ngẫu nhiên có kết quả **dương tính**. Xác suất người đó thật sự mắc bệnh là bao nhiêu? (đơn vị %, làm tròn 1 chữ số thập phân)",
+      "answer": 16.7,
+      "tolerance": 0.2,
+      "unit": "%",
+      "explain": "Bayes: P(bệnh | +) = P(+ | bệnh)·P(bệnh) / P(+), với P(+) = 0.99·0.01 + 0.05·0.99 = 0.0099 + 0.0495 = 0.0594. Vậy P = 0.0099 / 0.0594 ≈ **16.7%**. Đếm tự nhiên với 10,000 người: 100 người bệnh → 99 dương thật; 9,900 người khoẻ → 5% = 495 dương giả. Trong 594 người dương tính chỉ 99 người bệnh. Bẫy **base rate neglect**: trả lời 99% (nhầm P(+ | bệnh) với P(bệnh | +)). Prior thấp (1%) khiến dương giả áp đảo. Liên hệ ML: classifier phát hiện fraud/nội dung độc hại trên lớp hiếm có thể accuracy cao mà precision rất thấp; posterior ∝ likelihood × prior."
+    },
+    {
+      "id": "math-024",
+      "sub": "Độc lập vs xung khắc",
+      "level": 1,
+      "type": "single",
+      "trap": true,
+      "q": "Hai biến cố G và H có P(G) = 0.3, P(H) = 0.4 và **xung khắc** (không thể cùng xảy ra). Phát biểu nào đúng?",
+      "options": [
+        "G và H độc lập vì chúng không hề ảnh hưởng gì đến nhau",
+        "G và H độc lập vì P(G ∪ H) = P(G) + P(H) = 0.7",
+        "G và H không độc lập vì P(G ∩ H) = 0 khác P(G)·P(H) = 0.12",
+        "Không thể kết luận vì đề chưa cho xác suất có điều kiện"
+      ],
+      "answer": 2,
+      "explain": "Định nghĩa độc lập: P(G ∩ H) = P(G)·P(H), tương đương P(G | H) = P(G). Xung khắc nghĩa là P(G ∩ H) = 0, trong khi P(G)·P(H) = 0.12 ≠ 0 → **không độc lập**. Trực giác: biết G xảy ra thì chắc chắn H không xảy ra, tức P(H | G) = 0 ≠ 0.4 – đây là phụ thuộc rất mạnh, ngược với cảm giác 'không liên quan'. Công thức P(G ∪ H) = P(G) + P(H) là hệ quả của xung khắc, không nói gì về độc lập. Thông tin đã đủ để kết luận vì xác suất có điều kiện suy ra ngay được: P(G | H) = P(G ∩ H)/P(H) = 0. Chỉ khi một trong hai biến cố có xác suất 0 thì xung khắc và độc lập mới cùng lúc đúng."
+    },
+    {
+      "id": "math-025",
+      "sub": "Kỳ vọng & phương sai",
+      "level": 2,
+      "type": "numeric",
+      "trap": true,
+      "q": "X và Y **độc lập**, Var(X) = 4, Var(Y) = 9. Tính Var(2X − Y + 3).",
+      "answer": 25,
+      "tolerance": 0,
+      "unit": "",
+      "explain": "Quy tắc: Var(a·X + k) = a²·Var(X) – hằng số cộng thêm chỉ dịch chuyển, không đổi độ phân tán; hệ số bị **bình phương**. Var(X ± Y) = Var(X) + Var(Y) ± 2Cov(X, Y), và Cov = 0 khi độc lập. Vậy Var(2X − Y + 3) = 2²·4 + (−1)²·9 = 16 + 9 = **25** (độ lệch chuẩn = 5). Bẫy hay gặp: 2·4 − 9 = −1 (phương sai không bao giờ âm), 16 − 9 = 7 (quên rằng dấu trừ cũng bị bình phương), hoặc cộng thêm 3. Kỳ vọng thì tuyến tính: E[2X − Y + 3] = 2E[X] − E[Y] + 3. Liên hệ AI: tích vô hướng q·k của hai vector d chiều có thành phần độc lập, kỳ vọng 0, phương sai 1 có phương sai d → attention chia √d; Xavier/He init chọn Var(w) = 1/n_in hoặc 2/n_in để giữ phương sai activation ổn định qua các lớp."
+    },
+    {
+      "id": "math-026",
+      "sub": "Covariance & correlation",
+      "level": 2,
+      "type": "multi",
+      "trap": true,
+      "q": "Chọn TẤT CẢ phát biểu đúng về covariance và hệ số tương quan Pearson.",
+      "options": [
+        "X, Y độc lập thì Cov(X, Y) = 0",
+        "Cov(X, Y) = 0 thì X và Y chắc chắn độc lập",
+        "Hệ số tương quan Pearson luôn nằm trong đoạn [−1, 1]",
+        "Correlation 0.9 chứng tỏ biến này là nguyên nhân gây ra biến kia",
+        "Đổi đơn vị X (nhân 1000) làm Cov đổi nhưng Pearson giữ nguyên"
+      ],
+      "answer": [
+        0,
+        2,
+        4
+      ],
+      "explain": "Cov(X, Y) = E[(X − μx)(Y − μy)]; ρ = Cov / (σx·σy) ∈ [−1, 1] (bất đẳng thức Cauchy–Schwarz). Độc lập ⇒ Cov = 0, nhưng chiều ngược lại sai: X ~ Uniform(−1, 1), Y = X² có Cov = E[X³] − E[X]·E[X²] = 0 dù Y hoàn toàn phụ thuộc X. Pearson chỉ đo quan hệ **tuyến tính**; quan hệ phi tuyến cần mutual information hoặc tương quan hạng (Spearman). Nhân X với a > 0 thì Cov nhân a nhưng σx cũng nhân a nên ρ không đổi (scale-invariant); a < 0 thì ρ đổi dấu. Correlation ≠ causation: có thể do biến gây nhiễu (confounder) hoặc nhân quả ngược chiều. Liên hệ: Pearson correlation chính là cosine similarity của hai vector đã trừ mean."
+    },
+    {
+      "id": "math-027",
+      "sub": "Các phân phối cơ bản",
+      "level": 1,
+      "type": "multi",
+      "trap": false,
+      "q": "Chọn TẤT CẢ phát biểu đúng về các phân phối xác suất.",
+      "options": [
+        "Poisson(λ): kỳ vọng bằng λ, phương sai bằng λ²",
+        "Bernoulli(p): kỳ vọng p, phương sai p(1 − p)",
+        "Gaussian N(μ, σ²): mean = median = mode = μ",
+        "Categorical đều trên K lớp có entropy bằng K bit",
+        "Uniform liên tục trên [a, b]: phương sai = (b − a)²/12"
+      ],
+      "answer": [
+        1,
+        2,
+        4
+      ],
+      "explain": "Bernoulli(p) – một lần thử thành công/thất bại: E = p, Var = p(1 − p), lớn nhất tại p = 0.5; là phân phối nền của binary cross-entropy. Poisson(λ) – số sự kiện trong một khoảng thời gian (số request/phút): E = Var = λ, không phải λ². Uniform trên [a, b]: E = (a + b)/2, Var = (b − a)²/12. Gaussian đối xứng nên mean = median = mode = μ; dùng trong khởi tạo trọng số, nhiễu của diffusion, giả định sai số của MSE. Categorical(p₁..p_K) là output của softmax / phân phối token tiếp theo của LLM; nếu đều thì entropy = log₂K bit (K = 8 → 3 bit), không phải K bit. Binomial(n, p) là tổng n Bernoulli độc lập: E = np, Var = np(1 − p)."
+    },
+    {
+      "id": "math-028",
+      "sub": "Binomial",
+      "level": 1,
+      "type": "numeric",
+      "trap": false,
+      "q": "Một LLM-judge chấm **pass** cho mỗi câu trả lời một cách độc lập với xác suất p = 0.3. Chấm 5 câu. Tính P(có **đúng 2** câu pass). Làm tròn 4 chữ số thập phân.",
+      "answer": 0.3087,
+      "tolerance": 0.0005,
+      "unit": "",
+      "explain": "Số câu pass X ~ Binomial(n = 5, p = 0.3): P(X = k) = C(n, k)·pᵏ·(1 − p)ⁿ⁻ᵏ. P(X = 2) = C(5, 2)·0.3²·0.7³ = 10 · 0.09 · 0.343 = **0.3087**. Bẫy: quên hệ số tổ hợp C(5, 2) = 10 (số cách chọn 2 câu pass trong 5) → 0.0309; hoặc dùng 0.3²·0.7² (sai số mũ). Kỳ vọng E[X] = np = 1.5, phương sai np(1 − p) = 1.05. Liên hệ pass@k: xác suất có ít nhất 1 pass trong 5 lần = 1 − 0.7⁵ ≈ 0.832 – cách tính quen thuộc khi đánh giá sinh code nhiều lần."
+    },
+    {
+      "id": "math-029",
+      "sub": "Quy tắc 68-95-99.7",
+      "level": 1,
+      "type": "numeric",
+      "trap": false,
+      "q": "Latency của một API xấp xỉ phân phối chuẩn N(μ = 200 ms, σ = 20 ms). Dùng **quy tắc 68-95-99.7** (không tra bảng z), khoảng bao nhiêu % request có latency **lớn hơn 240 ms**? (đơn vị %, làm tròn 1 chữ số thập phân)",
+      "answer": 2.5,
+      "tolerance": 0.3,
+      "unit": "%",
+      "explain": "240 ms = μ + 2σ. Theo quy tắc, ~95% giá trị nằm trong [μ − 2σ, μ + 2σ] = [160, 240] → 5% nằm ngoài, chia đều hai đuôi → **2.5%** ở phía trên 240 ms (giá trị chính xác từ bảng z ≈ 2.28%). Bẫy: trả lời 5% (quên rằng đó là tổng của hai đuôi). Nhắc lại: ±1σ ≈ 68%, ±2σ ≈ 95%, ±3σ ≈ 99.7%. Thực tế latency thường lệch phải (long tail), nên p99 thật thường xấu hơn nhiều so với dự đoán Gaussian – hãy đo percentile thực nghiệm thay vì suy từ mean và std."
+    },
+    {
+      "id": "math-030",
+      "sub": "CLT & luật số lớn",
+      "level": 2,
+      "type": "single",
+      "trap": true,
+      "q": "Phát biểu nào mô tả ĐÚNG Central Limit Theorem (CLT)?",
+      "options": [
+        "Khi số mẫu n đủ lớn, bản thân dữ liệu thu thập được sẽ dần có phân phối gần chuẩn",
+        "Trung bình mẫu hội tụ về kỳ vọng thật, còn phân phối của nó luôn giữ hình dạng của dữ liệu gốc",
+        "CLT chỉ áp dụng khi dữ liệu gốc đã chuẩn sẵn; dữ liệu lệch thì phải dùng luật số lớn thay thế",
+        "Trung bình mẫu của n mẫu i.i.d. (phương sai hữu hạn) có phân phối xấp xỉ chuẩn với độ lệch chuẩn σ/√n"
+      ],
+      "answer": 3,
+      "explain": "CLT nói về **phân phối của trung bình mẫu**: (x̄ − μ)/(σ/√n) → N(0, 1) khi n lớn, với dữ liệu i.i.d. có phương sai hữu hạn, bất kể phân phối gốc (lệch, rời rạc...). Bản thân dữ liệu không đổi phân phối khi lấy thêm mẫu: latency lệch phải vẫn lệch phải dù có 1 triệu request. Luật số lớn (LLN) chỉ nói x̄ → μ; CLT nói thêm về **hình dạng và độ rộng** của dao động quanh μ, nên phát biểu 'giữ hình dạng gốc' sai. CLT không cần dữ liệu gốc chuẩn – đó chính là sức mạnh của nó (ngoại lệ: phân phối Cauchy không có phương sai hữu hạn). Ứng dụng: khoảng tin cậy cho accuracy trên eval set, A/B test; sai số chuẩn σ/√n nghĩa là muốn giảm sai số 2 lần cần gấp 4 lần số mẫu."
+    },
+    {
+      "id": "math-031",
+      "sub": "MLE Gaussian",
+      "level": 2,
+      "type": "single",
+      "trap": true,
+      "q": "Dữ liệu [2, 4, 6, 8] được giả định i.i.d. từ N(μ, σ²). Ước lượng **MLE** của (μ, σ²) là:",
+      "options": [
+        "μ̂ = 5 và σ̂² = 5 (chia cho n)",
+        "μ̂ = 5 và σ̂² ≈ 6.67 (chia cho n − 1)",
+        "μ̂ = 5 và σ̂² = √5 ≈ 2.24",
+        "μ̂ = 5 và σ̂² = 20 (tổng bình phương)"
+      ],
+      "answer": 0,
+      "explain": "Log-likelihood: ℓ(μ, σ²) = −(n/2)·log(2πσ²) − Σ(xᵢ − μ)²/(2σ²). Đạo hàm theo μ bằng 0 → μ̂ = x̄ = 5. Đạo hàm theo σ² bằng 0 → σ̂² = (1/n)·Σ(xᵢ − μ̂)² = (9 + 1 + 1 + 9)/4 = 20/4 = **5**. Bẫy: 6.67 là phương sai mẫu **không chệch** (Bessel, chia n − 1), không phải MLE. MLE của σ² bị chệch: E[σ̂²] = (n − 1)/n·σ², chệch đáng kể khi n nhỏ. √5 là độ lệch chuẩn, còn 20 là tổng bình phương chưa chia. Liên hệ: với σ cố định, cực đại likelihood Gaussian ⇔ cực tiểu MSE; MLE của Bernoulli là p̂ = k/n, và cực đại likelihood Bernoulli ⇔ cực tiểu binary cross-entropy. Train LLM = MLE trên phân phối categorical của token tiếp theo."
+    },
+    {
+      "id": "math-032",
+      "sub": "MAP & regularization",
+      "level": 2,
+      "type": "single",
+      "trap": false,
+      "q": "Trong linear regression (nhiễu Gaussian), đặt prior **Gaussian N(0, τ²)** độc lập cho mỗi trọng số rồi tìm ước lượng **MAP**. Bài toán tối ưu tương đương là gì?",
+      "options": [
+        "Minimize MSE + λ‖w‖₁ (Lasso / L1), với λ tỷ lệ thuận với τ²",
+        "Minimize MSE + λ‖w‖₂² (Ridge / L2), với λ tỷ lệ nghịch với τ²",
+        "Minimize MSE thuần, vì prior không ảnh hưởng tới nghiệm MAP",
+        "Maximize MSE − λ‖w‖₂², vì MAP là cực đại xác suất hậu nghiệm"
+      ],
+      "answer": 1,
+      "explain": "MAP: ŵ = argmax p(w | data) = argmax [log p(data | w) + log p(w)] = argmin [−log p(data | w) − log p(w)]. Nhiễu Gaussian → −log p(data | w) ∝ Σ(y − wᵀx)²/(2σ²), tức MSE. Prior Gaussian → −log p(w) = ‖w‖₂²/(2τ²) + hằng số → số hạng L2 với λ = σ²/τ²: prior càng hẹp (τ nhỏ, niềm tin w gần 0 càng mạnh) thì λ càng lớn. Prior **Laplace** mới cho L1 (Lasso, sparse). Prior đều (uniform) thì MAP = MLE, còn prior Gaussian thì có ảnh hưởng. MAP cực đại posterior, tương đương **cực tiểu** loss có regularization, chứ không cực đại MSE. Liên hệ: weight decay trong train mạng nơ-ron có thể xem như prior Gaussian lên trọng số."
+    },
+    {
+      "id": "math-033",
+      "sub": "Entropy",
+      "level": 1,
+      "type": "numeric",
+      "trap": false,
+      "q": "Biến ngẫu nhiên rời rạc có phân phối P = (1/2, 1/4, 1/8, 1/8). Tính entropy H(P) theo đơn vị **bit** (log cơ số 2). Làm tròn 2 chữ số thập phân.",
+      "answer": 1.75,
+      "tolerance": 0.01,
+      "unit": "bit",
+      "explain": "H(P) = −Σ pᵢ·log₂ pᵢ = 1/2·1 + 1/4·2 + 1/8·3 + 1/8·3 = 0.5 + 0.5 + 0.375 + 0.375 = **1.75 bit**. Trực giác: entropy là số bit trung bình tối thiểu để mã hoá một mẫu – mã tối ưu ở đây là 0, 10, 110, 111 với độ dài trung bình đúng 1.75 bit. Phân phối đều trên 4 giá trị cho entropy cực đại log₂4 = 2 bit; phân phối chắc chắn (one-hot) có entropy 0. Đổi đơn vị: nats = bit × ln 2 ≈ 1.213 nats (PyTorch dùng log tự nhiên). Liên hệ LLM: entropy của phân phối token tiếp theo đo độ 'phân vân' của model; temperature thấp làm entropy giảm."
+    },
+    {
+      "id": "math-034",
+      "sub": "Perplexity",
+      "level": 1,
+      "type": "single",
+      "trap": false,
+      "q": "Khi train LLM, `nn.CrossEntropyLoss` (log tự nhiên) báo loss trung bình mỗi token = 2.0 trên tập validation. Perplexity tương ứng xấp xỉ bao nhiêu?",
+      "options": [
+        "≈ 4.00, tức 2 mũ 2.0",
+        "≈ 100, tức 10 mũ 2.0",
+        "≈ 7.39, tức e mũ 2.0",
+        "≈ 0.135, tức e mũ −2.0"
+      ],
+      "answer": 2,
+      "explain": "Perplexity = exp(cross-entropy trung bình mỗi token), với cùng cơ số log đã dùng để tính loss. Loss của PyTorch tính bằng nats (ln) → PPL = e² ≈ **7.39**. Trực giác: model 'phân vân' như thể đang chọn đều giữa khoảng 7.4 token ở mỗi bước. 2² = 4 chỉ đúng nếu loss tính bằng bit (log₂). e^(−2) ≈ 0.135 là trung bình nhân của xác suất model gán cho token đúng; perplexity là nghịch đảo của nó nên luôn ≥ 1. Lưu ý: chỉ so sánh perplexity giữa các model dùng cùng tokenizer, vì PPL theo token phụ thuộc cách chia token."
+    },
+    {
+      "id": "math-035",
+      "sub": "KL divergence tính tay",
+      "level": 2,
+      "type": "numeric",
+      "trap": false,
+      "q": "Phân phối thật P = (0.5, 0.5), model Q = (0.9, 0.1). Tính KL(P ‖ Q) theo **nats** (log tự nhiên). Làm tròn 3 chữ số thập phân.",
+      "answer": 0.511,
+      "tolerance": 0.002,
+      "unit": "nats",
+      "explain": "KL(P ‖ Q) = Σ pᵢ·log(pᵢ/qᵢ) = 0.5·ln(0.5/0.9) + 0.5·ln(0.5/0.1) = 0.5·(−0.588) + 0.5·(1.609) ≈ **0.511 nats**. Từng số hạng có thể âm nhưng tổng luôn ≥ 0 (bất đẳng thức Gibbs). Đổi chiều: KL(Q ‖ P) = 0.9·ln(1.8) + 0.1·ln(0.2) ≈ 0.529 − 0.161 = 0.368 ≠ 0.511 → KL **bất đối xứng**. Liên hệ với cross-entropy: H(P, Q) = H(P) + KL(P ‖ Q) = ln 2 + 0.511 ≈ 1.204 nats. Ứng dụng: knowledge distillation tối thiểu KL(teacher ‖ student) trên softmax có temperature; RLHF/PPO và DPO phạt độ lệch KL giữa policy và reference model."
+    },
+    {
+      "id": "math-036",
+      "sub": "Tính chất KL & mutual information",
+      "level": 2,
+      "type": "multi",
+      "trap": false,
+      "q": "Chọn TẤT CẢ phát biểu đúng.",
+      "options": [
+        "KL(P ‖ Q) luôn hữu hạn, kể cả khi Q gán xác suất 0 cho sự kiện mà P > 0",
+        "Cross-entropy H(P, Q) = H(P) + KL(P ‖ Q), nên với P cố định, minimize CE ⇔ minimize KL",
+        "KL(P ‖ Q) ≥ 0, bằng 0 khi và chỉ khi P = Q",
+        "KL đối xứng nên là một metric khoảng cách đúng nghĩa giữa hai phân phối",
+        "Mutual information I(X; Y) = 0 khi và chỉ khi X và Y độc lập"
+      ],
+      "answer": [
+        1,
+        2,
+        4
+      ],
+      "explain": "KL ≥ 0 và = 0 ⇔ P = Q (Gibbs/Jensen). Vì H(P, Q) = H(P) + KL(P ‖ Q) và H(P) là hằng số với dữ liệu cố định, train bằng cross-entropy chính là tối thiểu KL từ phân phối dữ liệu tới model. KL không đối xứng và không thoả bất đẳng thức tam giác nên không phải metric (Jensen–Shannon divergence là phiên bản đối xứng). Nếu tồn tại x với P(x) > 0 mà Q(x) = 0 thì số hạng P(x)·log(P(x)/0) = ∞ – lý do cần label smoothing, epsilon, hoặc không để model gán xác suất đúng bằng 0. Mutual information I(X; Y) = H(X) − H(X | Y) = KL(p(x, y) ‖ p(x)p(y)): lượng thông tin về X thu được khi biết Y; bằng 0 ⇔ độc lập, và bắt được cả quan hệ phi tuyến mà correlation bỏ sót. Contrastive loss (InfoNCE) tối đa một cận dưới của MI."
+    },
+    {
+      "id": "math-037",
+      "sub": "Forward vs reverse KL",
+      "level": 3,
+      "type": "single",
+      "trap": false,
+      "q": "Xấp xỉ một phân phối P có **hai mode** tách rời bằng một Gaussian đơn Q. So sánh việc minimize forward KL(P ‖ Q) với reverse KL(Q ‖ P) theo tham số của Q:",
+      "options": [
+        "Forward KL: Q bám chặt vào một mode; reverse KL: Q trải rộng phủ cả hai mode",
+        "Hai hướng cho cùng nghiệm vì đổi chiều KL chỉ làm thay đổi một hằng số cộng",
+        "Forward KL không xác định với Gaussian nên thực tế chỉ dùng được reverse KL",
+        "Forward KL: Q trải rộng phủ cả hai mode; reverse KL: Q bám chặt vào một mode"
+      ],
+      "answer": 3,
+      "explain": "Forward KL = E_P[log P/Q]: nơi P > 0 mà Q ≈ 0 bị phạt cực nặng → Q phải phủ toàn bộ khối xác suất của P (**mode-covering**, zero-avoiding); với Gaussian đơn, Q đặt mean ở giữa và trải rộng qua cả hai mode, kể cả vùng P ≈ 0. Reverse KL = E_Q[log Q/P]: phạt Q đặt xác suất vào nơi P ≈ 0 → Q chọn nằm gọn trong một mode (**mode-seeking**, zero-forcing). Hai hướng cho nghiệm khác hẳn nhau (KL bất đối xứng), và forward KL hoàn toàn tính được với Gaussian. Liên hệ AI: train bằng MLE/cross-entropy là forward KL (dữ liệu → model) nên LLM có xu hướng phủ đa dạng; variational inference và số hạng phạt KL(π_θ ‖ π_ref) trong RLHF thuộc dạng reverse, nghiêng về mode-seeking; một số phương pháp distillation (vd MiniLLM) chủ động dùng reverse KL để student tập trung vào mode chính của teacher."
+    },
+    {
+      "id": "math-038",
+      "sub": "Log-sum-exp ổn định số học",
+      "level": 2,
+      "type": "single",
+      "trap": false,
+      "q": "Cần tính `logsumexp(z) = log Σ exp(zᵢ)` với z = (1000, 1000, 1000) trong float32. Cách tính ổn định và kết quả đúng (log tự nhiên) là gì?",
+      "options": [
+        "Trừ max m = 1000 rồi tính m + log Σ exp(zᵢ − m) = 1000 + ln 3 ≈ 1001.10",
+        "Tính trực tiếp: exp(1000) tràn số thành inf nên giá trị này không thể tính được",
+        "Trừ max m = 1000: kết quả đúng bằng m = 1000 vì mỗi exp(0) = 1 không đóng góp gì",
+        "Trừ trung bình 1000 rồi cộng lại: kết quả ≈ 1000 + 3 = 1003 vì có ba phần tử"
+      ],
+      "answer": 0,
+      "explain": "Đẳng thức: log Σ e^(zᵢ) = m + log Σ e^(zᵢ − m) với m = max(z). Sau khi trừ max, mọi số mũ ≤ 0 nên không tràn số, và có ít nhất một số hạng bằng 1 nên không bị log(0). Ở đây Σ e⁰ = 3 → kết quả = 1000 + ln 3 ≈ **1001.10**. Tính trực tiếp thì tràn (fp32 tràn khi z > ~88.7, fp16 khi z > ~11.1), nhưng giá trị đúng hoàn toàn tính được bằng mẹo trên. Quên rằng log 3 ≠ 0 (ra 1000) hoặc quên lấy log (ra 1003) là lỗi tính toán. Luôn có max(z) ≤ LSE(z) ≤ max(z) + ln n. Liên hệ: softmax(z) = softmax(z − k) với mọi hằng số k, nên mọi implementation softmax/cross-entropy đều trừ max; FlashAttention dùng 'online softmax' giữ running max để tính từng block."
+    },
+    {
+      "id": "math-039",
+      "sub": "Softmax temperature",
+      "level": 2,
+      "type": "single",
+      "trap": false,
+      "q": "Logits của 2 token là (2, 0). Với p = softmax(z / T), xác suất của token có logit 2 khi **T = 0.5** và khi **T = 2** lần lượt xấp xỉ là:",
+      "options": [
+        "0.731 và 0.982",
+        "0.982 và 0.731",
+        "0.881 và 0.881",
+        "0.982 và 0.500"
+      ],
+      "answer": 1,
+      "explain": "Với 2 lớp, softmax quy về sigmoid của hiệu logit: p = σ((2 − 0)/T). T = 1: σ(2) ≈ 0.881. T = 0.5: σ(4) ≈ **0.982** (phân phối nhọn hơn). T = 2: σ(1) ≈ **0.731** (phẳng hơn). T < 1 làm sắc (T → 0 tiến tới argmax/greedy), T > 1 làm phẳng (T → ∞ tiến tới phân phối đều). Temperature không đổi thứ tự xếp hạng nên argmax giữ nguyên, nhưng xác suất thì đổi – vì vậy 0.881 cho cả hai là sai. 0.5 chỉ đạt khi T → ∞. Liên hệ: sampling LLM với temperature; knowledge distillation dùng T > 1 để lộ 'dark knowledge' về các lớp sai, và nhân loss với T² để giữ độ lớn gradient."
+    },
+    {
+      "id": "math-040",
+      "sub": "Mean vs median & outlier",
+      "level": 1,
+      "type": "single",
+      "trap": false,
+      "q": "Lương (triệu đồng/tháng) của 5 người trong một team: 10, 12, 13, 15, 200 (người cuối là CEO). Nhận xét nào đúng?",
+      "options": [
+        "Mean = 13 và median = 50; mean bền vững hơn với outlier nên nên dùng mean",
+        "Mean = 50 và median = 13; mode = 200 vì đó là giá trị lớn nhất của dãy",
+        "Mean = 50 và median = 13; std không bị outlier ảnh hưởng vì có bình phương",
+        "Mean = 50 và median = 13; median phản ánh mức lương điển hình tốt hơn"
+      ],
+      "answer": 3,
+      "explain": "Mean = (10 + 12 + 13 + 15 + 200)/5 = 250/5 = 50; median = giá trị giữa sau khi sắp xếp = 13. Một outlier kéo mean lên gần 4 lần mức điển hình, còn median gần như không đổi – median có breakdown point 50%, mean chỉ cần 1 điểm cực đoan là lệch. Mode là giá trị xuất hiện nhiều nhất (ở đây mọi giá trị xuất hiện một lần, không có mode), không phải giá trị lớn nhất. Std còn nhạy với outlier hơn mean vì độ lệch bị **bình phương**. Liên hệ ML: MSE tối ưu về mean còn MAE tối ưu về median; báo cáo latency nên dùng p50/p95/p99 thay vì mean; RobustScaler dùng median và IQR."
+    },
+    {
+      "id": "math-041",
+      "sub": "Độ lệch chuẩn mẫu (n − 1)",
+      "level": 1,
+      "type": "numeric",
+      "trap": true,
+      "q": "Thời gian phản hồi (giây) của 8 request: 2, 4, 4, 4, 5, 5, 7, 9. Tính **độ lệch chuẩn mẫu** s (chia cho n − 1). Làm tròn 3 chữ số thập phân.",
+      "answer": 2.138,
+      "tolerance": 0.002,
+      "unit": "giây",
+      "explain": "Mean = 40/8 = 5. Bình phương độ lệch: 9, 1, 1, 1, 0, 0, 4, 16 → tổng 32. Độ lệch chuẩn mẫu s = √(32/7) = √4.571 ≈ **2.138**. Bẫy: chia cho n = 8 cho σ = √4 = 2 – đó là độ lệch chuẩn tổng thể (hay MLE). Chia n − 1 (Bessel correction) vì mean được ước lượng từ chính dữ liệu đã 'tiêu' mất 1 bậc tự do, chia n sẽ ước lượng thấp phương sai. Cạm bẫy code: `np.std` mặc định ddof=0 (chia n), còn `pandas.Series.std()` mặc định ddof=1 và `torch.std` mặc định correction=1 (chia n − 1) – cùng dữ liệu ra hai số khác nhau."
+    },
+    {
+      "id": "math-042",
+      "sub": "Z-score & percentile",
+      "level": 1,
+      "type": "single",
+      "trap": false,
+      "q": "Điểm benchmark của các model xấp xỉ phân phối chuẩn với mean 70, std 10. Model X đạt 85. Z-score và vị trí xấp xỉ của X là gì?",
+      "options": [
+        "z = 15; X nằm ngoài phân phối nên chắc chắn là outlier",
+        "z = 1.5; khoảng 87% model có điểm thấp hơn X",
+        "z = 1.5; khoảng 93% model có điểm thấp hơn X",
+        "z = 0.85; khoảng 80% model có điểm thấp hơn X"
+      ],
+      "answer": 2,
+      "explain": "z = (x − μ)/σ = (85 − 70)/10 = 1.5: X cao hơn mean 1.5 độ lệch chuẩn. Percentile = Φ(1.5) ≈ 0.933 → khoảng **93%** model thấp hơn X. Bẫy: 86.6% là P(|Z| < 1.5) – tỷ lệ nằm **trong** ±1.5σ, không phải tỷ lệ nằm dưới. Quên chia σ ra 15; lấy x/100 ra 0.85 là nhầm z-score với điểm phần trăm. Liên hệ: StandardScaler biến feature về z-score; BatchNorm/LayerNorm chuẩn hoá activation về dạng z rồi scale bằng γ, β; quy tắc |z| > 3 thường dùng để đánh dấu outlier (chỉ hợp lý khi dữ liệu gần chuẩn)."
+    },
+    {
+      "id": "math-043",
+      "sub": "Khoảng tin cậy",
+      "level": 1,
+      "type": "numeric",
+      "trap": false,
+      "q": "Đo latency của 64 request: mean = 250 ms, độ lệch chuẩn mẫu s = 40 ms. Tính **nửa độ rộng** khoảng tin cậy 95% cho latency trung bình theo xấp xỉ chuẩn: 1.96 · s/√n (đơn vị ms, làm tròn 1 chữ số thập phân).",
+      "answer": 9.8,
+      "tolerance": 0.1,
+      "unit": "ms",
+      "explain": "Sai số chuẩn SE = s/√n = 40/√64 = 40/8 = 5 ms. Nửa độ rộng = 1.96 · 5 = **9.8 ms**, nên CI 95% ≈ [240.2, 259.8] ms. Diễn giải đúng (tần suất): nếu lặp lại việc lấy mẫu và dựng khoảng nhiều lần, ~95% các khoảng dựng được sẽ chứa mean thật. Đây KHÔNG phải '95% request có latency trong khoảng này' – khoảng đó (prediction interval) rộng hơn nhiều, cỡ ±1.96·40 ≈ ±78 ms. Vì SE ∝ 1/√n, muốn thu hẹp CI một nửa phải tăng gấp 4 lần số mẫu. Ứng dụng: báo cáo accuracy trên eval set kèm CI, vd 500 câu với accuracy 80% có SE = √(0.8·0.2/500) ≈ 1.8%, nên chênh 1–2 điểm giữa hai model thường chưa có ý nghĩa."
+    },
+    {
+      "id": "math-044",
+      "sub": "p-value & sai lầm loại I/II",
+      "level": 2,
+      "type": "multi",
+      "trap": true,
+      "q": "Một A/B test cho p-value = 0.03, với mức ý nghĩa α = 0.05. Chọn TẤT CẢ diễn giải ĐÚNG.",
+      "options": [
+        "Xác suất H₀ đúng là 3%, nên xác suất phiên bản mới tốt hơn là 97%",
+        "Nếu H₀ (không có khác biệt) đúng, xác suất thấy kết quả cực đoan như vậy hoặc hơn là 3%",
+        "p-value nhỏ chứng tỏ hiệu ứng lớn và quan trọng về mặt kinh doanh",
+        "Ta bác bỏ H₀; α là xác suất sai lầm loại I (dương tính giả) ta chấp nhận",
+        "Nếu p-value là 0.3 thì đã chứng minh được hai phiên bản như nhau"
+      ],
+      "answer": [
+        1,
+        3
+      ],
+      "explain": "p-value = P(dữ liệu cực đoan như quan sát hoặc hơn | H₀ đúng). Nó KHÔNG phải P(H₀ | dữ liệu) – nhầm như vậy là lỗi giống base rate neglect trong Bayes. p = 0.03 < α = 0.05 → bác bỏ H₀. Sai lầm loại I = bác bỏ H₀ khi H₀ đúng (xác suất α, false positive); sai lầm loại II = không bác bỏ khi H₀ sai (xác suất β, false negative); power = 1 − β tăng theo cỡ mẫu và effect size. Ý nghĩa thống kê ≠ ý nghĩa thực tế: với n rất lớn, chênh lệch 0.1% cũng cho p nhỏ – hãy báo cáo effect size và CI. p lớn chỉ là 'chưa đủ bằng chứng', không chứng minh H₀ (có thể do thiếu mẫu). Cạm bẫy khác: xem kết quả liên tục rồi dừng khi p < 0.05 (peeking), hoặc test 20 metric thì kỳ vọng ~1 metric 'có ý nghĩa' do ngẫu nhiên – cần điều chỉnh multiple testing."
+    },
+    {
+      "id": "math-045",
+      "sub": "A/B test – z-test hai tỷ lệ",
+      "level": 3,
+      "type": "numeric",
+      "trap": false,
+      "q": "Chatbot A: 200/2000 phiên được thumbs-up (10%); chatbot B: 240/2000 phiên (12%). Dùng **two-proportion z-test** với pooled proportion p̂ = (200 + 240)/4000 và SE = √(p̂·(1 − p̂)·(1/n₁ + 1/n₂)). Tính z-statistic. Làm tròn 2 chữ số thập phân.",
+      "answer": 2.02,
+      "tolerance": 0.02,
+      "unit": "",
+      "explain": "p̂ = 440/4000 = 0.11. SE = √(0.11 · 0.89 · (1/2000 + 1/2000)) = √(0.0979 · 0.001) = √0.0000979 ≈ 0.00989. z = (0.12 − 0.10)/0.00989 ≈ **2.02**. Vì |z| > 1.96 nên bác bỏ H₀ ở mức α = 0.05 (two-sided p ≈ 0.043) – nhưng chỉ vừa sát ngưỡng. Dùng SE không pooled √(0.1·0.9/2000 + 0.12·0.88/2000) cũng cho z ≈ 2.02. Trực giác: chênh 2 điểm phần trăm trông lớn (lift tương đối 20%), nhưng với 2000 phiên mỗi nhánh, độ nhiễu SE ≈ 1 điểm phần trăm, nên tín hiệu chỉ gấp ~2 lần nhiễu. Trước khi chạy test nên tính cỡ mẫu theo power mong muốn và cố định thời điểm dừng để tránh peeking."
+    },
+    {
+      "id": "math-046",
+      "sub": "Simpson's paradox",
+      "level": 2,
+      "type": "single",
+      "trap": true,
+      "q": "So sánh tỷ lệ trả lời đúng của hai RAG pipeline trên hai loại câu hỏi:\n\n| | Câu dễ | Câu khó | Tổng |\n|---|---|---|---|\n| Pipeline X | 160/200 (80%) | 10/50 (20%) | 170/250 (68%) |\n| Pipeline Y | 45/50 (90%) | 60/200 (30%) | 105/250 (42%) |\n\nKết luận nào hợp lý nhất?",
+      "options": [
+        "X tốt hơn vì tỷ lệ tổng 68% > 42%; số liệu tổng hợp là kết luận đáng tin nhất",
+        "X tốt hơn vì trả lời đúng nhiều câu hơn hẳn (170 so với 105) trên cùng 250 câu",
+        "Y tốt hơn ở cả hai nhóm; X thắng ở tổng chỉ vì được test chủ yếu trên câu dễ",
+        "Không kết luận được gì vì số câu mỗi nhóm khác nhau nên dữ liệu này vô dụng"
+      ],
+      "answer": 2,
+      "explain": "Đây là **Simpson's paradox**: xu hướng trong từng nhóm (Y > X ở cả câu dễ lẫn câu khó) bị đảo ngược khi gộp lại, vì biến gây nhiễu là **độ khó** phân bố rất khác nhau: X được test 80% câu dễ, Y được test 80% câu khó. Số câu đúng tuyệt đối (170 so với 105) cũng bị cùng biến nhiễu chi phối nên không chứng minh X tốt hơn. Dữ liệu không vô dụng: chuẩn hoá về cùng tỷ lệ 50/50 dễ/khó cho Y = (90 + 30)/2 = 60% so với X = (80 + 20)/2 = 50%. Bài học: so sánh model trên **cùng một eval set**, hoặc phân tầng (stratify) theo biến nhiễu. Đây cũng là một dạng 'correlation ≠ causation': chênh lệch tổng không phải do pipeline gây ra."
+    },
+    {
+      "id": "math-047",
+      "sub": "Sampling bias",
+      "level": 1,
+      "type": "single",
+      "trap": false,
+      "q": "Team đánh giá chatbot bằng các hội thoại mà người dùng **tự bấm** thumbs-up/down, thấy 85% thumbs-up và kết luận '85% người dùng hài lòng'. Vấn đề thống kê chính là gì?",
+      "options": [
+        "Selection bias: người tự nguyện đánh giá không đại diện cho toàn bộ người dùng",
+        "Sai lầm loại II: cỡ mẫu quá nhỏ nên không thể bác bỏ được giả thuyết H₀",
+        "Simpson's paradox: chia nhỏ theo nhóm thì tỷ lệ hài lòng chắc chắn đảo ngược",
+        "Không có vấn đề: tỷ lệ trên mẫu luôn là ước lượng không chệch cho tổng thể"
+      ],
+      "answer": 0,
+      "explain": "Mẫu chỉ gồm người **tự chọn** phản hồi (voluntary response / selection bias): người rất hài lòng hoặc rất bực mới bấm, còn phần lớn người dùng im lặng. Tỷ lệ trên mẫu chỉ là ước lượng không chệch khi mẫu được chọn **ngẫu nhiên** từ tổng thể. Đề không có kiểm định giả thuyết nên sai lầm loại II không áp dụng; Simpson's paradox cần một biến nhiễu phân nhóm cụ thể và không 'chắc chắn' xảy ra. Cách khắc phục: lấy mẫu ngẫu nhiên các hội thoại rồi gán nhãn (người hoặc LLM-judge đã kiểm định), phân tầng theo loại yêu cầu. Các dạng bias tương tự trong AI: survivorship bias, dữ liệu train crawl từ web không đại diện, eval set bị trùng với dữ liệu train (contamination)."
+    },
+    {
+      "id": "math-048",
+      "sub": "fp32 / fp16 / bf16",
+      "level": 1,
+      "type": "single",
+      "trap": false,
+      "q": "Phân bổ bit (sign / exponent / mantissa) của fp32, fp16 (IEEE half) và bf16 lần lượt là gì?",
+      "options": [
+        "fp32 1/8/23; fp16 1/8/7; bf16 1/5/10",
+        "fp32 1/8/23; fp16 1/5/10; bf16 1/8/7",
+        "fp32 1/11/20; fp16 1/5/10; bf16 1/6/9",
+        "fp32 1/8/23; fp16 1/6/9; bf16 1/7/8"
+      ],
+      "answer": 1,
+      "explain": "fp32 = 1 sign + 8 exponent + 23 mantissa; fp16 = 1 + 5 + 10; bf16 = 1 + 8 + 7. Số bit **exponent quyết định range**, số bit **mantissa quyết định precision**. bf16 giữ nguyên 8 bit exponent của fp32 → cùng range (~3.4·10³⁸) nhưng chỉ ~2–3 chữ số thập phân có nghĩa (eps = 2⁻⁷ ≈ 0.0078). fp16 chính xác hơn (eps = 2⁻¹⁰ ≈ 0.00098) nhưng range hẹp: max 65504, số normal nhỏ nhất ≈ 6.1·10⁻⁵. Vì vậy train bằng bf16 thường không cần loss scaling, còn fp16 thì cần. Đổi chỗ fp16 với bf16 là nhầm lẫn kinh điển; 11 bit exponent là của fp64 (1/11/52). Bộ nhớ: 2 byte/tham số với fp16/bf16 → model 7B cần ~14 GB chỉ cho trọng số."
+    },
+    {
+      "id": "math-049",
+      "sub": "Overflow, underflow & mixed precision",
+      "level": 2,
+      "type": "multi",
+      "trap": false,
+      "q": "Train mixed precision bằng **fp16** (không phải bf16). Chọn TẤT CẢ phát biểu đúng.",
+      "options": [
+        "Master weights thường được giữ ở fp32 để các cập nhật nhỏ không bị mất",
+        "fp16 chính xác hơn bf16 nhưng range rộng hơn, nên hiếm khi bị overflow",
+        "Giá trị lớn nhất của fp16 là 65504, nên exp(12) ≈ 162755 bị tràn thành inf",
+        "Gradient rất nhỏ (vd 1e-8) bị underflow về 0, nên cần loss scaling",
+        "bf16 có range xấp xỉ fp32 nên thường không cần loss scaling"
+      ],
+      "answer": [
+        0,
+        2,
+        3,
+        4
+      ],
+      "explain": "fp16 max = 65504 nên exp(z) tràn khi z > ~11.1; softmax/attention phải trừ max và nhiều phép (softmax, LayerNorm, reduction) được autocast giữ ở fp32. Số dương nhỏ nhất của fp16 (subnormal) ≈ 6·10⁻⁸, nên gradient cỡ 10⁻⁸ thành 0. **Loss scaling** nhân loss với S (vd 2¹⁶) để gradient dịch vào vùng biểu diễn được, rồi chia S trước bước optimizer; dynamic scaler bỏ qua step nếu gặp inf/NaN. Master weights fp32: cập nhật lr·g (vd 10⁻⁵) nhỏ hơn nhiều so với khoảng cách giữa các số fp16 quanh trọng số 1.0 (≈ 0.001) sẽ bị làm tròn mất nếu cộng trực tiếp trong fp16. fp16 đúng là chính xác hơn bf16, nhưng range **hẹp** hơn chứ không rộng hơn; bf16 có 8 bit exponent như fp32 nên hiếm khi tràn/underflow và thường không cần loss scaling."
+    },
+    {
+      "id": "math-050",
+      "sub": "Precision của bf16",
+      "level": 3,
+      "type": "single",
+      "trap": true,
+      "q": "Trong **bf16**, phép tính `torch.tensor(256.0, dtype=torch.bfloat16) + 1` cho kết quả gì?",
+      "options": [
+        "256, vì bf16 chỉ có 8 bit significand nên quanh 256 khoảng cách giữa hai số liền kề là 2",
+        "257, vì bf16 có cùng số bit exponent với fp32 nên biểu diễn chính xác mọi số nguyên nhỏ",
+        "inf, vì 257 vượt quá giá trị lớn nhất mà kiểu bf16 với 16 bit có thể biểu diễn được",
+        "258, vì khi không biểu diễn được số đúng thì bf16 luôn làm tròn lên số chẵn lớn hơn"
+      ],
+      "answer": 0,
+      "explain": "bf16 có 7 bit mantissa + 1 bit ẩn = 8 bit significand. Trong khoảng [256, 512) = [2⁸, 2⁹), khoảng cách giữa hai số liền kề là 2^(8 − 7) = 2: chỉ biểu diễn được 256, 258, 260... 257 nằm đúng giữa 256 và 258; quy tắc làm tròn round-half-to-even chọn số có mantissa chẵn là 256 → kết quả **256**: cộng 1 'biến mất'. Exponent chỉ quyết định range, không quyết định độ chính xác, nên 'cùng exponent với fp32' không cứu được; range của bf16 tới ~3.4·10³⁸ nên không có inf; làm tròn là về số gần nhất (hoà thì về chẵn), không phải luôn làm tròn lên. So sánh: fp16 có 11 bit significand, khoảng cách quanh 256 là 0.25 nên 256 + 1 = 257 chính xác. Hệ quả thực tế: cộng dồn (loss, counter, position id lớn) trong bf16 bị 'đứng yên' – hãy accumulate ở fp32."
+    }
+  ]
+}

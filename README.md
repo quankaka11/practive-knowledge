@@ -1,6 +1,9 @@
 # AI Engineer Drill — web trắc nghiệm ôn phỏng vấn AI
 
-Web tĩnh, không cần server/backend. Trọng tâm NLP · LLM · Inference · RAG · Agent/MCP · Evaluation, kèm ML/DL, CV/Speech/OCR/RecSys và Python/Backend/MLOps.
+Web tĩnh, không cần server/backend. 712 câu trong 15 chủ đề, chia 2 nhóm:
+
+- **Nền tảng** (ôn & củng cố lý thuyết): Toán & Thống kê · ML & DL cốt lõi · NLP/LLM/RAG/Agent cơ bản · Lý thuyết AI tổng quát (search, RL, generative models, learning theory, Responsible AI).
+- **Chuyên sâu** (phỏng vấn kỹ thuật, nhiều bẫy): NLP & Transformer · LLM training/alignment · Inference & tối ưu · RAG & Vector DB · Agents & MCP · Agent Engineering (Skills, Subagents, frameworks) · Evaluation & LLMOps · ML/DL · CV/Speech/OCR/RecSys · Python/Backend/MLOps · ML System Design & Experimentation.
 
 ## Chạy
 
@@ -18,7 +21,7 @@ python -m http.server 8000   # rồi vào http://localhost:8000
 
 ## Tính năng
 
-- **Làm bài**: chọn chủ đề, số câu, độ khó, dạng câu (một đáp án / nhiều đáp án / tính toán nhập số), nguồn câu (chưa làm, còn yếu, sai lần trước, đã đánh dấu), chỉ câu bẫy.
+- **Làm bài**: nút nhanh *Ôn nền tảng* / *Trọng tâm GenAI*; chọn chủ đề, số câu, độ khó, dạng câu (một đáp án / nhiều đáp án / tính toán nhập số), nguồn câu (chưa làm, còn yếu, sai lần trước, đã đánh dấu), chỉ câu bẫy.
 - **2 chế độ**: *Luyện tập* (kiểm tra từng câu, xem giải thích ngay) và *Thi thử* (đếm ngược, chỉ chấm khi nộp).
 - **Chấm điểm**: Cơ bản 1đ · Trung cấp 2đ · Nâng cao 3đ.
   - Nhiều đáp án: chấm từng phần `max(0, (chọn đúng − chọn sai) / số đáp án đúng)`, hoặc bật "đúng hết mới có điểm".

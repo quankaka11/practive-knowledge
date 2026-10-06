@@ -1,0 +1,863 @@
+{
+  "id": "core",
+  "name": "Nền tảng: ML & Deep Learning cốt lõi",
+  "icon": "🧱",
+  "order": 11,
+  "notes": [
+    {
+      "title": "Bức tranh chung & các kiểu học",
+      "md": "**AI ⊃ ML ⊃ DL.** AI: máy làm tác vụ cần trí thông minh (gồm cả luật viết tay). ML: học hàm từ dữ liệu thay vì lập trình luật. DL: ML bằng neural network nhiều lớp, tự học biểu diễn.\n\n| Kiểu học | Dữ liệu | Ví dụ |\n|---|---|---|\n| Supervised | (x, y) có nhãn | phân loại spam, dự đoán giá nhà |\n| Unsupervised | chỉ x | clustering, PCA, phát hiện bất thường |\n| Self-supervised | nhãn tự sinh từ dữ liệu | next-token (GPT), masked LM (BERT), contrastive |\n| Semi-supervised | ít nhãn + nhiều không nhãn | pseudo-labeling |\n| Reinforcement | reward từ môi trường | game, robot, RLHF |\n\n**Loại task** (hỏi 'output là gì?'): classification (nhãn rời rạc), regression (số liên tục), clustering (nhóm, không nhãn), ranking (thứ tự – NDCG/MAP), generation (sinh dữ liệu)."
+    },
+    {
+      "title": "Các cặp khái niệm dễ nhầm",
+      "md": "| Cặp | Phân biệt | Ví dụ |\n|---|---|---|\n| Generative vs discriminative | học P(x, y) = P(x\\|y)P(y) vs học thẳng P(y\\|x) | Naive Bayes, GMM, HMM vs logistic regression, SVM, NN classifier |\n| Parametric vs non-parametric | số tham số cố định vs độ phức tạp tăng theo dữ liệu | linear/logistic, NN vs kNN, cây không giới hạn, kernel SVM |\n| Online vs batch learning | cập nhật dần theo từng mẫu/mini-batch đến liên tục vs train lại trên toàn bộ dữ liệu | SGD trên stream, recommender cập nhật realtime vs train định kỳ hằng tuần |\n| Lazy vs eager | không train, tính lúc dự đoán vs học model trước | kNN vs hầu hết model khác |\n| Parameter vs hyperparameter | học từ data vs chọn bằng validation | trọng số w vs learning rate, k, max_depth |\n\n- 'Non-parametric' **không** có nghĩa là không có hyperparameter.\n- 'Generative' trong ML cổ điển ≠ 'GenAI': Naive Bayes là generative."
+    },
+    {
+      "title": "Quy trình: chia dữ liệu, baseline, giả định",
+      "md": "- **Train**: fit trọng số. **Validation**: chọn hyperparameter/model/threshold/epoch. **Test**: dùng **một lần** cuối để báo cáo. Dữ liệu nhỏ → k-fold CV, vẫn giữ test riêng.\n- **Baseline** trước tiên: majority class (`DummyClassifier`), mean/median (`DummyRegressor`), rule đơn giản, model tuyến tính.\n- **No Free Lunch**: trung bình trên mọi bài toán, mọi thuật toán như nhau → không có model tốt nhất tuyệt đối; phải thử & đánh giá.\n- **Inductive bias**: giả định giúp tổng quát hoá (CNN: locality + weight sharing; kNN: hàng xóm giống nhau; linear: quan hệ tuyến tính; Naive Bayes: độc lập có điều kiện).\n- **i.i.d.**: các mẫu độc lập, train và test cùng phân phối. Vi phạm: time-series, nhiều mẫu cùng 1 user/bệnh nhân, dữ liệu deploy khác train.\n\n| Distribution shift | Cái gì đổi | Ví dụ |\n|---|---|---|\n| Covariate | P(x), P(y\\|x) giữ nguyên | ảnh scan → ảnh điện thoại |\n| Label/prior | P(y), P(x\\|y) giữ nguyên | mùa dịch tỷ lệ bệnh tăng |\n| Concept | P(y\\|x) | chiêu gian lận mới, định nghĩa spam đổi |"
+    },
+    {
+      "title": "Confusion matrix & metric phân loại",
+      "md": "| | Dự đoán + | Dự đoán − |\n|---|---|---|\n| **Thực tế +** | TP | FN (bỏ sót, lỗi loại II) |\n| **Thực tế −** | FP (báo động giả, lỗi loại I) | TN |\n\nMẹo: chữ thứ hai = model đoán gì; chữ đầu = đoán đúng hay sai.\n\n- Accuracy = (TP + TN)/N – vô nghĩa khi mất cân bằng.\n- **Precision** = TP/(TP + FP) – 'trong các ca báo dương, bao nhiêu đúng'.\n- **Recall / sensitivity / TPR** = TP/(TP + FN) – 'bắt được bao nhiêu ca dương'.\n- **Specificity / TNR** = TN/(TN + FP); FPR = 1 − specificity.\n- **F1** = 2PR/(P + R) (trung bình điều hoà, ≤ trung bình cộng). F-beta: β > 1 nghiêng về recall.\n- **ROC**: TPR theo FPR khi quét threshold. **AUC** = P(score mẫu dương ngẫu nhiên > score mẫu âm ngẫu nhiên); 0.5 = ngẫu nhiên. Không phụ thuộc threshold. Lớp dương rất hiếm → xem thêm PR-AUC.\n- Tăng threshold → thường precision ↑, recall ↓."
+    },
+    {
+      "title": "Metric hồi quy & chọn metric",
+      "md": "- **MAE** = mean|y − ŷ| – dễ hiểu, bền outlier.\n- **MSE** = mean(y − ŷ)² – khả vi, hay dùng làm loss, phạt lỗi lớn.\n- **RMSE** = √MSE – cùng đơn vị y; luôn RMSE ≥ MAE, chênh nhiều ⇒ có vài lỗi rất lớn.\n- Ví dụ e = [1, 0, −2, 3]: MAE 1.5, MSE 3.5, RMSE 1.871.\n\n| Tình huống | Ưu tiên |\n|---|---|\n| Bỏ sót đắt (sàng lọc bệnh, fraud) | Recall (kèm ràng buộc precision) |\n| Báo động giả đắt (lọc spam) | Precision |\n| Mất cân bằng nặng | PR-AUC, F1, recall@precision |\n| Cần xếp hạng tốt, không phụ thuộc threshold | ROC-AUC |\n| Lỗi lớn rất tệ | RMSE |\n| Nhiều outlier | MAE / Huber |"
+    },
+    {
+      "title": "Overfitting, bias–variance & regularization",
+      "md": "**Expected error = Bias² + Variance + Irreducible noise.**\n\n| Triệu chứng | Chẩn đoán | Xử lý |\n|---|---|---|\n| Train tốt, val kém, gap lớn | Overfit / high variance | thêm data, augmentation, L1/L2, dropout, early stopping, model nhỏ hơn, bagging |\n| Train kém ≈ val kém | Underfit / high bias | model mạnh hơn, thêm feature, giảm regularization, train lâu hơn, boosting |\n\n- **Learning curve** (error theo lượng data): overfit → gap thu hẹp khi thêm data (thêm data có ích); underfit → hai đường hội tụ sớm ở mức cao (thêm data vô ích).\n- **L2** (λΣw²): co trọng số nhỏ. **L1** (λΣ|w|): đẩy về đúng 0 → sparse. **Dropout**: tắt ngẫu nhiên neuron khi train (inverted dropout chia 1 − p). **Early stopping**: theo val loss + patience, khôi phục best checkpoint. **Data augmentation**: biến thể hợp lệ của dữ liệu train.\n- kNN: k nhỏ → variance cao; k lớn → bias cao."
+    },
+    {
+      "title": "Thuật toán ML kinh điển",
+      "md": "| Thuật toán | Ý tưởng | Cần scale? | Ghi nhớ |\n|---|---|---|---|\n| Linear regression | min Σ(y − ŷ)²; normal equation w = (XᵀX)⁻¹Xᵀy | có (nếu regularize/GD) | giả định: tuyến tính, phần dư độc lập, phương sai đều, không đa cộng tuyến hoàn hảo |\n| Logistic regression | p = σ(w·x + b), loss BCE | có | boundary **tuyến tính** w·x + b = 0; z là log-odds |\n| kNN | vote k láng giềng gần nhất | **bắt buộc** | lazy, non-parametric |\n| Naive Bayes | P(y\\|x) ∝ P(y)ΠP(xᵢ\\|y) | không | độc lập có điều kiện; Laplace smoothing; generative |\n| Decision tree | split greedy theo Gini/entropy | không | sâu → overfit; dễ diễn giải |\n| Random forest | bagging cây sâu + random feature | không | giảm variance, song song |\n| Gradient boosting | cây nông tuần tự khớp residual | không | giảm bias, cần early stopping |\n| SVM | max margin, support vector, kernel trick | có | C lớn → ít vi phạm, dễ overfit |\n| k-means | gán cụm gần nhất ↔ cập nhật centroid = mean | có | chọn k trước, k-means++ |\n| PCA | chiếu lên hướng phương sai lớn nhất | có | unsupervised, component = tổ hợp tuyến tính |"
+    },
+    {
+      "title": "Neural network cơ bản",
+      "md": "- **Neuron**: z = Σwᵢxᵢ + b → a = activation(z). Perceptron dùng hàm bước, chỉ tách tuyến tính (không giải XOR).\n- **Non-linearity**: thiếu activation, nhiều layer tuyến tính = 1 layer tuyến tính.\n- **Activation**: ReLU max(0, z) mặc định cho layer ẩn; sigmoid cho xác suất nhị phân; softmax cho đa lớp; GELU trong Transformer.\n- **Loss**: regression → MSE/MAE/Huber; multi-class → softmax + CE (= −log p_đúng); multi-label/binary → sigmoid + BCE. PyTorch `CrossEntropyLoss` nhận logits.\n- **Backprop** = chain rule từ output ngược về input để tính ∂L/∂w; optimizer mới là thứ cập nhật trọng số.\n- **Epoch** = 1 lượt toàn bộ data; **iteration** = 1 batch. Số iteration/epoch = ⌈N / batch⌉ (drop_last=False).\n- **Optimizer**: SGD θ ← θ − ηg; Momentum v ← βv + g; RMSProp chia √E[g²]; Adam = momentum + RMSProp + bias correction (lr mặc định 1e-3). AdamW tách weight decay.\n- **Learning rate**: lớn → dao động/NaN; nhỏ → chậm. Dùng warmup + scheduler.\n- **Init**: không init hằng số (đối xứng). Xavier (tanh/sigmoid), He (ReLU).\n- **Vanishing**: σ' ≤ 0.25 nhân dồn → dùng ReLU, He init, Norm, residual. **Exploding** → gradient clipping."
+    },
+    {
+      "title": "Kiến trúc nền: CNN, RNN, attention, Transformer, autoencoder",
+      "md": "- **CNN**: kernel trượt, weight sharing → params = k·k·C_in·C_out + C_out, không phụ thuộc H×W. Output: **⌊(n + 2p − k)/s⌋ + 1**. Padding 'same' (stride 1): p = (k − 1)/2. Pooling: giảm kích thước, không tham số.\n- **RNN**: h_t = tanh(W h_{t−1} + U x_t) – tuần tự, vanishing qua thời gian. **LSTM**: cell state cập nhật cộng + forget/input/output gate → nhớ xa; ~4× tham số RNN. GRU: 2 gate.\n- **Attention**: Attention(Q, K, V) = softmax(QKᵀ/√d_k)·V – tra cứu mềm; chia √d_k tránh softmax bão hoà.\n- **Transformer**: self-attention (mọi token nhìn nhau, train song song), multi-head, FFN, residual + LayerNorm, positional encoding (attention không biết thứ tự), chi phí O(n²) theo độ dài; decoder dùng causal mask.\n- **Autoencoder**: encoder → bottleneck → decoder, reconstruction loss; dùng giảm chiều, denoising, anomaly detection. VAE: sinh dữ liệu.\n- **Embedding**: bảng tra V × d học được, vector dày, ngữ nghĩa gần → vector gần.\n- **Transfer learning**: dùng pretrained; ít data → freeze backbone, train head; nhiều/khác domain → fine-tune sâu hơn với lr nhỏ."
+    },
+    {
+      "title": "Thực hành dữ liệu",
+      "md": "- **Missing**: drop (ít, ngẫu nhiên), impute mean/median/mode (median nếu lệch/outlier), thêm cột `is_missing`; tree-based (XGBoost/LightGBM) xử lý được NaN.\n- **Outlier**: điều tra trước (lỗi hay tín hiệu?); clip/winsorize, log transform, model/loss bền.\n- **Min-max**: (x − min)/(max − min) → [0, 1], nhạy outlier. **Standardization**: (x − μ)/σ → mean 0, std 1 (sklearn dùng population std). Cây không cần scale.\n- **Encoding**: nominal → one-hot; ordinal → label/ordinal encoding; cardinality cao → target encoding (cẩn thận leakage), hashing, embedding.\n- **Imbalanced**: class_weight, over/undersampling, SMOTE (chỉ trên train), chỉnh threshold, metric PR-AUC/F1.\n- **Augmentation**: chỉ khi train; val/test giữ nguyên.\n- **Feature engineering**: tạo feature có ý nghĩa từ domain – tách ngày/giờ/thứ trong tuần, tỷ lệ (nợ/thu nhập), tổng hợp theo nhóm, log của biến lệch.\n- **Leakage cơ bản**: fit scaler/imputer/encoder trên toàn bộ data, resample trước khi split, feature chỉ có sau thời điểm dự đoán → dùng `Pipeline`, fit chỉ trên train."
+    },
+    {
+      "title": "Công cụ: tensor, GPU, sklearn, PyTorch",
+      "md": "- **Shape**: ảnh PyTorch (N, C, H, W). Broadcasting so từ phải sang trái, chiều bằng nhau hoặc = 1. Matmul: (…, n, k) @ (k, m) → (…, n, m). `reshape(N, -1)` để flatten.\n- **GPU**: hàng nghìn core song song + Tensor Core + băng thông HBM cao → nhân ma trận nhanh. Model và data phải cùng device.\n- **Bộ nhớ train** = weights + gradients + optimizer state (cố định) + activations (∝ batch size). OOM → giảm batch + gradient accumulation, mixed precision, gradient checkpointing.\n- **sklearn**: `fit` học tham số, `transform` áp dụng, `fit_transform` cho train, `predict`/`predict_proba` cho model. Chỉ fit trên train; gói trong `Pipeline`.\n- **PyTorch**: `model.train()` bật dropout & BatchNorm dùng batch stats; `model.eval()` tắt dropout, BatchNorm dùng running stats; `torch.no_grad()` tắt tính gradient khi inference. Vòng lặp: `optimizer.zero_grad()` → forward → `loss.backward()` → `optimizer.step()`."
+    }
+  ],
+  "questions": [
+    {
+      "id": "core-001",
+      "sub": "AI ⊃ ML ⊃ DL",
+      "level": 1,
+      "type": "single",
+      "trap": false,
+      "q": "Phát biểu nào mô tả ĐÚNG quan hệ giữa **AI**, **Machine Learning** và **Deep Learning**?",
+      "options": [
+        "ML là nhánh của DL; còn DL chỉ là tên gọi mới của AI từ khi có GPU mạnh và dữ liệu lớn",
+        "Mọi hệ AI đều học từ dữ liệu, nên AI và ML là hai cách gọi của cùng một khái niệm",
+        "DL là nhánh của ML dùng neural network nhiều lớp; ML là nhánh của AI học từ dữ liệu",
+        "AI, ML và DL là ba lĩnh vực tách rời; hệ luật if-else viết tay được xếp vào nhóm ML"
+      ],
+      "answer": 2,
+      "explain": "**AI** là mục tiêu rộng nhất: máy thực hiện tác vụ cần trí thông minh – gồm cả hệ chuyên gia/luật viết tay, search, planning. **ML** là tập con của AI: thay vì lập trình luật, hệ thống **học hàm từ dữ liệu** (định nghĩa của Tom Mitchell: cải thiện hiệu năng P ở tác vụ T nhờ kinh nghiệm E). **DL** là tập con của ML: dùng neural network nhiều lớp để tự học biểu diễn (representation learning) từ dữ liệu thô, giảm feature engineering thủ công. Ví dụ: hệ luật if-else chấm điểm tín dụng là AI nhưng không phải ML; logistic regression, random forest là ML nhưng không phải DL; CNN, Transformer, LLM là DL. Vì vậy AI ⊃ ML ⊃ DL, không phải ba lĩnh vực tách rời và cũng không đồng nhất."
+    },
+    {
+      "id": "core-002",
+      "sub": "Các kiểu học",
+      "level": 1,
+      "type": "multi",
+      "trap": false,
+      "q": "Chọn các ghép **bài toán → kiểu học** ĐÚNG.",
+      "options": [
+        "Có 1.000 ảnh có nhãn và 1 triệu ảnh không nhãn, dùng pseudo-label → semi-supervised learning",
+        "Lọc spam từ tập email đã gán nhãn spam/không spam → reinforcement learning",
+        "Phân nhóm khách hàng theo lịch sử mua khi không có nhãn → unsupervised learning",
+        "Pretrain LLM bằng cách dự đoán token tiếp theo trên văn bản thô → self-supervised learning",
+        "Dự đoán giá nhà từ dữ liệu giao dịch đã biết giá bán → unsupervised learning",
+        "Agent chơi cờ học từ phần thưởng thắng/thua sau mỗi ván → supervised learning"
+      ],
+      "answer": [
+        0,
+        2,
+        3
+      ],
+      "explain": "**Supervised**: có cặp (x, y) do con người gán nhãn – lọc spam có nhãn, dự đoán giá nhà có giá bán thật. **Unsupervised**: chỉ có x, tìm cấu trúc (clustering, giảm chiều) – phân nhóm khách hàng. **Self-supervised**: nhãn được *tự sinh từ chính dữ liệu* (token tiếp theo, từ bị mask, mảnh ảnh bị che) – nền tảng pretrain của LLM/BERT; về kỹ thuật vẫn tối ưu loss có giám sát nhưng không cần người gán nhãn. **Semi-supervised**: ít dữ liệu có nhãn + nhiều dữ liệu không nhãn (pseudo-labeling, consistency regularization). **Reinforcement learning**: agent tương tác với môi trường, học từ **reward** (thường trễ) chứ không có đáp án đúng cho từng bước – chơi cờ, robot. Ba ghép sai là nhầm RL với supervised và ngược lại, hoặc gọi bài toán có nhãn là unsupervised."
+    },
+    {
+      "id": "core-003",
+      "sub": "Loại task",
+      "level": 1,
+      "type": "single",
+      "trap": false,
+      "q": "Ghép bài toán với loại task:\n\n1. Dự đoán giá căn hộ (triệu đồng)\n2. Chia khách hàng thành nhóm theo hành vi mua, không có nhãn\n3. Sắp xếp 50 sản phẩm theo mức độ phù hợp với từng user\n4. Xác định email là spam hay không\n\nGhép nào ĐÚNG?",
+      "options": [
+        "1 → regression · 2 → clustering · 3 → ranking · 4 → classification",
+        "1 → regression · 2 → classification · 3 → clustering · 4 → classification",
+        "1 → classification · 2 → clustering · 3 → regression · 4 → ranking",
+        "1 → regression · 2 → ranking · 3 → clustering · 4 → classification"
+      ],
+      "answer": 0,
+      "explain": "**Regression**: output là số liên tục (giá căn hộ) – đánh giá bằng MAE/RMSE. **Classification**: output là nhãn rời rạc trong tập hữu hạn (spam / không spam) – đánh giá bằng precision, recall, F1, AUC. **Clustering**: không có nhãn, gom điểm giống nhau thành nhóm (k-means, DBSCAN) – nên việc chia khách hàng *không nhãn* không thể là classification. **Ranking**: output là *thứ tự* của một danh sách theo query/user – đánh giá bằng NDCG, MAP, MRR. Lưu ý: ranking có thể được hiện thực bằng một classifier dự đoán xác suất click (pointwise) rồi sort, nhưng bản chất bài toán và metric vẫn là ranking. Mẹo: hỏi 'output là gì và có nhãn không' để xác định loại task."
+    },
+    {
+      "id": "core-004",
+      "sub": "Generative vs discriminative",
+      "level": 2,
+      "type": "single",
+      "trap": true,
+      "q": "Trong ML cổ điển, phân biệt **generative model** và **discriminative model** cho bài toán phân loại như thế nào?",
+      "options": [
+        "Discriminative mô hình hoá P(x|y) cho từng lớp; generative chỉ học ranh giới quyết định giữa các lớp với nhau",
+        "Generative cần dữ liệu có nhãn, discriminative học từ dữ liệu không nhãn; logistic regression là generative",
+        "Generative là model sinh ảnh/văn bản mới; model phân loại như Naive Bayes là discriminative",
+        "Generative mô hình hoá P(x|y)·P(y) rồi dùng Bayes suy ra P(y|x); discriminative học thẳng P(y|x)"
+      ],
+      "answer": 3,
+      "explain": "**Generative** học phân phối đồng thời P(x, y) = P(x|y)·P(y) – tức 'mỗi lớp sinh ra dữ liệu trông thế nào' – rồi dùng Bayes để phân loại: P(y|x) ∝ P(x|y)·P(y). Ví dụ: Naive Bayes, Gaussian Discriminant Analysis (LDA/QDA), HMM, GMM. **Discriminative** học trực tiếp P(y|x) hoặc hàm quyết định: logistic regression, SVM, decision tree, neural network classifier. **Bẫy**: chữ 'generative' trong GenAI (GAN, diffusion, LLM) khiến nhiều người nghĩ Naive Bayes là discriminative vì nó 'chỉ dùng để phân loại' – sai, Naive Bayes là generative kinh điển. Trực giác: discriminative thường chính xác hơn khi có nhiều dữ liệu; generative học nhanh với ít dữ liệu, xử lý được feature thiếu và có thể sinh mẫu mới. Cả hai loại đều thường cần nhãn khi dùng để phân loại."
+    },
+    {
+      "id": "core-005",
+      "sub": "Parametric vs non-parametric",
+      "level": 2,
+      "type": "single",
+      "trap": true,
+      "q": "Phát biểu nào ĐÚNG về model **parametric** và **non-parametric**?",
+      "options": [
+        "Linear regression là non-parametric vì nó không giả định phân phối nào cho các feature x",
+        "kNN là non-parametric: phải giữ toàn bộ dữ liệu train, độ phức tạp tăng theo số mẫu",
+        "Non-parametric nghĩa là model không có tham số hay hyperparameter nào cần lựa chọn",
+        "Neural network là non-parametric vì có hàng triệu tham số, nhiều hơn hẳn linear regression"
+      ],
+      "answer": 1,
+      "explain": "**Parametric**: giả định dạng hàm cố định với **số tham số cố định, không phụ thuộc kích thước dữ liệu** – linear/logistic regression, Naive Bayes, neural network (dù có tỷ tham số, số tham số vẫn do kiến trúc quyết định chứ không tăng theo số mẫu). **Non-parametric**: không cố định dạng hàm, độ phức tạp **tăng theo dữ liệu** – kNN (phải lưu toàn bộ tập train để dự đoán), decision tree không giới hạn độ sâu, kernel SVM (số support vector tăng theo data), Gaussian process. **Bẫy**: 'non-parametric' KHÔNG có nghĩa là không có tham số/hyperparameter – kNN vẫn có hyperparameter k và metric khoảng cách. Hệ quả thực tế: parametric dự đoán nhanh, cần ít data nhưng có thể sai dạng hàm (bias); non-parametric linh hoạt nhưng tốn bộ nhớ/thời gian dự đoán và cần nhiều data."
+    },
+    {
+      "id": "core-006",
+      "sub": "Train / validation / test",
+      "level": 1,
+      "type": "single",
+      "trap": false,
+      "q": "Chia dữ liệu thành **train / validation / test**. Cách dùng nào ĐÚNG vai trò từng tập?",
+      "options": [
+        "Train để fit trọng số; gộp validation với test rồi tune nhiều vòng để kết quả ổn định hơn",
+        "Train để fit trọng số; validation để chọn hyperparameter; test chỉ dùng một lần cuối để báo cáo",
+        "Train để chọn hyperparameter; validation để fit trọng số; test dùng làm tín hiệu early stopping",
+        "Train để fit trọng số; test để chọn hyperparameter tốt nhất; validation để báo cáo kết quả cuối"
+      ],
+      "answer": 1,
+      "explain": "**Train set**: tối ưu tham số (trọng số) của model. **Validation set**: dùng để so sánh và chọn – hyperparameter, kiến trúc, epoch dừng (early stopping), threshold. **Test set**: chỉ dùng **một lần ở cuối** để ước lượng hiệu năng trên dữ liệu chưa thấy. Nếu bạn dùng test để chọn hyperparameter (hoặc nhìn test rồi quay lại sửa model nhiều vòng), test thực chất đã thành validation và con số báo cáo bị **lạc quan** (overfit vào test). Tỷ lệ phổ biến 70/15/15 hoặc 80/10/10; dữ liệu nhỏ thì dùng k-fold cross-validation trên phần train+val và vẫn giữ riêng test. Với time-series phải chia theo thời gian, với dữ liệu nhiều mẫu/thực thể phải chia theo nhóm."
+    },
+    {
+      "id": "core-007",
+      "sub": "Baseline",
+      "level": 1,
+      "type": "numeric",
+      "trap": false,
+      "q": "Dataset gồm 2.000 email: 1.700 email thường và 300 spam. Một model đạt accuracy 86% trên tập này. Accuracy của **baseline luôn dự đoán lớp đa số** (luôn đoán 'không spam') là bao nhiêu? (đơn vị %, nhập số nguyên)",
+      "answer": 85,
+      "tolerance": 0.5,
+      "unit": "%",
+      "explain": "Baseline majority-class luôn đoán 'không spam' nên đúng với mọi email thường: 1.700 / 2.000 = 0.85 = **85%**. Như vậy model 86% chỉ hơn baseline 1 điểm phần trăm – gần như chưa học được gì, và recall lớp spam của baseline là 0. Bài học: luôn dựng **baseline** trước (majority class, dự đoán trung bình/median cho regression, heuristic/rule đơn giản, model tuyến tính) để biết con số 'đẹp' có thật sự đẹp không. Với dữ liệu mất cân bằng, so sánh thêm precision/recall/F1 của lớp hiếm hoặc PR-AUC thay vì chỉ accuracy. Trong sklearn có sẵn `DummyClassifier(strategy='most_frequent')` và `DummyRegressor`."
+    },
+    {
+      "id": "core-008",
+      "sub": "No Free Lunch",
+      "level": 2,
+      "type": "single",
+      "trap": false,
+      "q": "**No Free Lunch theorem** trong ML hàm ý điều gì cho thực hành?",
+      "options": [
+        "Model càng nhiều tham số thì càng tốt trên mọi tập dữ liệu nếu có đủ thời gian train",
+        "Mọi thuật toán cho kết quả như nhau trên dữ liệu thực tế, nên cứ chọn cái chạy nhanh nhất",
+        "Muốn model tổng quát hoá tốt thì phải trả giá bằng việc thu thập thêm dữ liệu có nhãn",
+        "Không có thuật toán tốt nhất cho mọi bài toán; phải thử và đánh giá trên dữ liệu cụ thể"
+      ],
+      "answer": 3,
+      "explain": "No Free Lunch (Wolpert, 1996): **lấy trung bình trên tất cả các bài toán có thể**, mọi thuật toán học có hiệu năng như nhau. Một thuật toán tốt hơn trên nhóm bài toán này thì phải kém hơn trên nhóm khác. Hàm ý: không có 'model tốt nhất tuyệt đối'; hiệu năng đến từ việc **inductive bias** của model khớp với cấu trúc của bài toán (CNN khớp ảnh, cây quyết định khớp dữ liệu bảng…). Vì vậy thực hành chuẩn là: dựng baseline, thử vài họ model, so sánh trên validation/cross-validation. Diễn giải 'mọi thuật toán như nhau trên dữ liệu thực tế' là sai: dữ liệu thực có cấu trúc, nên khác biệt giữa các thuật toán là rất thật. Câu 'càng nhiều tham số càng tốt' trái ngược với chính định lý và với hiện tượng overfitting."
+    },
+    {
+      "id": "core-009",
+      "sub": "Inductive bias",
+      "level": 2,
+      "type": "multi",
+      "trap": false,
+      "q": "**Inductive bias** là các giả định mà thuật toán dùng để tổng quát hoá ra ngoài dữ liệu train. Chọn các ví dụ ĐÚNG.",
+      "options": [
+        "Decision tree: các feature độc lập có điều kiện với nhau khi đã biết nhãn lớp",
+        "CNN: tính cục bộ (locality) và weight sharing – đặc trưng giống nhau ở mọi vị trí ảnh",
+        "Linear regression: target xấp xỉ một tổ hợp tuyến tính của feature cộng nhiễu",
+        "kNN: các điểm gần nhau trong không gian feature thì thường có nhãn giống nhau",
+        "Transformer: không có bất kỳ giả định nào, nên luôn cần ít dữ liệu hơn hẳn CNN"
+      ],
+      "answer": [
+        1,
+        2,
+        3
+      ],
+      "explain": "Không có inductive bias thì không thể tổng quát hoá: có vô số hàm khớp hoàn hảo dữ liệu train, model cần giả định để chọn một hàm. **CNN** giả định pattern cục bộ và lặp lại ở mọi vị trí (translation equivariance) – rất hợp ảnh. **kNN** giả định tính trơn/cục bộ: hàng xóm gần có nhãn giống nhau. **Linear regression** giả định quan hệ tuyến tính. Hai phát biểu sai: Transformer có inductive bias **yếu hơn** CNN (vẫn có một số giả định như cấu trúc attention, positional encoding) và vì thế thường cần **nhiều** dữ liệu hơn để đạt cùng chất lượng – ViT chỉ vượt CNN khi pretrain trên dữ liệu rất lớn. Giả định 'độc lập có điều kiện khi biết nhãn' là của **Naive Bayes**, không phải decision tree (cây học split theo ngưỡng, ưu tiên ranh giới song song trục và cây ngắn)."
+    },
+    {
+      "id": "core-010",
+      "sub": "Distribution shift",
+      "level": 3,
+      "type": "single",
+      "trap": false,
+      "q": "Model được train trên dữ liệu năm trước. Ba tình huống khi deploy:\n\n1. Model nhận dạng chữ viết tay train trên ảnh scan, nay nhận ảnh chụp điện thoại (mờ, nghiêng); cách viết chữ của từng nhãn không đổi.\n2. Model chẩn đoán cúm: biểu hiện của người bệnh và người khỏe không đổi, nhưng vào mùa dịch tỷ lệ người mắc cúm tăng từ 5% lên 30%.\n3. Model phát hiện gian lận: kẻ gian đổi chiêu, cùng một kiểu giao dịch trước đây là bình thường nay lại là gian lận.\n\nGhép loại distribution shift nào ĐÚNG?",
+      "options": [
+        "1 → covariate shift · 2 → label shift · 3 → concept shift",
+        "1 → covariate shift · 2 → concept shift · 3 → label shift",
+        "1 → concept shift · 2 → covariate shift · 3 → label shift",
+        "1 → label shift · 2 → covariate shift · 3 → concept shift"
+      ],
+      "answer": 0,
+      "explain": "Giả định i.i.d.: train và test lấy từ **cùng một phân phối**. Khi deploy, phân phối thay đổi theo ba kiểu chính: **Covariate shift** – P(x) đổi nhưng P(y|x) giữ nguyên: ảnh đầu vào khác (scan → ảnh chụp) nhưng quy luật chữ → nhãn không đổi. **Label (prior) shift** – P(y) đổi nhưng P(x|y) giữ nguyên: tỷ lệ mắc cúm tăng, còn biểu hiện của từng nhóm không đổi; có thể hiệu chỉnh bằng cách điều chỉnh prior/threshold. **Concept shift (concept drift)** – P(y|x) đổi: cùng một x nhưng nhãn đúng đã khác, buộc phải gán nhãn lại và train lại. Lưu ý trong tình huống 2, P(x) cũng thay đổi theo (nhiều người có triệu chứng hơn) nhưng *nguyên nhân gốc* là P(y) thay đổi với P(x|y) cố định – đó là định nghĩa label shift. Cách phát hiện: theo dõi phân phối feature, phân phối dự đoán và metric trên dữ liệu mới có nhãn."
+    },
+    {
+      "id": "core-011",
+      "sub": "Confusion matrix",
+      "level": 1,
+      "type": "single",
+      "trap": true,
+      "q": "Model xét nghiệm nhanh COVID, lớp dương = 'mắc COVID'. Một **False Positive (FP)** là trường hợp nào?",
+      "options": [
+        "Người đang mắc COVID và được model báo dương tính",
+        "Người khỏe mạnh và được model báo là âm tính",
+        "Người khỏe mạnh nhưng bị model báo là dương tính",
+        "Người đang mắc COVID nhưng bị model báo âm tính"
+      ],
+      "answer": 2,
+      "explain": "Mẹo đọc tên: **chữ thứ hai** (Positive/Negative) là thứ **model dự đoán**; **chữ đầu** (True/False) cho biết dự đoán đó **đúng hay sai**. False Positive = model đoán dương nhưng sai → người khỏe bị báo mắc bệnh (báo động giả, lỗi loại I). Người mắc bệnh bị báo âm tính là **False Negative** (bỏ sót, lỗi loại II) – trong y tế thường nguy hiểm hơn. Mắc bệnh và báo dương là TP; khỏe và báo âm là TN. Liên hệ metric: precision = TP/(TP+FP) bị kéo xuống bởi FP; recall = TP/(TP+FN) bị kéo xuống bởi FN; specificity = TN/(TN+FP). Bẫy phổ biến là đảo FP với FN."
+    },
+    {
+      "id": "core-012",
+      "sub": "Specificity",
+      "level": 1,
+      "type": "numeric",
+      "trap": false,
+      "q": "Model sàng lọc bệnh trên 1.000 người cho kết quả: TP = 80, FN = 20, FP = 54, TN = 846. Tính **specificity** (làm tròn 2 chữ số thập phân).",
+      "answer": 0.94,
+      "tolerance": 0.005,
+      "unit": "",
+      "explain": "Specificity (true negative rate) = TN / (TN + FP) = 846 / (846 + 54) = 846 / 900 = **0.94**: trong số người thật sự khỏe, 94% được model trả âm tính đúng. Đừng nhầm với recall (sensitivity, TPR) = TP / (TP + FN) = 80 / 100 = 0.80 – tỷ lệ người bệnh được phát hiện. Hai metric này đi cặp trong y tế: sensitivity cao → ít bỏ sót bệnh; specificity cao → ít báo động giả. Ngoài ra FPR = 1 − specificity = 0.06 chính là trục hoành của đường ROC. Precision ở đây = 80 / 134 ≈ 0.597 – thấp hơn nhiều vì lớp bệnh hiếm, nên 54 FP đã đáng kể so với 80 TP."
+    },
+    {
+      "id": "core-013",
+      "sub": "F1 từ precision & recall",
+      "level": 1,
+      "type": "numeric",
+      "trap": true,
+      "q": "Một classifier có precision = 0.6 và recall = 0.9 cho lớp dương. Tính **F1-score** (làm tròn 2 chữ số thập phân).",
+      "answer": 0.72,
+      "tolerance": 0.005,
+      "unit": "",
+      "explain": "F1 là **trung bình điều hoà** của precision và recall: F1 = 2·P·R / (P + R) = 2 · 0.6 · 0.9 / (0.6 + 0.9) = 1.08 / 1.5 = **0.72**. Bẫy: lấy trung bình cộng (0.6 + 0.9)/2 = 0.75. Trung bình điều hoà luôn ≤ trung bình cộng và bị kéo về phía giá trị nhỏ hơn – nên model không thể 'gỡ' F1 bằng cách đẩy một bên lên rất cao mà bỏ mặc bên kia (vd P = 1.0, R = 0.1 → F1 ≈ 0.18, trong khi trung bình cộng là 0.55). Dùng F1 khi cần cân bằng precision và recall trên lớp dương, nhất là dữ liệu mất cân bằng; nếu một bên quan trọng hơn thì dùng F-beta (β > 1 nghiêng về recall)."
+    },
+    {
+      "id": "core-014",
+      "sub": "ROC-AUC",
+      "level": 2,
+      "type": "single",
+      "trap": true,
+      "q": "Model phân loại nhị phân có **ROC-AUC = 0.85**. Diễn giải nào ĐÚNG?",
+      "options": [
+        "85% số mẫu mà model dự đoán là dương thực sự là dương tại threshold mặc định",
+        "Model bắt được 85% số mẫu dương khi tỷ lệ báo động giả được giữ cố định ở 15%",
+        "Tại threshold 0.5, model phân loại đúng 85% tổng số mẫu trong tập dữ liệu đánh giá",
+        "Lấy ngẫu nhiên 1 mẫu dương, 1 mẫu âm: xác suất mẫu dương có score cao hơn là 0.85"
+      ],
+      "answer": 3,
+      "explain": "Đường **ROC** vẽ TPR (recall) theo FPR khi quét **mọi threshold**; **AUC** là diện tích dưới đường đó, tương đương xác suất một mẫu dương ngẫu nhiên được xếp score cao hơn một mẫu âm ngẫu nhiên. Vì vậy AUC đo **khả năng xếp hạng**, không phụ thuộc threshold: 0.5 = đoán ngẫu nhiên, 1.0 = tách hoàn hảo, < 0.5 = xếp ngược. Các diễn giải sai: 'đúng 85% mẫu tại threshold 0.5' là accuracy; '85% dự đoán dương là đúng' là precision; 'bắt 85% mẫu dương khi FPR = 15%' chỉ mô tả *một điểm* trên đường ROC chứ không phải diện tích. Khi lớp dương rất hiếm, ROC-AUC có thể vẫn cao trong khi precision thấp – lúc đó xem thêm PR-AUC."
+    },
+    {
+      "id": "core-015",
+      "sub": "MAE / MSE / RMSE",
+      "level": 1,
+      "type": "numeric",
+      "trap": false,
+      "q": "Giá trị thực y = [3, 5, 2, 8], dự đoán ŷ = [2, 5, 4, 5]. Tính **RMSE** (làm tròn 3 chữ số thập phân).",
+      "answer": 1.871,
+      "tolerance": 0.002,
+      "unit": "",
+      "explain": "Sai số e = y − ŷ = [1, 0, −2, 3]. MAE = (1 + 0 + 2 + 3)/4 = 1.5. MSE = (1 + 0 + 4 + 9)/4 = 14/4 = 3.5. RMSE = √3.5 ≈ **1.871**. Nhận xét: RMSE (1.871) > MAE (1.5) vì bình phương phạt các lỗi lớn (lỗi 3 đóng góp 9/14 MSE). Luôn có RMSE ≥ MAE, bằng nhau khi mọi lỗi có cùng độ lớn; chênh lệch càng lớn thì lỗi càng phân bố không đều (có vài lỗi rất lớn). Chọn metric: MAE dễ diễn giải và bền với outlier; RMSE cùng đơn vị với y nhưng nhạy với lỗi lớn – dùng khi lỗi lớn gây thiệt hại nặng; MSE thường dùng làm loss vì khả vi và gradient đơn giản."
+    },
+    {
+      "id": "core-016",
+      "sub": "Chọn metric",
+      "level": 1,
+      "type": "multi",
+      "trap": false,
+      "q": "Chọn các ghép **tình huống → metric ưu tiên** hợp lý.",
+      "options": [
+        "Phát hiện gian lận chỉ chiếm 0.1% giao dịch → accuracy là thước đo đủ tin cậy",
+        "Dự báo nhu cầu, lỗi lớn gây thiệt hại nặng hơn hẳn → ưu tiên RMSE hơn MAE",
+        "Lọc spam, chặn nhầm email quan trọng rất tệ → ưu tiên precision của lớp spam",
+        "Sàng lọc ung thư, bỏ sót bệnh nhân rất nguy hiểm → ưu tiên recall",
+        "Dự đoán giá nhà có nhiều outlier, cần metric ít nhạy outlier → ưu tiên MSE"
+      ],
+      "answer": [
+        1,
+        2,
+        3
+      ],
+      "explain": "**Recall** = TP/(TP+FN) quan trọng khi bỏ sót (FN) đắt: sàng lọc bệnh, phát hiện gian lận, an ninh. **Precision** = TP/(TP+FP) quan trọng khi báo động giả (FP) đắt: lọc spam (chặn nhầm email sếp), gợi ý nội dung nhạy cảm. **RMSE/MSE** bình phương lỗi nên phạt lỗi lớn mạnh hơn – hợp khi lỗi lớn gây thiệt hại phi tuyến. Hai ghép sai: với 0.1% gian lận, model luôn đoán 'bình thường' đã có accuracy 99.9% nhưng vô dụng → dùng recall/precision/PR-AUC. Khi có nhiều outlier mà muốn metric bền vững thì dùng **MAE** (hoặc median absolute error), không phải MSE – MSE bị outlier chi phối. Trong thực tế thường cố định một ràng buộc (vd recall ≥ 90%) rồi tối ưu metric còn lại."
+    },
+    {
+      "id": "core-017",
+      "sub": "Learning curve",
+      "level": 2,
+      "type": "single",
+      "trap": false,
+      "q": "Bài toán phân loại mà con người đạt lỗi khoảng 2%. Model của bạn: train error 18%, validation error 19%; learning curve cho thấy cả hai đường đã đi ngang từ khi mới dùng 30% dữ liệu. Hướng xử lý hợp lý nhất?",
+      "options": [
+        "Underfitting (high bias): model mạnh hơn, thêm feature, giảm regularization",
+        "Đã chạm giới hạn: lỗi 18–19% là irreducible error nên không thể giảm thêm được nữa",
+        "Overfitting (high variance): tăng dropout, weight decay, giảm số tham số",
+        "Thiếu dữ liệu: thu thập gấp đôi dữ liệu train là cách cải thiện chắc chắn và nhanh nhất"
+      ],
+      "answer": 0,
+      "explain": "Đọc learning curve: **train error cao** (18% so với mức người 2%) và **gap train–val nhỏ** (1%) → model quá đơn giản, **high bias / underfitting**. Hai đường đã hội tụ và đi ngang sớm nghĩa là **thêm dữ liệu không giúp** – model không đủ năng lực để tận dụng. Cách xử lý: model phức tạp hơn (sâu/rộng hơn, cây sâu hơn), thêm/cải thiện feature, giảm regularization, train lâu hơn hoặc tối ưu tốt hơn. Tăng dropout/weight decay là thuốc cho overfitting (train tốt, val kém, gap lớn) – ở đây sẽ làm tệ thêm. Irreducible (Bayes) error ước lượng gần mức người (~2%), nên còn rất nhiều 'avoidable bias' để giảm."
+    },
+    {
+      "id": "core-018",
+      "sub": "Regularization",
+      "level": 1,
+      "type": "multi",
+      "trap": false,
+      "q": "Model đang overfit rõ rệt. Những kỹ thuật nào có mục đích **giảm overfitting**?",
+      "options": [
+        "Data augmentation (lật, cắt, đổi màu ảnh train)",
+        "Thêm L2 regularization (weight decay) vào loss",
+        "Train thêm epoch đến khi train loss về gần 0",
+        "Early stopping theo validation loss",
+        "Dropout ở các layer ẩn trong lúc train",
+        "Tăng gấp đôi số layer và số neuron mỗi layer"
+      ],
+      "answer": [
+        0,
+        1,
+        3,
+        4
+      ],
+      "explain": "Overfitting = model học thuộc cả nhiễu của train, val kém. **L2/weight decay** phạt trọng số lớn (λΣw²) → hàm mượt hơn; **L1** (λΣ|w|) đẩy nhiều trọng số về đúng 0 → sparse. **Dropout** tắt ngẫu nhiên neuron khi train → mạng không dựa dẫm vào vài neuron, giống ensemble nhiều mạng con. **Early stopping** dừng khi val loss không cải thiện sau `patience` epoch và khôi phục checkpoint tốt nhất. **Data augmentation** tạo biến thể hợp lệ của dữ liệu → tăng 'dữ liệu' hiệu dụng và dạy model tính bất biến. Hai phương án sai làm tăng overfitting: mở rộng model tăng năng lực ghi nhớ; train đến khi train loss ≈ 0 chính là con đường dẫn đến học thuộc. Ngoài ra còn: thêm data thật, giảm độ phức tạp, label smoothing, ensemble."
+    },
+    {
+      "id": "core-019",
+      "sub": "Linear regression tính tay",
+      "level": 2,
+      "type": "numeric",
+      "trap": false,
+      "q": "Fit **linear regression** y = w·x + b bằng least squares (OLS) trên 3 điểm: (1, 2), (2, 3), (3, 5). Dự đoán của model tại **x = 4** là bao nhiêu? (làm tròn 2 chữ số thập phân)",
+      "answer": 6.33,
+      "tolerance": 0.01,
+      "unit": "",
+      "explain": "Với một feature, OLS cho w = Σ(x − x̄)(y − ȳ) / Σ(x − x̄)². x̄ = 2, ȳ = 10/3 ≈ 3.333. Σ(x − x̄)(y − ȳ) = (−1)(−1.333) + 0·(−0.333) + (1)(1.667) = 3; Σ(x − x̄)² = 1 + 0 + 1 = 2 → w = 1.5. b = ȳ − w·x̄ = 3.333 − 3 = 0.333. Dự đoán tại x = 4: 1.5·4 + 0.333 ≈ **6.33**. Dạng ma trận là **normal equation** w = (XᵀX)⁻¹Xᵀy (X có thêm cột 1 cho bias) – lời giải đóng, không cần gradient descent, nhưng chi phí nghịch đảo ~O(d³) nên với d lớn hoặc dữ liệu khổng lồ thì dùng gradient descent. Lỗi hay gặp: nối thẳng điểm đầu – cuối (slope 1.5, cùng w nhưng b = 0.5 → 6.5) thay vì tối thiểu tổng bình phương sai số."
+    },
+    {
+      "id": "core-020",
+      "sub": "Giả định linear regression",
+      "level": 3,
+      "type": "multi",
+      "trap": true,
+      "q": "Chọn các giả định **chuẩn** của linear regression (OLS) cần có để hệ số ước lượng và khoảng tin cậy đáng tin.",
+      "options": [
+        "Mỗi feature đầu vào phải có phân phối chuẩn",
+        "Phần dư (residual) có phương sai không đổi (homoscedasticity)",
+        "Không có đa cộng tuyến hoàn hảo giữa các feature",
+        "Phần dư của các quan sát độc lập với nhau",
+        "Quan hệ giữa target và các feature là tuyến tính theo hệ số",
+        "Target phải nằm trong khoảng [0, 1] như xác suất"
+      ],
+      "answer": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "explain": "Các giả định cổ điển của OLS: (1) **tuyến tính theo hệ số** – vẫn được thêm x², log x làm feature; (2) **phần dư độc lập** – vi phạm điển hình là time-series có tự tương quan; (3) **homoscedasticity** – phương sai phần dư không đổi theo x; (4) **không đa cộng tuyến hoàn hảo** – nếu không XᵀX suy biến, normal equation không có nghiệm duy nhất; đa cộng tuyến mạnh làm hệ số dao động khó diễn giải; (5) phần dư xấp xỉ **chuẩn** – chỉ cần cho suy luận (p-value, khoảng tin cậy) với mẫu nhỏ. **Bẫy**: yêu cầu phân phối chuẩn là của **phần dư**, KHÔNG phải của feature x hay của y. Target trong [0, 1] là đặc trưng của bài toán xác suất (logistic regression), linear regression không đòi hỏi điều đó – thậm chí nó có thể dự đoán ra ngoài [0, 1]."
+    },
+    {
+      "id": "core-021",
+      "sub": "Logistic regression tính tay",
+      "level": 1,
+      "type": "numeric",
+      "trap": false,
+      "q": "Logistic regression có w = [2, −1], b = −1. Với mẫu x = [1.5, 1], xác suất lớp dương p = σ(z), trong đó z = w·x + b, là bao nhiêu? (làm tròn 3 chữ số thập phân)",
+      "answer": 0.731,
+      "tolerance": 0.002,
+      "unit": "",
+      "explain": "Bước 1 – tính logit: z = w·x + b = 2·1.5 + (−1)·1 + (−1) = 3 − 1 − 1 = 1. Bước 2 – sigmoid: σ(z) = 1 / (1 + e^(−z)) = 1 / (1 + e^(−1)) = 1 / 1.3679 ≈ **0.731**. Trực giác: sigmoid nén logit z ∈ (−∞, +∞) về (0, 1); z = 0 ↔ p = 0.5, z dương ↔ p > 0.5. Logit z chính là **log-odds**: ln(p/(1−p)) = z, nên mỗi đơn vị tăng của x₁ làm log-odds tăng thêm w₁ = 2 (odds nhân e² ≈ 7.4). Với threshold 0.5, mẫu này được dự đoán lớp dương. Lỗi hay gặp: quên bias (z = 2 → 0.881) hoặc trả về z thay vì σ(z)."
+    },
+    {
+      "id": "core-022",
+      "sub": "Decision boundary",
+      "level": 2,
+      "type": "single",
+      "trap": true,
+      "q": "Logistic regression `p = σ(w·x + b)` với 2 feature gốc (không thêm feature đa thức). Với threshold 0.5, **decision boundary** có dạng gì?",
+      "options": [
+        "Tuỳ dữ liệu, có thể cong tuỳ ý nếu train đủ nhiều epoch",
+        "Một đường cong hình chữ S, vì sigmoid là hàm phi tuyến của x",
+        "Đường thẳng w·x + b = 0, vì σ(z) ≥ 0.5 khi và chỉ khi z ≥ 0",
+        "Một đường tròn quanh tâm dữ liệu, vì sigmoid bão hoà ở hai phía"
+      ],
+      "answer": 2,
+      "explain": "Sigmoid là hàm **đơn điệu tăng**, σ(0) = 0.5, nên điều kiện p ≥ 0.5 tương đương z = w·x + b ≥ 0. Tập điểm z = 0 là một **siêu phẳng** – với 2 feature là một đường thẳng. Vì vậy logistic regression là **linear classifier**: sigmoid chỉ biến khoảng cách tới boundary thành xác suất, không làm boundary cong. **Bẫy**: thấy 'sigmoid phi tuyến' và suy ra boundary cong. Muốn boundary cong phải thêm feature phi tuyến (x₁², x₁x₂…), dùng kernel, hoặc dùng neural network nhiều layer. Đổi threshold (vd 0.3) chỉ dịch song song đường thẳng (z = ln(0.3/0.7)), không làm nó cong. Train lâu hơn cũng không đổi được dạng hàm."
+    },
+    {
+      "id": "core-023",
+      "sub": "kNN: ảnh hưởng của k",
+      "level": 1,
+      "type": "single",
+      "trap": false,
+      "q": "Trong **kNN classification**, khi tăng k từ 1 lên một giá trị lớn (vd 50) thì điều gì thường xảy ra?",
+      "options": [
+        "Ranh giới quyết định gồ ghề hơn: variance tăng, bias giảm; dễ overfit hơn",
+        "Ranh giới mượt hơn: variance giảm, bias tăng; k quá lớn sẽ underfit",
+        "Thời gian train tăng theo k vì phải học thêm k trọng số mới",
+        "Train accuracy với k = 1 là thấp nhất vì mỗi điểm chỉ xét một láng giềng"
+      ],
+      "answer": 1,
+      "explain": "kNN dự đoán bằng **vote đa số của k điểm train gần nhất**. k = 1: ranh giới bám sát từng điểm, kể cả điểm nhiễu → **variance cao, overfit**; train accuracy gần 100% (mỗi điểm train có láng giềng gần nhất là chính nó). k lớn: vote trên vùng rộng → ranh giới mượt, **bias tăng**; k = n thì luôn đoán lớp đa số. Chọn k bằng cross-validation, thường lấy k lẻ cho bài toán 2 lớp để tránh hoà. kNN là **lazy learner**: 'train' chỉ là lưu dữ liệu, không học trọng số; chi phí dồn vào lúc dự đoán (tính khoảng cách tới mọi điểm, dùng KD-tree/ANN để tăng tốc). Vì dựa trên khoảng cách nên **bắt buộc scale feature** trước."
+    },
+    {
+      "id": "core-024",
+      "sub": "Naive Bayes tính tay",
+      "level": 2,
+      "type": "numeric",
+      "trap": false,
+      "q": "Lọc spam bằng **Naive Bayes**. P(spam) = 0.4, P(ham) = 0.6. P('free' | spam) = 0.5, P('free' | ham) = 0.1; P('win' | spam) = 0.3, P('win' | ham) = 0.05. Một email chứa cả 'free' và 'win' (chỉ xét 2 từ này). Tính **P(spam | email)** (làm tròn 3 chữ số thập phân).",
+      "answer": 0.952,
+      "tolerance": 0.002,
+      "unit": "",
+      "explain": "Naive Bayes giả định các feature **độc lập có điều kiện khi biết lớp**, nên P(x|y) = Π P(xᵢ|y). Điểm lớp spam: P(spam)·P(free|spam)·P(win|spam) = 0.4 · 0.5 · 0.3 = 0.06. Điểm lớp ham: 0.6 · 0.1 · 0.05 = 0.003. Chuẩn hoá: P(spam | email) = 0.06 / (0.06 + 0.003) = 0.06 / 0.063 ≈ **0.952**. Lỗi hay gặp: quên prior P(y), hoặc quên bước chuẩn hoá (trả về 0.06). Thực tế người ta cộng log-xác suất để tránh underflow và dùng **Laplace smoothing** để một từ chưa gặp không làm cả tích bằng 0. Dù giả định độc lập hiếm khi đúng, Naive Bayes vẫn là baseline mạnh, nhanh cho phân loại văn bản."
+    },
+    {
+      "id": "core-025",
+      "sub": "Random Forest vs Boosting",
+      "level": 2,
+      "type": "single",
+      "trap": false,
+      "q": "Khác biệt cốt lõi giữa **Random Forest (bagging)** và **Gradient Boosting** là gì?",
+      "options": [
+        "RF: các cây độc lập, song song trên bootstrap, lấy trung bình (giảm variance); boosting: tuần tự, cây sau sửa lỗi tổ hợp trước (giảm bias)",
+        "Hai phương pháp chỉ khác nhau ở hàm đo độ thuần khiết của node: RF dùng Gini, còn boosting dùng entropy trên cùng một cây",
+        "RF train tuần tự, cây sau học residual của cây trước (giảm bias); boosting train song song nhiều cây sâu độc lập rồi lấy vote (giảm variance)",
+        "RF dùng cây rất nông (stump) để tránh overfit; boosting dùng cây sâu tối đa, không cần learning rate và không bao giờ overfit"
+      ],
+      "answer": 0,
+      "explain": "**Bagging / Random Forest**: mỗi cây train độc lập trên một **bootstrap sample** và chỉ xét ngẫu nhiên một tập con feature ở mỗi split (giảm tương quan giữa các cây); kết quả lấy trung bình/vote. Cây thường sâu (bias thấp, variance cao) → trung bình nhiều cây **giảm variance**. Train song song được, khá bền với hyperparameter. **Boosting** (AdaBoost, Gradient Boosting, XGBoost, LightGBM): train **tuần tự**, mỗi cây nông khớp với residual/gradient của loss trên tổ hợp hiện tại, cộng vào với learning rate nhỏ → **giảm bias** dần. Boosting thường chính xác hơn trên dữ liệu bảng nhưng nhạy hyperparameter và **có thể overfit** nếu quá nhiều cây (cần early stopping). Mô tả 'RF tuần tự, boosting song song' là đảo ngược vai trò hai họ; Gini/entropy chỉ là tiêu chí split, cả hai họ đều có thể dùng."
+    },
+    {
+      "id": "core-026",
+      "sub": "SVM",
+      "level": 2,
+      "type": "multi",
+      "trap": false,
+      "q": "Chọn các phát biểu ĐÚNG về **SVM**.",
+      "options": [
+        "Kernel trick tính tích vô hướng trong không gian nhiều chiều mà không cần ánh xạ tường minh",
+        "Kernel RBF yêu cầu ánh xạ tường minh từng điểm sang không gian vô hạn chiều rồi mới train",
+        "Chỉ các support vector (điểm nằm trên hoặc trong margin) quyết định siêu phẳng tối ưu",
+        "SVM chọn siêu phẳng có margin nhỏ nhất để bám sát dữ liệu train nhiều nhất có thể",
+        "Hard margin luôn tốt hơn soft margin, kể cả khi dữ liệu có nhiễu và các lớp chồng lấn"
+      ],
+      "answer": [
+        0,
+        2
+      ],
+      "explain": "SVM tìm siêu phẳng phân tách với **margin lớn nhất** (khoảng cách tới điểm gần nhất của mỗi lớp) – margin lớn cho khả năng tổng quát hoá tốt hơn. Nghiệm chỉ phụ thuộc vào **support vector**; bỏ các điểm nằm xa margin thì boundary không đổi. **Kernel trick**: thuật toán chỉ cần tích vô hướng ⟨φ(x), φ(x')⟩, nên thay bằng hàm kernel K(x, x') (polynomial, RBF) – tương đương làm việc trong không gian đặc trưng rất nhiều chiều (RBF: vô hạn chiều) mà không bao giờ tính φ(x). **Soft margin** cho phép vi phạm margin với phạt C·Σξ (hinge loss): C lớn → ít vi phạm, dễ overfit; C nhỏ → margin rộng, chịu lỗi. Hard margin chỉ khả thi khi dữ liệu tách tuyến tính hoàn hảo và rất nhạy nhiễu. SVM cần scale feature."
+    },
+    {
+      "id": "core-027",
+      "sub": "k-means một vòng",
+      "level": 2,
+      "type": "numeric",
+      "trap": false,
+      "q": "Chạy **k-means** (k = 2) trên dữ liệu 1 chiều: 1, 2, 4, 7, 9, 10. Centroid khởi tạo c₁ = 2, c₂ = 4. Sau **đúng 1 vòng** (gán cụm theo khoảng cách gần nhất rồi cập nhật centroid), giá trị mới của **c₂** là bao nhiêu? (làm tròn 2 chữ số thập phân)",
+      "answer": 7.5,
+      "tolerance": 0.01,
+      "unit": "",
+      "explain": "Bước gán (assignment): mỗi điểm về centroid gần nhất. 1 → c₁ (|1−2| = 1 < 3); 2 → c₁; 4 → c₂ (khoảng cách 0); 7 → c₂ (|7−4| = 3 < |7−2| = 5); 9 → c₂; 10 → c₂. Bước cập nhật (update): centroid = trung bình các điểm trong cụm. c₁ = (1 + 2)/2 = 1.5; c₂ = (4 + 7 + 9 + 10)/4 = 30/4 = **7.5**. Vòng tiếp theo: 4 cách c₁ 2.5 và cách c₂ 3.5 nên chuyển sang cụm 1 → hội tụ về {1, 2, 4} và {7, 9, 10}. k-means lặp 2 bước này đến khi gán cụm không đổi, tối thiểu tổng bình phương khoảng cách tới centroid (inertia). Kết quả phụ thuộc khởi tạo (dùng k-means++ và chạy nhiều lần), cần chọn k trước và scale feature."
+    },
+    {
+      "id": "core-028",
+      "sub": "PCA",
+      "level": 1,
+      "type": "single",
+      "trap": false,
+      "q": "Mục đích và bản chất của **PCA** là gì?",
+      "options": [
+        "Giảm chiều có giám sát: tìm các hướng giúp tách các lớp ra xa nhau nhất có thể",
+        "Chọn ra tập con các feature gốc có tương quan cao nhất với nhãn để giảm số chiều",
+        "Giảm chiều không giám sát: chiếu lên các hướng trực giao có phương sai lớn nhất",
+        "Phân cụm dữ liệu thành k nhóm dựa theo các hướng có phương sai lớn nhất của dữ liệu"
+      ],
+      "answer": 2,
+      "explain": "PCA tìm các **principal component** – các hướng trực giao (eigenvector của ma trận hiệp phương sai) xếp theo phương sai giảm dần – rồi chiếu dữ liệu lên k hướng đầu. Đặc điểm: **không dùng nhãn** (unsupervised); mỗi component là **tổ hợp tuyến tính** của mọi feature gốc, không phải chọn feature gốc (feature selection); phải **standardize** trước nếu feature khác đơn vị. Công dụng: trực quan hoá 2D/3D, khử nhiễu, nén, tăng tốc model, giảm đa cộng tuyến. Hạn chế: chỉ bắt quan hệ tuyến tính; hướng có phương sai lớn chưa chắc là hướng hữu ích để phân loại. Tìm hướng tách lớp tốt nhất có dùng nhãn là **LDA** (Linear Discriminant Analysis). PCA không phân cụm – clustering là k-means/DBSCAN."
+    },
+    {
+      "id": "core-029",
+      "sub": "Vì sao cần non-linearity",
+      "level": 1,
+      "type": "single",
+      "trap": false,
+      "q": "Một MLP 5 layer nhưng **bỏ hết activation function** (mỗi layer chỉ là `Wx + b`). Mạng này biểu diễn được gì?",
+      "options": [
+        "Giống mạng dùng ReLU, chỉ khác là train chậm hơn vì gradient nhỏ hơn",
+        "Chỉ một phép biến đổi affine duy nhất, tương đương một layer tuyến tính",
+        "Mọi hàm liên tục, vì 5 layer đã đủ sâu để xấp xỉ mọi quan hệ phi tuyến",
+        "Một hàm phi tuyến bậc 5, vì mỗi layer nhân thêm một bậc vào đầu ra"
+      ],
+      "answer": 1,
+      "explain": "Ghép hai layer tuyến tính: W₂(W₁x + b₁) + b₂ = (W₂W₁)x + (W₂b₁ + b₂) = W'x + b' – vẫn là một hàm affine. Ghép bao nhiêu layer cũng vậy, nên mạng sâu không activation **không mạnh hơn linear regression/logistic regression**. Activation phi tuyến (ReLU, GELU, tanh, sigmoid) sau mỗi layer là thứ giúp mạng uốn được không gian và xấp xỉ hàm phức tạp – **universal approximation theorem** chỉ đúng khi có phi tuyến. Phép nhân ma trận không làm tăng bậc đa thức, nên 'phi tuyến bậc 5' là sai. Một neuron = weighted sum Σwᵢxᵢ + b rồi qua activation; perceptron cổ điển dùng hàm bước (step), nên một perceptron chỉ tách được dữ liệu tách tuyến tính (không giải được XOR)."
+    },
+    {
+      "id": "core-030",
+      "sub": "Forward pass tính tay",
+      "level": 2,
+      "type": "numeric",
+      "trap": false,
+      "q": "MLP nhỏ: input x = [1, 2]. Hidden layer 2 neuron dùng **ReLU**: h₁ = ReLU(1·x₁ − 1·x₂ + 0), h₂ = ReLU(0.5·x₁ + 0.5·x₂ − 1). Output tuyến tính: y = 2·h₁ + 3·h₂ + 0.5. Tính y (làm tròn 2 chữ số thập phân).",
+      "answer": 2.0,
+      "tolerance": 0.01,
+      "unit": "",
+      "explain": "Bước 1 – pre-activation: z₁ = 1·1 − 1·2 + 0 = −1; z₂ = 0.5·1 + 0.5·2 − 1 = 0.5. Bước 2 – ReLU(z) = max(0, z): h₁ = 0, h₂ = 0.5. Bước 3 – output: y = 2·0 + 3·0.5 + 0.5 = **2.0**. Bẫy: quên ReLU sẽ ra y = 2·(−1) + 1.5 + 0.5 = 0. Neuron h₁ ở đây 'tắt' (output 0) nên gradient qua nó cũng bằng 0 với mẫu này – nếu một neuron ReLU tắt với *mọi* mẫu thì gọi là dying ReLU. Dạng ma trận: h = ReLU(W₁x + b₁), y = W₂h + b₂ với W₁ shape (2, 2), W₂ shape (1, 2); forward pass chỉ là chuỗi phép nhân ma trận + activation."
+    },
+    {
+      "id": "core-031",
+      "sub": "Chọn loss function",
+      "level": 1,
+      "type": "multi",
+      "trap": false,
+      "q": "Chọn các ghép **bài toán → output layer + loss** ĐÚNG.",
+      "options": [
+        "Phân loại đa lớp, mỗi mẫu đúng 1 nhãn → softmax + cross-entropy",
+        "Phân loại nhị phân → output ReLU + MSE là lựa chọn chuẩn nhất",
+        "Hồi quy giá trị liên tục → output tuyến tính + MSE (hoặc MAE/Huber)",
+        "Đa nhãn → softmax + cross-entropy, vì tổng xác suất các nhãn phải bằng 1",
+        "Đa nhãn (ảnh có thể vừa có chó vừa có mèo) → sigmoid từng lớp + binary cross-entropy"
+      ],
+      "answer": [
+        0,
+        2,
+        4
+      ],
+      "explain": "**Regression**: output tuyến tính (không activation), loss MSE (phạt lỗi lớn), MAE hoặc Huber (bền outlier). **Multi-class** (đúng 1 nhãn/mẫu): softmax biến logits thành phân phối có tổng 1, loss cross-entropy = −log p(lớp đúng). **Multi-label** (nhiều nhãn cùng lúc): mỗi lớp là một bài toán nhị phân độc lập → sigmoid + binary cross-entropy; dùng softmax sẽ ép các nhãn cạnh tranh nhau (tăng 'chó' buộc giảm 'mèo') – sai bản chất. **Binary**: sigmoid + BCE; ReLU không cho output trong (0, 1), còn MSE với sigmoid cho gradient yếu khi dự đoán sai mạnh. Trong PyTorch: `nn.CrossEntropyLoss` nhận **logits** (đã gộp log-softmax), `nn.BCEWithLogitsLoss` gộp sigmoid – ổn định số học hơn tự tính."
+    },
+    {
+      "id": "core-032",
+      "sub": "Cross-entropy tính tay",
+      "level": 1,
+      "type": "numeric",
+      "trap": false,
+      "q": "Bài toán 3 lớp. Sau softmax, model dự đoán p = [0.10, 0.25, 0.65]; nhãn đúng là **lớp thứ 2** (xác suất 0.25). Tính **cross-entropy loss** của mẫu này dùng log tự nhiên (làm tròn 3 chữ số thập phân).",
+      "answer": 1.386,
+      "tolerance": 0.002,
+      "unit": "",
+      "explain": "Với nhãn one-hot y = [0, 1, 0], cross-entropy L = −Σ yₖ·log pₖ = −log(p của lớp đúng) = −ln 0.25 ≈ **1.386**. Chỉ xác suất gán cho lớp đúng mới quan trọng; lớp 0.65 là lớp sai nên không đi vào công thức (nếu lấy nhầm sẽ ra −ln 0.65 ≈ 0.431). Trực giác: p lớp đúng = 1 → loss 0; p → 0 → loss → ∞, nên cross-entropy phạt rất nặng những dự đoán sai mà tự tin. Model đoán đều 3 lớp (1/3 mỗi lớp) có loss ln 3 ≈ 1.099 – mẫu này còn tệ hơn đoán ngẫu nhiên. Nếu dùng log₂ thì đơn vị là bit (≈ 2.0); framework dùng log tự nhiên."
+    },
+    {
+      "id": "core-033",
+      "sub": "Epoch / batch / iteration",
+      "level": 1,
+      "type": "numeric",
+      "trap": true,
+      "q": "Train trên **10.000 mẫu**, batch size = 32, `drop_last=False` (giữ batch cuối thiếu), trong **5 epoch**. Tổng số **iteration** (số lần cập nhật trọng số) là bao nhiêu? (nhập số nguyên)",
+      "answer": 1565,
+      "tolerance": 0,
+      "unit": "iteration",
+      "explain": "**Epoch** = một lượt đi qua toàn bộ dữ liệu train. **Iteration (step)** = một lần forward + backward + cập nhật trên một batch. Số batch mỗi epoch = ⌈10.000 / 32⌉ = ⌈312.5⌉ = 313 (312 batch đủ 32 mẫu + 1 batch cuối 16 mẫu). Tổng = 313 × 5 = **1565** iteration. Bẫy off-by-one: lấy 10.000 / 32 × 5 = 1562.5, hoặc dùng phép chia nguyên 312 × 5 = 1560 (chỉ đúng khi `drop_last=True`). Batch size lớn → ít iteration hơn mỗi epoch, gradient ít nhiễu hơn nhưng tốn bộ nhớ hơn; khi tăng batch size thường phải tăng learning rate tương ứng."
+    },
+    {
+      "id": "core-034",
+      "sub": "Learning rate",
+      "level": 1,
+      "type": "single",
+      "trap": false,
+      "q": "Train neural network bằng SGD, loss dao động mạnh, lúc tăng lúc giảm, rồi vọt lên `inf` chỉ sau vài chục step. Nguyên nhân khả dĩ nhất và cách sửa đầu tiên?",
+      "options": [
+        "Batch size quá lớn khiến gradient quá chính xác; giảm batch size xuống còn 1",
+        "Learning rate quá nhỏ nên model kẹt ở local minimum; tăng learning rate lên 10 lần",
+        "Model quá đơn giản không khớp nổi dữ liệu; thêm layer và neuron cho model",
+        "Learning rate quá lớn làm bước cập nhật vượt qua cực tiểu; giảm learning rate"
+      ],
+      "answer": 3,
+      "explain": "Cập nhật gradient descent: θ ← θ − η·∇L. **η quá lớn**: mỗi bước nhảy vượt qua đáy của loss, loss dao động rồi phân kỳ (inf/NaN). **η quá nhỏ**: loss giảm đều nhưng rất chậm, có thể chưa hội tụ khi hết thời gian. Cách tìm: thử thang log (1e-1, 1e-2, 1e-3, 1e-4), dùng LR range test, kết hợp **warmup** và **scheduler** (step decay, cosine) – bắt đầu lớn để đi nhanh, nhỏ dần để tinh chỉnh. Mặc định phổ biến: Adam 1e-3, fine-tune Transformer 1e-5 – 5e-5. Ngoài ra kiểm tra dữ liệu (NaN, chưa chuẩn hoá) và dùng gradient clipping nếu bị exploding gradient. Model quá đơn giản gây underfit (loss cao, ổn định) chứ không làm loss phân kỳ."
+    },
+    {
+      "id": "core-035",
+      "sub": "Optimizer",
+      "level": 2,
+      "type": "multi",
+      "trap": false,
+      "q": "Chọn các phát biểu ĐÚNG về **optimizer**.",
+      "options": [
+        "Adam tự tìm learning rate tối ưu cho bài toán, nên không còn cần chọn hay tune learning rate nữa",
+        "Mini-batch SGD tính gradient chính xác tuyệt đối như full-batch gradient descent, chỉ là nhanh hơn",
+        "Momentum cộng dồn gradient các bước trước thành 'vận tốc', giúp đi nhanh theo hướng ổn định và giảm dao động",
+        "Momentum chia gradient cho căn bậc hai trung bình bình phương gradient của từng tham số riêng lẻ",
+        "Adam kết hợp momentum (moment bậc 1) với learning rate thích nghi cho từng tham số (moment bậc 2)"
+      ],
+      "answer": [
+        2,
+        4
+      ],
+      "explain": "**SGD**: θ ← θ − η·g, g tính trên mini-batch nên là **ước lượng nhiễu** của gradient full-batch (nhiễu này đôi khi còn giúp thoát vùng xấu). **Momentum**: v ← β·v + g; θ ← θ − η·v (β ≈ 0.9) – như hòn bi lăn có quán tính, tăng tốc ở hướng gradient nhất quán và triệt tiêu dao động qua lại trong 'thung lũng hẹp'. **RMSProp**: chia gradient cho √(trung bình bình phương gradient) → mỗi tham số có bước riêng – đây là cơ chế của RMSProp chứ không phải của momentum. **Adam** = momentum (m, moment bậc 1) + RMSProp (v, moment bậc 2) + bias correction. Adam vẫn **cần chọn learning rate** (mặc định 1e-3, thường cần tune và dùng scheduler). Thực tế: Adam/AdamW hội tụ nhanh, ít phải tune; SGD + momentum đôi khi tổng quát hoá tốt hơn trong vision."
+    },
+    {
+      "id": "core-036",
+      "sub": "Weight initialization",
+      "level": 3,
+      "type": "single",
+      "trap": true,
+      "q": "Vì sao không khởi tạo **toàn bộ** trọng số của một MLP bằng 0 (hoặc cùng một hằng số)?",
+      "options": [
+        "Vì số 0 không biểu diễn chính xác được ở fp16, gây NaN ngay từ lần forward pass đầu tiên của mạng",
+        "Vì output khi đó luôn bằng 0, chỉ cần khởi tạo bias khác 0 là đủ để mạng học bình thường",
+        "Neuron cùng layer cho cùng output, nhận cùng gradient nên mãi giống nhau – không phá được đối xứng",
+        "Vì khi đó loss ban đầu bằng 0 nên optimizer coi như đã hội tụ và dừng train ngay từ bước đầu"
+      ],
+      "answer": 2,
+      "explain": "Nếu mọi trọng số bằng nhau, các neuron trong cùng layer nhận cùng input, tính cùng output, và trong backprop nhận **cùng gradient** → sau mỗi bước cập nhật chúng vẫn giống hệt nhau. Layer 512 neuron hoạt động như 1 neuron: đây là vấn đề **symmetry** (đối xứng). **Bẫy**: khởi tạo bias khác 0 không giải quyết được – nếu bias cũng giống nhau thì đối xứng vẫn còn; ngược lại bias khởi tạo 0 là bình thường *miễn là trọng số ngẫu nhiên*. Giải pháp: trọng số **ngẫu nhiên** với phương sai được chọn để tín hiệu không phình/tắt qua các layer: **Xavier/Glorot** (Var = 2/(fan_in + fan_out), hợp tanh/sigmoid), **He/Kaiming** (Var = 2/fan_in, hợp ReLU). Số 0 biểu diễn chính xác ở mọi định dạng float, và loss ban đầu không bằng 0."
+    },
+    {
+      "id": "core-037",
+      "sub": "Vanishing gradient",
+      "level": 2,
+      "type": "single",
+      "trap": false,
+      "q": "Mạng sâu 20 layer dùng **sigmoid** ở mọi layer ẩn: các layer gần input gần như không học được. Giải thích nào ĐÚNG nhất?",
+      "options": [
+        "Learning rate tự động chia cho số layer, nên layer xa output nhận bước cập nhật nhỏ",
+        "Sigmoid cho output trong khoảng (0, 1) nên forward pass bị tràn số khi mạng có quá nhiều layer",
+        "Các layer gần input có ít tham số hơn nên gradient của chúng tự nhiên nhỏ hơn các layer gần output",
+        "Đạo hàm sigmoid ≤ 0.25, nhân dồn qua nhiều layer khi backprop nên gradient layer đầu teo về 0"
+      ],
+      "answer": 3,
+      "explain": "Backpropagation dùng **chain rule**: gradient ở layer đầu là tích của đạo hàm qua mọi layer phía sau. σ'(z) = σ(z)(1 − σ(z)) ≤ 0.25, nên chỉ riêng phần activation qua 20 layer đã ≤ 0.25²⁰ ≈ 9·10⁻¹³ → **vanishing gradient**: layer đầu gần như không cập nhật. Ngược lại nếu các thừa số > 1 (trọng số lớn) thì gradient phình to → **exploding gradient** (loss NaN). Cách chữa vanishing: **ReLU**/GELU (đạo hàm = 1 ở vùng dương), khởi tạo **He/Xavier**, **BatchNorm/LayerNorm**, **residual connection** (đường tắt cho gradient), với chuỗi dài dùng LSTM/GRU. Exploding: **gradient clipping**, lr nhỏ hơn, normalization. Optimizer không tự chia learning rate theo số layer."
+    },
+    {
+      "id": "core-038",
+      "sub": "CNN: convolution, stride, padding, pooling",
+      "level": 1,
+      "type": "multi",
+      "trap": false,
+      "q": "Chọn các phát biểu ĐÚNG về các thành phần của **CNN**.",
+      "options": [
+        "Weight sharing: một kernel trượt trên toàn ảnh nên số tham số không phụ thuộc kích thước ảnh",
+        "Tăng stride từ 1 lên 2 làm feature map đầu ra lớn gấp đôi theo mỗi chiều không gian",
+        "Padding thêm viền (thường là 0) để giữ kích thước và tận dụng các pixel ở mép ảnh",
+        "Max pooling 2×2 giảm kích thước không gian một nửa mỗi chiều và không có tham số học",
+        "Mỗi vị trí trên ảnh có một kernel riêng nên CNN thường nhiều tham số hơn hẳn MLP"
+      ],
+      "answer": [
+        0,
+        2,
+        3
+      ],
+      "explain": "**Convolution**: kernel (vd 3×3×C_in) trượt trên ảnh, tại mỗi vị trí tính tích vô hướng → feature map. **Weight sharing**: cùng kernel dùng ở mọi vị trí → số tham số = k·k·C_in·C_out (+ bias), không phụ thuộc H×W, ít hơn MLP rất nhiều, và có translation equivariance. Kích thước output mỗi chiều: **out = ⌊(n + 2p − k)/s⌋ + 1**. Ví dụ n = 28, k = 3, p = 1, s = 2 → ⌊27/2⌋ + 1 = 14: **stride 2 làm feature map nhỏ đi** khoảng một nửa, không phải lớn gấp đôi. **Padding** p = (k − 1)/2 với stride 1 giữ nguyên kích thước ('same'). **Pooling** (max/avg) giảm kích thước, tăng receptive field, tạo bất biến nhỏ với dịch chuyển, không có trọng số."
+    },
+    {
+      "id": "core-039",
+      "sub": "RNN & LSTM",
+      "level": 2,
+      "type": "single",
+      "trap": false,
+      "q": "Vì sao **LSTM** được thiết kế với cell state và các **gate** (forget, input, output) thay cho RNN đơn giản?",
+      "options": [
+        "Để học phụ thuộc xa: cell state cập nhật kiểu cộng, có gate điều tiết, nên gradient ít bị tắt dần",
+        "Để bỏ hẳn backpropagation through time, vì các gate tự quyết định trọng số thay cho việc tính gradient",
+        "Để xử lý song song toàn bộ chuỗi trong một bước như Transformer, nhờ đó train nhanh hơn hẳn RNN thường",
+        "Để giảm số tham số: các gate dùng chung trọng số nên LSTM nhẹ hơn RNN cùng kích thước"
+      ],
+      "answer": 0,
+      "explain": "RNN đơn giản h_t = tanh(W·h_{t−1} + U·x_t) cập nhật bằng phép nhân lặp lại qua từng bước thời gian, nên khi backprop through time gradient bị nhân với cùng ma trận nhiều lần → vanishing/exploding, khó nhớ thông tin xa. LSTM thêm **cell state** c_t = f_t ⊙ c_{t−1} + i_t ⊙ c̃_t: cập nhật **cộng**, **forget gate** f quyết định giữ bao nhiêu thông tin cũ, **input gate** i quyết định ghi bao nhiêu thông tin mới, **output gate** quyết định phần nào của cell lộ ra h_t. Khi f ≈ 1, gradient chảy qua cell gần như nguyên vẹn. Cái giá: LSTM có khoảng **4 lần** tham số RNN thường (4 bộ trọng số cho 3 gate + candidate) và vẫn xử lý **tuần tự** – điểm yếu mà Transformer khắc phục. GRU là bản rút gọn với 2 gate."
+    },
+    {
+      "id": "core-040",
+      "sub": "Attention tính tay",
+      "level": 3,
+      "type": "numeric",
+      "trap": false,
+      "q": "Scaled dot-product attention với d_k = 4. Query q = [1, 1, 1, 1]. Ba key: k₁ = [1, 1, 1, 1], k₂ = [1, 1, 0, 0], k₃ = [1, −1, 1, −1]. Để đơn giản, mỗi value là một số: v₁ = 1, v₂ = 2, v₃ = 3. Tính output attention = Σ softmax(q·kᵢ / √d_k) · vᵢ (làm tròn 3 chữ số thập phân).",
+      "answer": 1.425,
+      "tolerance": 0.005,
+      "unit": "",
+      "explain": "Bước 1 – điểm tương đồng: q·k₁ = 4, q·k₂ = 2, q·k₃ = 0. Bước 2 – scale: chia √d_k = 2 → [2, 1, 0]. Bước 3 – softmax: e² = 7.389, e¹ = 2.718, e⁰ = 1, tổng 11.107 → trọng số ≈ [0.665, 0.245, 0.090]. Bước 4 – tổng có trọng số của value: 0.665·1 + 0.245·2 + 0.090·3 ≈ **1.425**. Bẫy: quên chia √d_k → softmax([4, 2, 0]) ≈ [0.867, 0.117, 0.016] → 1.149. Chia √d_k để dot product không quá lớn khi d_k lớn, tránh softmax bão hoà (gần one-hot, gradient nhỏ). Trực giác: **attention = tra cứu mềm** – query so với mọi key, softmax thành trọng số, output là trung bình có trọng số của value; key giống query nhất đóng góp nhiều nhất."
+    },
+    {
+      "id": "core-041",
+      "sub": "Thực hành dữ liệu",
+      "level": 2,
+      "type": "multi",
+      "trap": false,
+      "q": "Chọn các thực hành xử lý dữ liệu ĐÚNG.",
+      "options": [
+        "Xoá mọi outlier theo quy tắc 3σ trước khi phân tích, vì outlier luôn là lỗi nhập liệu",
+        "Dữ liệu mất cân bằng 98/2 → dùng class_weight hoặc oversampling chỉ trên tập train",
+        "Cột thu nhập lệch phải, có vài giá trị cực lớn → impute missing bằng median thay vì mean",
+        "Bỏ hết các dòng có missing, vì việc dữ liệu bị thiếu không bao giờ mang thông tin gì",
+        "Augmentation ảnh ngẫu nhiên (lật, xoay nhẹ) chỉ áp khi train; val/test giữ nguyên ảnh gốc"
+      ],
+      "answer": [
+        1,
+        2,
+        4
+      ],
+      "explain": "**Missing**: với phân phối lệch/outlier, **median** bền hơn mean (vd [3, 4, 5, 6, 100]: mean 23.6, median 5). Có thể thêm cột chỉ báo `is_missing` vì *việc thiếu* nhiều khi mang thông tin (khách không khai thu nhập). Xoá dòng chỉ hợp lý khi tỷ lệ thiếu nhỏ và thiếu ngẫu nhiên. **Outlier**: phải điều tra trước – có thể là lỗi nhập liệu, nhưng cũng có thể chính là tín hiệu (giao dịch gian lận); lựa chọn: sửa, clip/winsorize, biến đổi log, dùng model/loss bền (tree, MAE/Huber). **Imbalanced**: class_weight, over/undersampling, SMOTE – nhưng **chỉ trên train** (resample trước khi split gây leakage), đánh giá bằng precision/recall/PR-AUC và chỉnh threshold. **Augmentation**: biến đổi ngẫu nhiên chỉ khi train; val/test chỉ resize/normalize để đánh giá khách quan (trừ kỹ thuật test-time augmentation chủ đích)."
+    },
+    {
+      "id": "core-042",
+      "sub": "Autoencoder",
+      "level": 1,
+      "type": "single",
+      "trap": false,
+      "q": "Phát biểu nào ĐÚNG về **autoencoder**?",
+      "options": [
+        "Bottleneck phải lớn hơn input để không mất thông tin, nên autoencoder luôn làm tăng số chiều biểu diễn",
+        "Encoder nén input vào bottleneck, decoder tái tạo input; train bằng reconstruction loss, không cần nhãn",
+        "Autoencoder chỉ là tên khác của PCA: luôn tuyến tính và luôn cho kết quả giống hệt PCA trên mọi dữ liệu",
+        "Encoder và decoder nhận hai input khác nhau, train bằng cross-entropy trên nhãn lớp có sẵn của dữ liệu"
+      ],
+      "answer": 1,
+      "explain": "Autoencoder: x → **encoder** → z (bottleneck, ít chiều hơn) → **decoder** → x̂, train tối thiểu **reconstruction loss** (MSE, BCE) giữa x và x̂. Mục tiêu chính là chính input nên không cần nhãn (self-supervised/unsupervised). Bottleneck nhỏ buộc model học biểu diễn nén giữ thông tin quan trọng – nếu bottleneck quá lớn model có thể học hàm identity vô nghĩa. Ứng dụng: giảm chiều phi tuyến, **denoising** autoencoder (input bị nhiễu, target sạch), **anomaly detection** (mẫu bất thường có reconstruction error cao), học embedding. Autoencoder tuyến tính + MSE học được cùng không gian con với PCA, nhưng có activation phi tuyến thì mạnh hơn PCA. **VAE** biến latent thành phân phối nên có thể sinh dữ liệu mới."
+    },
+    {
+      "id": "core-043",
+      "sub": "Embedding",
+      "level": 1,
+      "type": "multi",
+      "trap": false,
+      "q": "Chọn các phát biểu ĐÚNG về **embedding**, ví dụ `nn.Embedding(num_embeddings=50000, embedding_dim=768)`.",
+      "options": [
+        "Giá trị embedding được cố định theo thứ tự id trong từ điển và không thay đổi trong lúc train",
+        "Là bảng tra cứu 50000 × 768 trọng số học được; tra theo id tương đương nhân one-hot với ma trận đó",
+        "Là vector one-hot thưa 50000 chiều, mỗi token chỉ có đúng một phần tử bằng 1, còn lại là 0",
+        "Là vector dày, số chiều thấp; các đối tượng có ý nghĩa tương tự nhau thường nằm gần nhau"
+      ],
+      "answer": [
+        1,
+        3
+      ],
+      "explain": "**Embedding** ánh xạ một đối tượng rời rạc (token, user, sản phẩm…) thành một **vector dày** (dense), số chiều thấp so với số đối tượng. `nn.Embedding(50000, 768)` là một ma trận trọng số 50000 × 768 = 38.400.000 tham số; tra token id i chính là lấy hàng thứ i – tương đương nhân vector one-hot với ma trận nhưng rẻ hơn rất nhiều. Trọng số được **học qua backprop** cùng phần còn lại của model (hoặc lấy từ model pretrained), nên các đối tượng dùng trong ngữ cảnh giống nhau sẽ có vector gần nhau theo cosine similarity. One-hot là biểu diễn **thưa** và mọi cặp đều cách đều nhau – không mang ngữ nghĩa; embedding khắc phục điều đó. Đây cũng là nền tảng của semantic search/RAG: embedding câu từ encoder để so độ tương đồng."
+    },
+    {
+      "id": "core-044",
+      "sub": "Transfer learning & fine-tuning",
+      "level": 2,
+      "type": "single",
+      "trap": false,
+      "q": "Bạn có 800 ảnh X-quang đã gán nhãn (2 lớp) và một CNN pretrained trên ImageNet. Chiến lược hợp lý nhất để bắt đầu?",
+      "options": [
+        "Fine-tune toàn bộ mạng với learning rate lớn hơn lúc pretrain để nhanh chóng quên hết các đặc trưng ImageNet cũ",
+        "Giữ nguyên head 1.000 lớp của ImageNet và chỉ lấy 2 lớp có xác suất cao nhất trong số đó làm kết quả dự đoán",
+        "Khởi tạo ngẫu nhiên toàn bộ CNN rồi train từ đầu, vì ảnh X-quang khác ImageNet nên trọng số pretrained là vô dụng",
+        "Giữ backbone pretrained, thay head 2 lớp; train head trước, rồi fine-tune vài layer cuối với learning rate nhỏ"
+      ],
+      "answer": 3,
+      "explain": "**Transfer learning**: tái sử dụng kiến thức của model **pretrained** trên dữ liệu lớn. Các layer đầu của CNN học đặc trưng chung (cạnh, góc, texture) hữu ích cả cho ảnh y tế; layer sau càng đặc thù cho ImageNet. Với chỉ 800 ảnh, train từ đầu gần như chắc chắn overfit. Quy trình chuẩn: (1) thay classifier head bằng layer mới đúng số lớp; (2) **freeze** backbone, train head (feature extraction); (3) **fine-tune** dần vài block cuối (hoặc toàn bộ) với **learning rate nhỏ** để không phá trọng số tốt (catastrophic forgetting). Learning rate lớn làm mất lợi thế pretrain. Head ImageNet không có lớp 'bệnh/không bệnh' nên không dùng lại được. Quy tắc: dữ liệu ít + giống domain → chỉ train head; dữ liệu nhiều hoặc khác domain → fine-tune sâu hơn."
+    },
+    {
+      "id": "core-045",
+      "sub": "Normalization vs standardization",
+      "level": 1,
+      "type": "numeric",
+      "trap": false,
+      "q": "Cột feature có giá trị: 2, 4, 4, 4, 5, 5, 7, 9. Áp dụng **standardization (z-score)** dùng độ lệch chuẩn của tổng thể (population std, chia cho n). Giá trị **4** sau khi chuẩn hoá là bao nhiêu? (làm tròn 2 chữ số thập phân)",
+      "answer": -0.5,
+      "tolerance": 0.01,
+      "unit": "",
+      "explain": "Mean μ = (2 + 4 + 4 + 4 + 5 + 5 + 7 + 9)/8 = 40/8 = 5. Phương sai = Σ(x − μ)²/n = (9 + 1 + 1 + 1 + 0 + 0 + 4 + 16)/8 = 32/8 = 4 → σ = 2. z = (x − μ)/σ = (4 − 5)/2 = **−0.5** (âm vì nhỏ hơn trung bình). Nếu dùng sample std (chia n − 1, như `pandas.std()` mặc định) thì σ ≈ 2.138 và z ≈ −0.468; `StandardScaler` của sklearn dùng population std. So sánh: **min-max normalization** x' = (x − min)/(max − min) đưa về [0, 1]: (4 − 2)/(9 − 2) ≈ 0.286 – nhạy với outlier vì phụ thuộc min/max. **Standardization** cho mean 0, std 1, không giới hạn khoảng, ít bị một outlier bóp méo hơn – lựa chọn mặc định cho linear model, SVM, PCA, neural network. Cả hai phải fit trên train rồi áp lên val/test."
+    },
+    {
+      "id": "core-046",
+      "sub": "One-hot vs label encoding",
+      "level": 1,
+      "type": "single",
+      "trap": true,
+      "q": "Cột `city` có 3 giá trị {Hà Nội, Đà Nẵng, TP.HCM}, dùng làm feature cho **linear regression**. Bạn mã hoá Hà Nội = 0, Đà Nẵng = 1, TP.HCM = 2 (label encoding). Vấn đề là gì?",
+      "options": [
+        "Không có vấn đề gì, vì linear regression tự nhận ra đây là biến phân loại khi train",
+        "Model hiểu nhầm là có thứ tự và khoảng cách đều giữa các thành phố; nên dùng one-hot",
+        "Chỉ cần chuẩn hoá cột này về [0, 1] bằng min-max là loại bỏ được hoàn toàn vấn đề",
+        "Label encoding làm số cột tăng gấp 3, gây curse of dimensionality cho model tuyến tính"
+      ],
+      "answer": 1,
+      "explain": "Label encoding gán số nguyên cho từng loại. Với model tuyến tính (hoặc kNN, neural network), con số được hiểu là **đại lượng có thứ tự và khoảng cách**: hiệu ứng của TP.HCM bị ép bằng đúng 2 lần Đà Nẵng so với Hà Nội – vô nghĩa với biến **nominal** (không thứ tự). **One-hot** tạo 3 cột nhị phân, mỗi thành phố có hệ số riêng (với model có intercept có thể bỏ 1 cột – `drop_first` – để tránh dummy variable trap). Chính one-hot mới làm tăng số cột, không phải label encoding. Min-max chỉ đổi thang đo, thứ tự giả vẫn còn. Label encoding hợp lý khi biến **ordinal** (S < M < L) hoặc với model cây (ít bị ảnh hưởng). Với biến có hàng nghìn giá trị: target encoding (cẩn thận leakage), hashing hoặc embedding."
+    },
+    {
+      "id": "core-047",
+      "sub": "sklearn fit / transform / predict",
+      "level": 1,
+      "type": "single",
+      "trap": false,
+      "q": "Dùng `StandardScaler` (biến `sc`) với dữ liệu đã chia `X_train`, `X_test`. Cách nào ĐÚNG?",
+      "options": [
+        "`sc.fit(X_train)` rồi `sc.transform(X_train)` và `sc.transform(X_test)`",
+        "`sc.fit(np.vstack([X_train, X_test]))`, sau đó transform cả hai tập",
+        "`sc.fit_transform(X_train)` và `sc.fit_transform(X_test)` riêng rẽ",
+        "`sc.fit(X_test)`, sau đó `sc.transform(X_train)` và `sc.transform(X_test)`"
+      ],
+      "answer": 0,
+      "explain": "API sklearn: `fit` **học tham số từ dữ liệu** (với scaler là mean và std; với model là trọng số), `transform` **áp dụng** tham số đã học, `fit_transform` = fit rồi transform trên cùng dữ liệu, `predict` dùng cho estimator đã fit. Quy tắc vàng: **chỉ fit trên train**, rồi dùng đúng các tham số đó để transform val/test – mô phỏng thực tế lúc deploy, khi ta không biết thống kê của dữ liệu tương lai. Fit trên train + test (hoặc toàn bộ dữ liệu) là **data leakage**: thông tin của test rò vào quá trình train. `fit_transform` riêng trên test thì test bị chuẩn hoá theo thang khác train → feature lệch, dự đoán sai. Fit trên test là cả leakage lẫn sai logic. Cách an toàn nhất: gói scaler + model trong `Pipeline`, nhất là khi dùng cross-validation."
+    },
+    {
+      "id": "core-048",
+      "sub": "Tensor shape & broadcasting",
+      "level": 3,
+      "type": "multi",
+      "trap": false,
+      "q": "Với NumPy/PyTorch, chọn các phát biểu ĐÚNG về **shape** (broadcasting và matmul).",
+      "options": [
+        "`A` shape (2, 3) `@` `B` shape (2, 3) → kết quả có shape (2, 2)",
+        "`a` shape (3, 1) cộng `b` shape (4,) → kết quả có shape (3, 4)",
+        "`x` shape (32, 3, 224, 224), `x.reshape(32, -1)` → shape (32, 150528)",
+        "`A` shape (8, 16, 64) `@` `B` shape (64, 32) → kết quả có shape (8, 16, 32)",
+        "`a` shape (3, 4) cộng `b` shape (3,) → broadcast thành shape (3, 4)"
+      ],
+      "answer": [
+        1,
+        2,
+        3
+      ],
+      "explain": "**Broadcasting**: so sánh shape **từ phải sang trái**; hai chiều tương thích khi bằng nhau hoặc một trong hai bằng 1 (chiều thiếu coi như 1). (3, 1) + (4,) → (3, 1) và (1, 4) → (3, 4) ✓. (3, 4) + (3,): chiều cuối 4 vs 3 → **lỗi**; muốn cộng theo hàng phải reshape b thành (3, 1). **Matmul** `@`: chiều cuối của A phải bằng chiều kề cuối của B; các chiều phía trước là batch: (8, 16, 64) @ (64, 32) → (8, 16, 32) ✓. (2, 3) @ (2, 3) lỗi vì 3 ≠ 2 – phải dùng A @ B.T → (2, 2). **reshape(32, −1)**: −1 để framework tự suy ra = 3·224·224 = 150528, tổng số phần tử không đổi. Quy ước ảnh PyTorch là (N, C, H, W); TensorFlow/NumPy ảnh thường là (N, H, W, C). Debug shape là kỹ năng cơ bản nhất khi đọc/viết code DL."
+    },
+    {
+      "id": "core-049",
+      "sub": "Vì sao GPU nhanh",
+      "level": 1,
+      "type": "single",
+      "trap": false,
+      "q": "Vì sao GPU train deep learning nhanh hơn CPU nhiều lần?",
+      "options": [
+        "Mỗi core GPU có xung nhịp cao hơn nhiều so với core CPU nên xử lý từng lệnh nhanh hơn",
+        "GPU tự tối ưu thuật toán, giảm số phép tính cần cho mỗi lần backprop",
+        "Hàng nghìn core chạy song song các phép nhân ma trận, cùng băng thông bộ nhớ rất cao",
+        "GPU có bộ nhớ lớn hơn RAM của CPU nên chứa được toàn bộ dataset mà không cần chia batch"
+      ],
+      "answer": 2,
+      "explain": "Deep learning chủ yếu là **nhân ma trận/tensor** – hàng tỷ phép nhân-cộng độc lập có thể chạy song song. CPU có ít core mạnh, tối ưu cho **độ trễ** của từng tác vụ tuần tự, phức tạp. GPU có **hàng nghìn core đơn giản** chạy cùng một lệnh trên nhiều dữ liệu (SIMT), tối ưu cho **thông lượng**, thêm **Tensor Core** chuyên cho phép nhân ma trận ở fp16/bf16 và **băng thông bộ nhớ** (HBM) cao hơn nhiều lần. Thực tế xung nhịp core GPU thường **thấp hơn** CPU; VRAM thường **nhỏ hơn** RAM hệ thống (vì vậy mới cần batch); GPU không giảm số phép tính – nó làm nhiều phép tính cùng lúc. Lưu ý: model và data phải nằm cùng device (`.to('cuda')`); với model rất nhỏ, overhead chuyển dữ liệu có thể làm GPU không nhanh hơn."
+    },
+    {
+      "id": "core-050",
+      "sub": "Batch size & bộ nhớ",
+      "level": 2,
+      "type": "single",
+      "trap": false,
+      "q": "Train CNN trên GPU: batch size 32 dùng khoảng 10 GB VRAM, tăng lên 64 thì bị **out-of-memory**. Thành phần bộ nhớ nào tăng theo batch size?",
+      "options": [
+        "Activation lưu lại cho backward (và batch input), tăng gần tuyến tính theo batch",
+        "Gradient của trọng số tăng gấp đôi, vì phải lưu một bản gradient riêng cho từng mẫu",
+        "Trạng thái optimizer (moment của Adam) tăng gấp đôi theo số mẫu có trong batch",
+        "Trọng số model tăng gấp đôi, vì mỗi mẫu trong batch cần một bản sao trọng số riêng"
+      ],
+      "answer": 0,
+      "explain": "Bộ nhớ khi train gồm: (1) **trọng số**, (2) **gradient** của trọng số (cùng kích thước trọng số – gradient của các mẫu được cộng dồn, không lưu riêng), (3) **optimizer state** (Adam lưu 2 moment = 2 × số tham số) – ba phần này **cố định**, không phụ thuộc batch size; (4) **activation** của mọi layer được giữ lại để tính gradient trong backward, cùng tensor input – phần này **tỷ lệ thuận với batch size** (và độ phân giải ảnh/độ dài chuỗi). Vì vậy nhân đôi batch không nhân đôi toàn bộ 10 GB, chỉ nhân đôi phần activation. Cách xử lý OOM: giảm batch size + **gradient accumulation** (cộng gradient qua nhiều micro-batch để có batch hiệu dụng lớn), **mixed precision** (fp16/bf16), **gradient checkpointing** (tính lại activation thay vì lưu). Khi inference dùng `torch.no_grad()` thì không cần lưu activation cho backward nên tốn ít bộ nhớ hơn nhiều."
+    }
+  ]
+}

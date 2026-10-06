@@ -1,0 +1,857 @@
+{
+  "id": "sysdesign",
+  "name": "ML System Design, Ranking & Experimentation",
+  "icon": "🏗️",
+  "order": 9.5,
+  "notes": [
+    {
+      "title": "Khung trả lời ML system design (8 bước)",
+      "md": "1. **Làm rõ yêu cầu**: mục tiêu kinh doanh, người dùng, quy mô (user, item, peak QPS), latency/cost budget, ràng buộc pháp lý/dữ liệu.\n2. **Metric**: offline (recall@K, nDCG, PR-AUC, calibration) ↔ online (CTR, conversion, GMV, retention) + **guardrail** (latency p99, error rate, complaint).\n3. **Dữ liệu & nhãn**: nguồn, label explicit/implicit, label delay, selection bias, chia train/test **theo thời gian**.\n4. **Feature**: user/item/context/cross, batch vs real-time, point-in-time correctness.\n5. **Model**: heuristic/baseline → GBDT/two-tower → deep/LLM; giải thích trade-off.\n6. **Serving**: batch/online/streaming, cascade, caching, fallback, latency budget, capacity.\n7. **Monitoring**: data/feature drift, prediction drift, KPI, freshness, tỉ lệ fallback.\n8. **Iteration**: shadow → canary → A/B, retrain, data flywheel (sản phẩm tốt hơn → nhiều tương tác → nhiều nhãn → model tốt hơn).\n\n**Lỗi hay gặp:** nhảy vào model ngay; không nói metric; quên baseline; quên cold start và feedback loop; không nêu fallback."
+    },
+    {
+      "title": "Batch vs online vs streaming",
+      "md": "| Kiểu | Khi nào | Ưu | Nhược |\n|---|---|---|---|\n| Batch (offline) | Biết trước tập cần chấm, không cần tức thì (email hằng ngày, gợi ý tính sẵn) | Rẻ, batch lớn, dễ kiểm tra trước | Kết quả cũ, tốn công cho user không hoạt động |\n| Online (đồng bộ) | Cần quyết định trong request (fraud lúc thanh toán, search) | Dùng ngữ cảnh mới nhất | Ràng buộc latency, cần autoscale, fallback |\n| Streaming | Feature/score cập nhật theo event (velocity, session) | Feature tươi, độ trễ giây | Phức tạp (Kafka/Flink), exactly-once, late events |\n\nKiến trúc thường gặp là lai: embedding item tính batch, feature velocity tính streaming, ranking online."
+    },
+    {
+      "title": "Feature store & training-serving skew",
+      "md": "- **Online store**: KV latency thấp (Redis/DynamoDB), giữ giá trị mới nhất → serving.\n- **Offline store**: lịch sử có timestamp → dựng tập train bằng **point-in-time join** (chỉ lấy giá trị có `ts ≤ event_ts`).\n- **Nguồn skew**: hai codebase tính feature khác nhau; join snapshot hiện tại (leakage tương lai); feature online bị trễ/thiếu; xử lý null khác nhau; phân phối thay đổi (drift).\n- **Phòng tránh**: định nghĩa feature một lần; log feature lúc serving để train lại (\"log-and-wait\"); so sánh phân phối train vs serve (PSI, KS); unit test cho transform.\n- Dấu hiệu leakage: AUC offline cao bất thường (0.97+) rồi rơi mạnh online."
+    },
+    {
+      "title": "Latency budget, capacity, cost",
+      "md": "- **Latency budget**: bước song song lấy max, tuần tự thì cộng; cộng các p99 là ước lượng bảo thủ.\n- **Little's law**: `L = λ × W` → số request đồng thời = QPS × latency (giây).\n- **Số replica** = ⌈QPS × latency / (concurrency_mỗi_replica × utilization_mục_tiêu)⌉, cộng thêm N+1 dự phòng.\n- **Batch tuần tự**: số ứng viên tối đa = ⌊budget / t_batch⌋ × batch_size (batch không đầy vẫn tốn trọn thời gian).\n- **Cost per request (API)** = in_tok × giá_in + out_tok × giá_out.\n- **Hoà vốn self-host**: N* = chi phí cố định/tháng (GPU 24/7 + **người vận hành**) / cost_per_request_API. Kiểm tra utilization thật và chất lượng model.\n- Ví dụ: 800 QPS × 0.15 s = 120 đồng thời; 16 slot × 70% = 11.2 → 11 replica."
+    },
+    {
+      "title": "Cascade, cold start, feedback loop, deploy an toàn",
+      "md": "- **Cascade**: retrieval (recall@K, ANN, two-tower) → ranking (nDCG, GBDT/DNN, cross features) → re-ranking (đa dạng, business rule, fairness). Recall của tầng đầu là trần chất lượng; recall nối tiếp = tích recall các tầng.\n- **Cold start**: user mới → popular theo segment, onboarding, session features; item mới → content embedding, exploration slot.\n- **Feedback loop**: model chỉ thấy nhãn trên cái nó hiển thị/cho qua → cần exploration, holdout ngẫu nhiên, log propensity.\n- **Label delay**: chỉ train trên dữ liệu đã qua label maturity window, hoặc dùng delayed-feedback model.\n- **Deploy**: shadow (sức khoẻ, không đo được hành vi user) → canary (lỗi, guardrail) → A/B (KPI) → ramp-up; luôn có rollback và fallback (popular, cache, model nhẹ, circuit breaker)."
+    },
+    {
+      "title": "Case study nhanh",
+      "md": "| Bài toán | Điểm then chốt |\n|---|---|\n| Fraud | < 100 ms, velocity feature streaming, rule + ML, split theo thời gian, label delay (chargeback), ngưỡng theo chi phí, selective labels |\n| Document AI/OCR | detect → recognize → layout/KIE → validate rule → human-in-the-loop theo confidence; ngưỡng theo tổng chi phí review + lỗi |\n| Chatbot CSKH RAG | tri thức tĩnh → RAG; dữ liệu cá nhân/động → tool/API có xác thực; guardrail, handoff sang người, eval faithfulness |\n| Search | query understanding → hybrid retrieval → LTR → rerank; metric nDCG/MRR, zero-result rate, CTR@k |\n| Moderation | classifier rẻ recall cao → LLM/model nặng → người; recall nhân dồn, sample ngẫu nhiên bài đã đăng để đo bỏ sót |\n| RecSys | two-tower + ANN → ranker đa mục tiêu → re-rank đa dạng; cold start, position bias |"
+    },
+    {
+      "title": "Learning-to-rank & metric",
+      "md": "| Họ | Loss trên | Ví dụ |\n|---|---|---|\n| Pointwise | từng doc | regression/logloss |\n| Pairwise | cặp (d_i ≻ d_j) | RankNet `P = σ(s_i − s_j)` |\n| Listwise | cả danh sách | ListNet, ListMLE, LambdaRank (lai pairwise–listwise) |\n\n- **LambdaRank**: λ_ij = gradient RankNet × |ΔNDCG_ij| (nDCG không khả vi → định nghĩa thẳng gradient). **LambdaMART** = lambda + GBDT (LightGBM `lambdarank`).\n- `DCG@k = Σ (2^rel − 1)/log2(i + 1)`; nDCG = DCG/IDCG, với IDCG từ **mọi** doc relevant đã biết.\n- MRR = mean(1/rank của kết quả đúng đầu tiên); MAP = mean AP (nhị phân).\n- Precision@k tăng không kéo theo nDCG tăng."
+    },
+    {
+      "title": "Position bias, click model, IPS, interleaving, exploration",
+      "md": "- **Examination hypothesis**: P(click) = P(xem | vị trí) × P(hấp dẫn). Hấp dẫn ≈ CTR / propensity.\n- **Click model**: position-based (PBM), cascade (người dùng duyệt từ trên xuống, dừng khi click).\n- **Ước lượng propensity**: randomization (swap/RandPair), EM trên log; KHÔNG dùng CTR theo vị trí thô.\n- **IPS**: trọng số 1/p_k → không chệch nếu p đúng, variance cao → clip / self-normalized. Không cứu được item chưa từng hiển thị.\n- **Interleaving** (team-draft): nhạy hơn A/B nhiều lần cho so sánh ranker, nhưng chỉ cho preference, không cho lift KPI.\n- **Exploration**: ε-greedy, UCB, Thompson; log propensity để off-policy eval.\n- **Offline↑ online↔**: nhãn sinh từ policy cũ, metric lệch KPI, novelty, hiệu ứng toàn trang."
+    },
+    {
+      "title": "Anomaly detection cheat-sheet",
+      "md": "| Phương pháp | Ý tưởng | Lưu ý |\n|---|---|---|\n| z-score | \\|x − μ\\|/σ > 3 | Bị **masking**; với n nhỏ \\|z\\| ≤ √(n−1); dùng modified z (median, MAD, > 3.5) |\n| IQR (Tukey) | ngoài [Q1 − 1.5·IQR, Q3 + 1.5·IQR] | Robust; quy ước quantile khác nhau |\n| Isolation Forest | path ngắn = dễ cô lập = bất thường; s = 2^(−E[h]/c(n)) | Không cần nhãn, nhanh, sub-sample 256 |\n| LOF | mật độ cục bộ so với láng giềng; ≈1 bình thường, ≫1 bất thường | Hợp cụm mật độ khác nhau; O(n²) |\n| One-Class SVM | biên bao dữ liệu bình thường; ν = cận trên tỉ lệ outlier | Nhạy scale & kernel |\n| Autoencoder | reconstruction error cao = bất thường | Train trên data sạch; dễ học luôn anomaly |\n\n- Loại: **point**, **contextual** (theo giờ/mùa), **collective** (chuỗi).\n- Đánh giá ít nhãn: precision@k (k = năng lực review), PR-AUC, recall trên case đã biết, backtest sự cố.\n- Ngưỡng theo chi phí: tối thiểu `#alert × c_review + #miss × c_miss`."
+    },
+    {
+      "title": "A/B testing: thiết kế & thống kê",
+      "md": "- **Đơn vị randomize** = đơn vị phân tích (user); hash ổn định; pre-register primary/guardrail/thời lượng; chạy trọn chu kỳ tuần.\n- **Sample size**: `n ≈ 16σ²/δ²` mỗi nhóm (α = 0.05 hai phía, power 80%); tỉ lệ: σ² = p(1 − p). Ví dụ p = 5%, δ = 0.5 điểm → 30 400/nhóm.\n- **MDE**: `δ = √(16σ²/n)` với n **mỗi nhóm**; n ∝ 1/δ².\n- **Multiple testing**: FWER = 1 − (1 − α)^m khi m kiểm định độc lập và mọi H0 đúng (m = 20 → 64%); Bonferroni α/m; Holm; BH cho FDR.\n- **Peeking**: nhìn 10 lần ≈ 19% false positive → fixed horizon hoặc sequential (O'Brien–Fleming, mSPRT).\n- **SRM**: χ² = Σ(O − E)²/E, df = 1; 50 600 vs 49 400 → χ² = 14.4, p ≈ 0.00015 → dừng, tìm bug.\n- **CUPED**: Y − θ(X − X̄), θ = cov/var, variance × (1 − ρ²) → ρ = 0.6 giảm 36% cỡ mẫu.\n- **A/A**: tỉ lệ false positive kỳ vọng ≈ α; p-value phân phối đều.\n- **Novelty** (lift giảm dần) vs **primacy** (ban đầu tệ, tốt dần): xem effect theo thời gian, tách user mới/cũ."
+    },
+    {
+      "title": "Interference, bandit & khi nào không A/B",
+      "md": "- **SUTVA bị vi phạm**: marketplace (chung nguồn cung), mạng xã hội, đấu giá quảng cáo chung ngân sách → chệch, tăng n không sửa được.\n- Thiết kế: **switchback** (khu vực × khung giờ), **cluster/geo randomization** (variance ↑), ego-network clusters.\n- **Bandit** vs A/B: bandit giảm regret, hợp chiến dịch ngắn/nhiều arm; A/B cho ước lượng hiệu ứng không chệch và CI chuẩn.\n- ε-greedy: arm tốt nhất nhận 1 − ε + ε/K (ε = 0.1, K = 4 → 92.5%). Thompson: sample posterior (Beta) rồi argmax.\n- Offline eval → online A/B mismatch: luôn xác nhận bằng thí nghiệm online trước khi ship thay đổi lớn."
+    },
+    {
+      "title": "Causal inference khi không thí nghiệm được",
+      "md": "| Phương pháp | Giả định then chốt | Ghi nhớ |\n|---|---|---|\n| Propensity (matching/IPW) | Không có confounder ẩn, có overlap | e(X) = P(T=1\\|X); kiểm tra balance; không đưa biến sau treatment |\n| DiD | Parallel trends | (A_sau − A_trước) − (B_sau − B_trước); kiểm tra event study |\n| IV | Relevance + exclusion | Ước lượng LATE cho compliers; encouragement design |\n| RDD | Không thao túng quanh ngưỡng | Hiệu ứng cục bộ tại ngưỡng |\n| Uplift modeling | Có cả treatment & control | Nhắm persuadables; Qini curve; đừng nhắm \"sure things\" |\n\n- **Correlation ≠ causation**: self-selection, confounder (mức độ gắn bó).\n- **Simpson's paradox**: thắng từng tầng nhưng thua tổng do phân phối tầng khác nhau → so theo tầng/chuẩn hoá."
+    }
+  ],
+  "questions": [
+    {
+      "id": "sysdesign-001",
+      "sub": "Khung trả lời system design",
+      "level": 1,
+      "type": "single",
+      "trap": false,
+      "q": "Trong vòng phỏng vấn ML system design, bạn nhận đề: “Thiết kế hệ thống gợi ý sản phẩm trên trang chủ app thương mại điện tử”. Việc nên làm **đầu tiên** là gì?",
+      "options": [
+        "Đề xuất ngay model mạnh nhất hiện có (ví dụ sequential transformer recommender) rồi mới bàn tới dữ liệu và metric",
+        "Hỏi làm rõ mục tiêu kinh doanh, quy mô (user, item, QPS), latency và metric thành công trước khi chọn kiến trúc",
+        "Vẽ chi tiết kiến trúc serving với Kafka, feature store, Kubernetes để chứng minh kinh nghiệm hạ tầng production",
+        "Chọn loss function và optimizer trước tiên, vì đó là phần quyết định chất lượng model nhiều nhất trong hệ thống"
+      ],
+      "answer": 1,
+      "explain": "Đề system design luôn mơ hồ có chủ đích. Người phỏng vấn muốn xem bạn biết làm rõ yêu cầu: mục tiêu kinh doanh (GMV, CTR hay retention), quy mô (số user, số item, peak QPS), ràng buộc latency/cost, dữ liệu sẵn có và metric thành công offline/online. Khung chuẩn đi tiếp theo thứ tự: metric → dữ liệu & label → feature → baseline rồi model nâng cao → serving → monitoring → iteration (vòng lặp dữ liệu, data flywheel). Nhảy thẳng vào model “xịn nhất” hay vẽ hạ tầng chi tiết khi chưa biết bài toán là lỗi phổ biến: có thể giải sai bài toán, hoặc thiết kế quá mức so với nhu cầu. Loss và optimizer là chi tiết của bước modeling, không phải điểm khởi đầu."
+    },
+    {
+      "id": "sysdesign-002",
+      "sub": "Batch vs online vs streaming",
+      "level": 1,
+      "type": "single",
+      "trap": false,
+      "q": "Ghép kiểu inference/pipeline phù hợp cho ba use case:\n\n- **UC1**: email “Top 10 sản phẩm cho bạn” gửi lúc 7h sáng mỗi ngày cho 5 triệu user.\n- **UC2**: chấm điểm gian lận khi khách quẹt thẻ, phải có kết quả trong < 100 ms.\n- **UC3**: feature “số giao dịch của thẻ trong 10 phút gần nhất”, dùng cho model ở UC2.",
+      "options": [
+        "UC1: online inference lúc người dùng mở email; UC2: batch inference mỗi giờ; UC3: tính lại bằng batch job hằng đêm",
+        "UC1: streaming inference theo từng event click; UC2: batch inference mỗi 5 phút; UC3: SQL quét toàn bộ lịch sử khi cần",
+        "Cả ba đều dùng online inference đồng bộ để luôn có dữ liệu mới nhất và khỏi phải duy trì nhiều loại pipeline",
+        "UC1: batch chạy đêm; UC2: online inference đồng bộ; UC3: streaming pipeline cập nhật liên tục vào online store"
+      ],
+      "answer": 3,
+      "explain": "UC1 biết trước tập user và thời điểm cần kết quả, không cần phản hồi tức thì. Batch inference chạy đêm rẻ nhất, tận dụng được batch lớn và có thời gian kiểm tra kết quả trước khi gửi. UC2 cần quyết định ngay trong luồng thanh toán nên phải là online inference đồng bộ với latency thấp. UC3 là feature dạng cửa sổ trượt: nếu tính bằng batch hằng đêm thì feature lỗi thời cả ngày, làm vô dụng tín hiệu velocity. Còn quét toàn bộ lịch sử bằng SQL lúc request thì quá chậm. Vì vậy cần streaming (Kafka + Flink/Spark Streaming) cập nhật vào online store. Gom tất cả về online đồng bộ là lãng phí: chấm 5 triệu user mỗi sáng theo kiểu request-by-request vừa tốn kém vừa không mang lại lợi ích gì."
+    },
+    {
+      "id": "sysdesign-003",
+      "sub": "Feature store & real-time feature",
+      "level": 2,
+      "type": "multi",
+      "trap": false,
+      "q": "Chọn **TẤT CẢ** phát biểu ĐÚNG về feature store và real-time feature.",
+      "options": [
+        "Khi đã có feature store thì không cần monitor phân phối feature nữa, vì training-serving skew đã bị loại bỏ hoàn toàn",
+        "Online store là nguồn chính để dựng tập train, vì nó luôn chứa giá trị feature mới nhất và đầy đủ của mọi entity",
+        "Online store (thường là key-value như Redis/DynamoDB) cho phép tra feature theo entity với latency vài ms lúc inference",
+        "Offline store lưu lịch sử feature theo thời gian để dựng tập train bằng point-in-time join, tránh dùng giá trị từ tương lai",
+        "Định nghĩa feature một lần, dùng chung cho train và serving, giúp giảm skew do hai codebase tính khác nhau"
+      ],
+      "answer": [
+        2,
+        3,
+        4
+      ],
+      "explain": "Feature store (Feast, Tecton, Vertex/SageMaker Feature Store…) có hai phần. Online store tối ưu cho tra cứu theo key với latency thấp lúc serving. Offline store lưu giá trị theo timestamp để tái tạo đúng giá trị feature “tại thời điểm xảy ra event” khi dựng tập train (point-in-time correct join). Online store chỉ giữ giá trị mới nhất, nên dùng nó để train sẽ gây leakage từ tương lai. Lợi ích lớn nhất là một định nghĩa feature duy nhất cho cả train và serve, giảm training-serving skew do logic bị viết hai lần. Tuy nhiên feature store không chống được data drift, pipeline upstream hỏng hay giá trị null tăng đột biến. Vẫn cần monitor phân phối feature và freshness."
+    },
+    {
+      "id": "sysdesign-004",
+      "sub": "Training-serving skew & point-in-time",
+      "level": 3,
+      "type": "single",
+      "trap": true,
+      "q": "Model fraud dùng feature `num_chargebacks_user` (tổng số chargeback của user). Tập train được dựng bằng cách join bảng giao dịch 2023–2024 (kèm nhãn) với **bảng user hiện tại** (snapshot hôm nay). AUC offline 0.97, nhưng online chỉ ~0.75. Nguyên nhân khả dĩ nhất là gì?",
+      "options": [
+        "Leakage theo thời gian: snapshot hôm nay đã đếm cả chargeback xảy ra sau giao dịch; cần point-in-time join",
+        "Concept drift: hành vi gian lận năm nay khác hẳn 2023–2024, nên chỉ cần lịch retrain hằng tuần là khắc phục được",
+        "Model overfit do có quá nhiều cây; giảm độ sâu và thêm regularization sẽ đưa AUC online về lại gần 0.97",
+        "Ngưỡng quyết định online chưa được hiệu chỉnh; chọn lại threshold theo PR curve sẽ nâng AUC online lên"
+      ],
+      "answer": 0,
+      "explain": "Snapshot hôm nay của `num_chargebacks_user` đã bao gồm chargeback phát sinh từ chính các giao dịch gian lận trong tập train, tức là chứa thông tin về nhãn. Model học “user có chargeback → fraud” gần như tra đáp án, nên AUC offline cao bất thường. Lúc serving, feature chỉ có giá trị tại thời điểm giao dịch nên tín hiệu biến mất. Cách sửa: point-in-time join, mỗi giao dịch chỉ được lấy giá trị feature có timestamp trước thời điểm giao dịch (và trước thời điểm nhãn khả dụng). Concept drift hay overfit hiếm khi tạo khoảng cách lớn như vậy ngay từ đầu. Phương án ngưỡng là bẫy: AUC không phụ thuộc threshold, nên đổi ngưỡng không thể thay đổi AUC."
+    },
+    {
+      "id": "sysdesign-005",
+      "sub": "Latency budget",
+      "level": 2,
+      "type": "numeric",
+      "trap": false,
+      "q": "Endpoint gợi ý có latency budget **250 ms** (đo tại server). Các bước:\n\n- Network + gateway + auth: 50 ms\n- Lấy feature: gọi **song song** 3 service, lần lượt mất 12, 18 và 25 ms\n- Candidate retrieval (ANN): 30 ms\n- Ranking: 500 candidate, chấm theo batch 100, mỗi batch 15 ms, các batch chạy **tuần tự**\n- Serialize response + ghi log đồng bộ: 10 ms\n\nGiả sử các bước nối tiếp nhau và thời gian cộng trực tiếp. Còn lại bao nhiêu **ms** cho bước re-ranking (đa dạng hoá + business rules)?",
+      "answer": 60,
+      "tolerance": 0,
+      "unit": "ms",
+      "explain": "Ba lời gọi feature chạy song song nên chỉ tốn thời gian của lời gọi chậm nhất: max(12, 18, 25) = 25 ms, không phải 12 + 18 + 25 = 55 ms. Ranking: 500/100 = 5 batch tuần tự × 15 ms = 75 ms. Tổng đã dùng: 50 + 25 + 30 + 75 + 10 = 190 ms. Còn lại: 250 − 190 = 60 ms. Nếu cộng nhầm ba lời gọi feature, bạn chỉ còn 30 ms. Lưu ý thực tế: cộng các p99 của từng bước cho ra ước lượng bảo thủ, vì p99 không cộng tuyến tính. Các cách lấy thêm budget: chạy song song nhiều batch ranking trên GPU, ghi log bất đồng bộ, hoặc cắt bớt số candidate."
+    },
+    {
+      "id": "sysdesign-006",
+      "sub": "Capacity planning",
+      "level": 2,
+      "type": "numeric",
+      "trap": false,
+      "q": "Dịch vụ embedding cần chịu peak **800 QPS**. Mỗi replica GPU (có dynamic batching) xử lý tối đa **16 request đồng thời**, latency trung bình mỗi request **150 ms**. Để giữ headroom, mỗi replica chỉ được chạy tới **70%** công suất. Dùng Little's law, cần **tối thiểu** bao nhiêu replica? (số nguyên)",
+      "answer": 11,
+      "tolerance": 0,
+      "unit": "replica",
+      "explain": "Little's law: L = λ × W. Số request đồng thời trung bình trong hệ thống = 800 req/s × 0.15 s = 120. Mỗi replica được dùng tối đa 16 × 0.7 = 11.2 slot đồng thời. Số replica = 120 / 11.2 ≈ 10.71, làm tròn LÊN thành 11. Làm tròn xuống thành 10 sẽ vượt mức 70%. Tương đương, mỗi replica cho throughput 16 / 0.15 ≈ 106.7 QPS, ở 70% là ≈ 74.7 QPS, và 800 / 74.7 ≈ 10.7. Thực tế nên cộng thêm N+1 hoặc N+2 replica dự phòng khi một node chết hoặc khi deploy rolling, và kiểm tra lại vì latency tăng khi tải gần bão hoà."
+    },
+    {
+      "id": "sysdesign-007",
+      "sub": "LLM API vs self-host",
+      "level": 3,
+      "type": "numeric",
+      "trap": true,
+      "q": "So sánh LLM API với self-host cho chatbot nội bộ.\n\n- **API**: input $0.50 / 1M token, output $1.50 / 1M token. Mỗi request trung bình 1 500 token input + 300 token output.\n- **Self-host**: 2 GPU thuê $2.20/GPU/giờ chạy 24/7 (730 giờ/tháng), cộng chi phí vận hành (một phần lương MLOps, monitoring) $2 000/tháng. Giả sử 2 GPU đủ công suất ở mọi mức tải đang xét và chi phí biên mỗi request ≈ 0.\n\nĐiểm hoà vốn là bao nhiêu **triệu request/tháng**? (làm tròn 2 chữ số thập phân)",
+      "answer": 4.34,
+      "tolerance": 0.01,
+      "unit": "triệu request/tháng",
+      "explain": "Chi phí API mỗi request = 1 500 × 0.50/10⁶ + 300 × 1.50/10⁶ = 0.00075 + 0.00045 = $0.0012. Chi phí self-host cố định mỗi tháng = 2 × 2.20 × 730 + 2 000 = 3 212 + 2 000 = $5 212. Hoà vốn khi N × 0.0012 = 5 212, tức N ≈ 4 343 333 request/tháng ≈ 4.34 triệu. Bẫy thường gặp là chỉ tính tiền GPU (3 212 / 0.0012 ≈ 2.68 triệu), bỏ quên chi phí con người và vận hành, nên self-host trông rẻ hơn thực tế. Ngoài chi phí còn phải cân nhắc: chất lượng model open-weight so với API, utilization thực tế (traffic theo giờ, GPU nhàn rỗi ban đêm), yêu cầu dữ liệu không rời hạ tầng, và chi phí cơ hội của đội ngũ."
+    },
+    {
+      "id": "sysdesign-008",
+      "sub": "Multi-stage cascade",
+      "level": 2,
+      "type": "single",
+      "trap": false,
+      "q": "Hệ gợi ý 3 tầng: retrieval lấy 500 ứng viên từ 10 triệu item → ranking chọn top 50 → re-ranking hiển thị 10. Khi đánh giá offline **riêng tầng retrieval**, metric chính nên là gì?",
+      "options": [
+        "Precision@10 trên 10 item đầu do retrieval trả về, vì người dùng chỉ nhìn thấy khoảng 10 item trên màn hình",
+        "nDCG@10 theo thứ tự trong 500 ứng viên, vì thứ tự của retrieval quyết định thứ tự hiển thị cuối cùng",
+        "Recall@500: tỉ lệ item user thật sự tương tác lọt vào 500 ứng viên, vì tầng sau không cứu được item bị sót",
+        "Log loss của điểm similarity, vì ranking cần xác suất click đã hiệu chỉnh từ retrieval để dùng trực tiếp"
+      ],
+      "answer": 2,
+      "explain": "Mỗi tầng trong cascade có vai trò khác nhau. Retrieval cần lọc nhanh từ hàng triệu item xuống vài trăm mà không đánh rơi item tốt, nên metric chính là recall@K với K bằng số ứng viên chuyển tiếp. Thứ tự bên trong 500 ứng viên gần như không quan trọng vì tầng ranking sẽ chấm lại toàn bộ. Vì vậy precision@10 hay nDCG@10 của retrieval không phản ánh đúng vai trò của nó. Ranking và re-ranking mới cần metric nhạy với thứ tự ở top (nDCG@k, MAP, calibrated log loss cho xác suất click). Recall của retrieval là trần chất lượng của cả hệ thống: ranker hoàn hảo cũng không xếp được item không có trong ứng viên."
+    },
+    {
+      "id": "sysdesign-009",
+      "sub": "Cold start",
+      "level": 2,
+      "type": "multi",
+      "trap": false,
+      "q": "Ứng dụng nghe nhạc gặp cold start với cả **user mới** lẫn **bài hát mới**. Chọn **TẤT CẢ** cách tiếp cận HỢP LÝ.",
+      "options": [
+        "Dành một phần nhỏ traffic để explore bài mới (boost điểm hoặc slot riêng) nhằm thu tín hiệu tương tác nhanh",
+        "Matrix factorization thuần trên ID cho embedding tốt ngay với bài mới, vì có thể khởi tạo ngẫu nhiên vector của nó",
+        "Bài mới: dùng content feature (audio embedding, thể loại, nghệ sĩ) làm embedding ban đầu thay cho ID embedding chưa được học",
+        "Bài mới: chờ đủ 30 ngày tích luỹ lượt nghe rồi mới đưa vào candidate pool, để tránh kéo giảm CTR trung bình",
+        "User mới: gợi ý theo độ phổ biến trong phân khúc (quốc gia, độ tuổi, thiết bị), kết hợp câu hỏi onboarding chọn thể loại"
+      ],
+      "answer": [
+        0,
+        2,
+        4
+      ],
+      "explain": "Với user mới, chưa có lịch sử nên dùng tín hiệu ngữ cảnh và nhân khẩu học (popular theo segment), hỏi sở thích lúc onboarding, rồi cập nhật nhanh theo session đầu tiên. Với item mới, ID embedding chưa được học, nên cần content-based feature (audio, metadata, text) để ánh xạ vào cùng không gian embedding. Hybrid two-tower có tower item nhận content feature làm được việc này. Exploration giúp item mới có exposure và thu dữ liệu, tránh vòng lặp “không hiển thị → không có tương tác → không bao giờ hiển thị”. Chờ 30 ngày chính là tạo ra vòng lặp đó. Vector khởi tạo ngẫu nhiên trong MF không mang thông tin gì, nên gợi ý dựa trên nó là ngẫu nhiên."
+    },
+    {
+      "id": "sysdesign-010",
+      "sub": "Label delay & feedback loop",
+      "level": 3,
+      "type": "multi",
+      "trap": true,
+      "q": "Model fraud chặn giao dịch có score > ngưỡng. Nhãn fraud đến từ chargeback, thường sau 30–90 ngày. Mỗi tuần team retrain trên giao dịch của 7 ngày gần nhất, coi giao dịch chưa có chargeback là “không fraud”. Chọn **TẤT CẢ** nhận định ĐÚNG.",
+      "options": [
+        "Retrain càng thường xuyên trên dữ liệu càng mới thì càng chính xác, nên rút cửa sổ train xuống còn 1 ngày",
+        "Giao dịch đã bị chặn không bao giờ có nhãn thật, nên dữ liệu train chỉ phản ánh vùng model cho qua (selective labels)",
+        "Bỏ hẳn model ML và chỉ dùng rule cố định sẽ tránh được feedback loop, vì rule không học từ dữ liệu bị chệch",
+        "Giao dịch gần đây bị gán nhầm là âm tính vì chargeback chưa kịp về, làm model đánh giá thấp tỉ lệ fraud (label delay)",
+        "Cho một tỉ lệ nhỏ giao dịch rủi ro vừa đi qua ngẫu nhiên (giới hạn thiệt hại) giúp thu nhãn không chệch để train và đánh giá"
+      ],
+      "answer": [
+        1,
+        3,
+        4
+      ],
+      "explain": "Label delay: chargeback về sau 30–90 ngày, nên giao dịch 7 ngày gần nhất phần lớn chưa có nhãn dương. Gán chúng là âm tính tạo false negative trong nhãn train, làm model đánh giá thấp rủi ro. Cách xử lý: chỉ train trên dữ liệu đã qua “label maturity window”, hoặc dùng delayed-feedback modeling. Selective labels / feedback loop: giao dịch bị chặn không bao giờ phát sinh chargeback, nên ta không biết chúng có thật sự là fraud không, và mỗi phiên bản model chỉ học trên vùng phiên bản trước cho qua. Một nhóm holdout nhỏ được thả qua ngẫu nhiên (có kiểm soát thiệt hại) cho dữ liệu không chệch, đồng thời là nền cho off-policy evaluation. Rút cửa sổ xuống 1 ngày làm label delay tệ hơn. Rule cố định vẫn chịu selective labels: giao dịch bị rule chặn cũng không có nhãn, và rule không tự thích nghi."
+    },
+    {
+      "id": "sysdesign-011",
+      "sub": "Shadow vs canary",
+      "level": 2,
+      "type": "single",
+      "trap": true,
+      "q": "Model ranking v2 chạy **shadow** 2 tuần: nhận bản sao traffic thật, kết quả chỉ được log, người dùng vẫn thấy kết quả của v1. p99 latency đạt yêu cầu và top-10 của v2 trùng với v1 khoảng 70%. PM muốn kết luận “v2 sẽ tăng CTR”. Nhận định nào đúng?",
+      "options": [
+        "Kết luận được: 30% kết quả khác biệt chính là phần v2 cải thiện, nhân với CTR hiện tại ra mức tăng CTR",
+        "Chưa kết luận được: shadow không đo phản ứng của người dùng với output v2, cần canary hoặc A/B để đo CTR",
+        "Kết luận được nếu tính CTR của v1 trên các item mà v2 cũng xếp top-10, vì đó là bằng chứng nhân quả",
+        "Chưa kết luận được vì shadow cần tối thiểu 4 tuần; sau 4 tuần, log shadow đủ để ước lượng CTR của v2"
+      ],
+      "answer": 1,
+      "explain": "Shadow mode kiểm tra được độ ổn định, latency, lỗi, phân phối output và mức trùng khớp với model cũ. Nhưng người dùng không bao giờ thấy output v2, nên không có click nào phản ánh chất lượng của v2. Mức trùng 70% chỉ nói hai model khác nhau ở 30%, không nói phần khác biệt tốt hơn hay tệ hơn. CTR của v1 trên phần giao nhau cũng không đo được phần item v2 thêm vào. Chạy shadow lâu hơn không giải quyết vấn đề, vì vẫn không có phản hồi. Trình tự an toàn: shadow (sức khoẻ hệ thống) → canary nhỏ (lỗi, guardrail) → A/B test đủ power (CTR, KPI). Off-policy evaluation từ log chỉ khả thi khi policy cũ có tính ngẫu nhiên và log propensity."
+    },
+    {
+      "id": "sysdesign-012",
+      "sub": "Fallback khi model lỗi",
+      "level": 1,
+      "type": "single",
+      "trap": false,
+      "q": "Service gợi ý gọi model ranking qua network, và model server thỉnh thoảng bị timeout. Cách xử lý nào hợp lý nhất cho trải nghiệm người dùng?",
+      "options": [
+        "Timeout ngắn; khi lỗi trả danh sách dự phòng (popular theo segment hoặc cache gần nhất) và log để cảnh báo",
+        "Retry đồng bộ liên tục tới khi model trả lời để luôn có kết quả cá nhân hoá, bất kể người dùng phải chờ bao lâu",
+        "Trả HTTP 500 để frontend hiện trang lỗi, vì hiển thị kết quả không cá nhân hoá sẽ làm sai lệch các metric",
+        "Tăng timeout lên 30 giây để giảm tỉ lệ lỗi, vì latency cao vẫn tốt hơn mọi dạng kết quả không cá nhân hoá"
+      ],
+      "answer": 0,
+      "explain": "Nguyên tắc graceful degradation: model là một dependency có thể hỏng, nên hệ thống cần một đường lui rẻ và luôn sẵn sàng. Ví dụ: danh sách popular theo segment được tính sẵn, kết quả cá nhân hoá cache lần trước, hoặc model nhẹ hơn. Timeout phải nằm trong latency budget. Retry không giới hạn và timeout 30 giây đều làm treo request, dồn kết nối và có thể gây sập dây chuyền; nên dùng circuit breaker khi tỉ lệ lỗi cao. Trang lỗi 500 tệ hơn nhiều so với danh sách popular. Để metric không bị lệch, hãy log cờ `fallback=true` cho từng response, rồi theo dõi tỉ lệ fallback như một guardrail."
+    },
+    {
+      "id": "sysdesign-013",
+      "sub": "Thiết kế: fraud detection",
+      "level": 3,
+      "type": "multi",
+      "trap": true,
+      "q": "Thiết kế hệ thống phát hiện gian lận thanh toán real-time (fraud chiếm ~0.1%, yêu cầu quyết định < 100 ms). Chọn **TẤT CẢ** lựa chọn thiết kế HỢP LÝ.",
+      "options": [
+        "Kết hợp rule cứng (blacklist, hạn mức) với model ML; chọn ngưỡng theo chi phí bỏ sót so với chi phí chặn nhầm",
+        "Velocity feature (số giao dịch, tổng tiền trong 1 phút/1 giờ theo thẻ, thiết bị, IP) tính bằng streaming, đọc từ online store",
+        "Chia train/test theo thời gian (train quá khứ, test tương lai) thay vì random split, để phản ánh đúng điều kiện triển khai",
+        "Tối ưu và báo cáo accuracy làm metric chính, vì đây là con số dễ giải thích nhất với phía nghiệp vụ và ban lãnh đạo",
+        "Oversample tập train thành 50/50 rồi dùng thẳng score làm xác suất fraud thật khi tính kỳ vọng thiệt hại"
+      ],
+      "answer": [
+        0,
+        1,
+        2
+      ],
+      "explain": "Random split để lộ thông tin tương lai (cùng thẻ, cùng chiến dịch gian lận xuất hiện ở cả train và test), làm metric offline lạc quan. Split theo thời gian mô phỏng đúng việc train trên quá khứ, dự đoán tương lai. Với fraud 0.1%, model luôn trả “không fraud” đã đạt 99.9% accuracy, nên cần precision/recall, PR-AUC, hoặc tiền thiệt hại được ngăn chặn. Hệ thống thực tế kết hợp rule (nhanh, giải thích được, phản ứng tức thì với pattern mới) và ML, với ngưỡng chọn theo ma trận chi phí. Velocity feature thuộc nhóm tín hiệu mạnh nhất, cần streaming để luôn mới. Oversample làm lệch xác suất: score không còn là P(fraud) thật, nên phải hiệu chỉnh lại (prior correction, Platt/isotonic) trước khi nhân với giá trị giao dịch."
+    },
+    {
+      "id": "sysdesign-014",
+      "sub": "Thiết kế: Document AI / OCR",
+      "level": 2,
+      "type": "numeric",
+      "trap": false,
+      "q": "Pipeline Document AI trích xuất hoá đơn, **10 000** tài liệu/ngày. Tài liệu có mọi field đạt confidence ≥ ngưỡng thì được auto-accept. Tài liệu còn lại chuyển người kiểm tra, chi phí $0.80/tài liệu (coi như người sửa đúng 100%). Mỗi tài liệu auto-accept bị sai gây chi phí xử lý $20.\n\n| Ngưỡng | Tỉ lệ auto-accept | Tỉ lệ sai trong nhóm auto-accept |\n|---|---|---|\n| 0.80 | 85% | 3.0% |\n| 0.90 | 72% | 1.5% |\n| 0.97 | 60% | 0.5% |\n\nChi phí/ngày **thấp nhất** trong ba ngưỡng là bao nhiêu **USD**?",
+      "answer": 3800,
+      "tolerance": 1,
+      "unit": "USD/ngày",
+      "explain": "Chi phí = số tài liệu review × 0.80 + số tài liệu auto-accept × tỉ lệ sai × 20. Ngưỡng 0.80: 1 500 × 0.8 + 8 500 × 0.03 × 20 = 1 200 + 5 100 = $6 300. Ngưỡng 0.90: 2 800 × 0.8 + 7 200 × 0.015 × 20 = 2 240 + 2 160 = $4 400. Ngưỡng 0.97: 4 000 × 0.8 + 6 000 × 0.005 × 20 = 3 200 + 600 = $3 800. Ngưỡng cao nhất thắng dù tỉ lệ tự động hoá thấp nhất. Bài học: không tối đa hoá “straight-through rate” một cách mù quáng mà chọn ngưỡng theo tổng chi phí. Thiết kế tốt còn đặt ngưỡng theo từng field (số tiền, mã số thuế quan trọng hơn địa chỉ), thêm rule kiểm tra chéo (tổng = Σ dòng, định dạng MST), và đưa tài liệu đã sửa tay vào vòng train lại."
+    },
+    {
+      "id": "sysdesign-015",
+      "sub": "Thiết kế: chatbot CSKH có RAG",
+      "level": 2,
+      "type": "single",
+      "trap": true,
+      "q": "Chatbot CSKH của sàn TMĐT dùng RAG trên FAQ và văn bản chính sách. Rất nhiều khách hỏi về **trạng thái đơn hàng của chính họ** (đang giao chưa, đã hoàn tiền chưa…). Thiết kế nào hợp lý nhất cho loại câu hỏi này?",
+      "options": [
+        "Export bảng đơn hàng mỗi đêm thành văn bản, embed rồi đưa vào cùng vector index với FAQ để retriever tìm",
+        "Fine-tune LLM trên lịch sử đơn hàng để model ghi nhớ được trạng thái đơn của từng khách hàng cụ thể",
+        "Tăng top-k của retriever và mở rộng context window để LLM thấy được nhiều đơn hàng hơn trong mỗi câu trả lời",
+        "Nhận diện intent rồi gọi API đơn hàng (tool call) với user_id đã xác thực; LLM chỉ diễn đạt kết quả trả về"
+      ],
+      "answer": 3,
+      "explain": "Trạng thái đơn hàng là dữ liệu có cấu trúc, cá nhân, thay đổi theo phút, và có ràng buộc quyền truy cập. Nguồn sự thật là hệ thống đơn hàng, nên cách đúng là route intent sang tool/API với danh tính đã xác thực từ session (không lấy user_id từ lời khách nói), rồi để LLM chỉ diễn đạt kết quả. Index đơn hàng vào vector DB hằng đêm thì dữ liệu cũ tới cả ngày, retrieval có thể trả nhầm đơn của người khác (rò rỉ dữ liệu), và semantic search không hợp với tra cứu theo khoá. Fine-tune không phải cơ chế lưu dữ liệu thay đổi liên tục và không kiểm soát được quyền truy cập. Tăng top-k còn làm tăng rủi ro lộ dữ liệu. RAG hợp với tri thức tĩnh hơn như FAQ và chính sách."
+    },
+    {
+      "id": "sysdesign-016",
+      "sub": "Thiết kế: content moderation",
+      "level": 3,
+      "type": "numeric",
+      "trap": true,
+      "q": "Hệ kiểm duyệt nội dung xử lý 1 triệu bài/ngày qua 3 tầng:\n\n1. Classifier nhẹ gắn cờ bài nghi vấn, **recall 95%** trên bài vi phạm.\n2. LLM phân loại lại các bài bị gắn cờ, chỉ chuyển tiếp bài nó cho là vi phạm; nó giữ lại **98%** số bài vi phạm thật mà nó nhận được.\n3. Người kiểm duyệt xem mọi bài được chuyển tới và quyết định chính xác.\n\nBài bị loại ở bất kỳ tầng nào đều được đăng. Recall end-to-end của hệ thống trên bài vi phạm là bao nhiêu **%**? (1 chữ số thập phân)",
+      "answer": 93.1,
+      "tolerance": 0.05,
+      "unit": "%",
+      "explain": "Trong cascade nối tiếp, một bài vi phạm chỉ bị chặn khi lọt qua mọi tầng lọc. Recall tổng = 0.95 × 0.98 × 1.0 = 0.931 = 93.1%. Bẫy: nghĩ rằng có người kiểm duyệt chính xác 100% ở cuối thì recall cũng là 100%, hoặc lấy recall của tầng yếu nhất (95%). Người chỉ thấy những gì được chuyển tới, nên lỗi bỏ sót của các tầng trước là vĩnh viễn. Đổi lại, cascade giảm mạnh tải cho người. Ví dụ nếu tầng 1 gắn cờ 6% (60 000 bài) và LLM chuyển tiếp 25% số đó (15 000 bài), với năng suất 400 bài/người/ngày thì cần khoảng 38 người thay vì 2 500. Thiết kế tốt đặt tầng đầu ở recall rất cao, và lấy mẫu ngẫu nhiên bài đã được đăng để ước lượng phần bị bỏ sót."
+    },
+    {
+      "id": "sysdesign-017",
+      "sub": "LLM API vs self-host",
+      "level": 2,
+      "type": "single",
+      "trap": false,
+      "q": "Startup 5 kỹ sư vừa ra mắt chatbot B2C. Traffic thấp và dao động mạnh theo chiến dịch marketing, chưa có yêu cầu dữ liệu phải nằm trong hạ tầng nội bộ. Lựa chọn hợp lý nhất?",
+      "options": [
+        "Self-host model open-weight trên GPU thuê 24/7 ngay từ đầu, vì chi phí mỗi token luôn rẻ hơn API ở mọi quy mô",
+        "Tự pretrain một LLM nhỏ trên dữ liệu domain để không phụ thuộc vào bất kỳ provider hay model open-weight nào",
+        "Dùng LLM API trả theo token, qua lớp abstraction để sau này đổi provider hoặc chuyển self-host khi volume lớn",
+        "Self-host trên CPU để tiết kiệm tiền GPU, chấp nhận latency vài chục giây vì traffic thấp nên không ảnh hưởng"
+      ],
+      "answer": 2,
+      "explain": "Self-host có chi phí cố định (GPU chạy 24/7, công vận hành) nên chỉ rẻ hơn khi volume đủ lớn và ổn định để GPU được dùng hết công suất. Với traffic thấp và dao động, GPU nhàn rỗi phần lớn thời gian, nên chi phí mỗi request cao hơn API. Vì vậy câu “luôn rẻ hơn ở mọi quy mô” là sai. API cho phép trả theo mức dùng, có model mạnh ngay, và team nhỏ không phải lo vận hành inference. Lớp abstraction (gateway, interface chung) giữ lựa chọn mở cho tương lai. Self-host trở nên hợp lý khi: volume lớn và ổn định, yêu cầu dữ liệu không rời hạ tầng, cần fine-tune sâu hoặc kiểm soát latency. Tự pretrain thì vượt xa nguồn lực của 5 kỹ sư. Latency vài chục giây phá hỏng trải nghiệm chat dù traffic thấp."
+    },
+    {
+      "id": "sysdesign-018",
+      "sub": "Pointwise / pairwise / listwise",
+      "level": 1,
+      "type": "single",
+      "trap": false,
+      "q": "Trong learning-to-rank, cách tiếp cận **pairwise** (ví dụ RankNet) học điều gì?",
+      "options": [
+        "Với từng cặp tài liệu cùng query, học xác suất tài liệu này xếp trên tài liệu kia; loss phạt cặp bị đảo thứ tự",
+        "Học dự đoán trực tiếp điểm relevance tuyệt đối của từng tài liệu một cách độc lập, như bài toán regression/classification",
+        "Học trên toàn bộ danh sách của một query cùng lúc, tối ưu một hàm loss định nghĩa trên cả hoán vị kết quả xếp hạng",
+        "Học embedding sao cho cosine similarity của cặp query–tài liệu bất kỳ xấp xỉ đúng click-through rate quan sát được"
+      ],
+      "answer": 0,
+      "explain": "Ba họ learning-to-rank: pointwise coi từng tài liệu độc lập, dự đoán điểm hoặc nhãn relevance (regression/classification). Pairwise xét cặp (d_i, d_j) của cùng query với d_i relevant hơn, và học P(d_i ≻ d_j) = σ(s_i − s_j) như RankNet; loss chỉ quan tâm thứ tự tương đối. Listwise định nghĩa loss trên cả danh sách, ví dụ ListNet (cross-entropy trên phân phối top-1) hay ListMLE, hoặc tối ưu xấp xỉ metric như nDCG. Pairwise phù hợp với dữ liệu click vì “click d_i, bỏ qua d_j ở trên” là một tín hiệu ưu tiên tương đối. Phương án embedding/cosine mô tả cách train retrieval kiểu two-tower, không phải định nghĩa pairwise LTR."
+    },
+    {
+      "id": "sysdesign-019",
+      "sub": "LambdaRank / LambdaMART",
+      "level": 3,
+      "type": "single",
+      "trap": true,
+      "q": "Ý tưởng cốt lõi của LambdaRank / LambdaMART là gì?",
+      "options": [
+        "Tính đạo hàm chính xác của nDCG theo điểm số rồi tối ưu trực tiếp bằng gradient descent, vì nDCG khả vi theo score",
+        "Chuyển ranking thành classification từng tài liệu với nhãn relevance, rồi dùng GBDT dự đoán xác suất tài liệu được click",
+        "Chỉ học các cặp nằm trong top-k và bỏ hẳn các cặp ngoài top-k, nên không cần thêm trọng số nào theo vị trí xếp hạng",
+        "Lấy gradient kiểu RankNet cho từng cặp nhân với |ΔNDCG| khi hoán đổi cặp đó; LambdaMART học các lambda bằng GBDT"
+      ],
+      "answer": 3,
+      "explain": "nDCG phụ thuộc vào thứ tự sắp xếp, mà thứ tự là hàm bậc thang của score. Vì vậy đạo hàm của nDCG theo score bằng 0 hầu như khắp nơi, không tối ưu trực tiếp được. Đó là bẫy của phương án “nDCG khả vi”. LambdaRank không định nghĩa loss tường minh mà định nghĩa luôn gradient: với cặp (i, j) cần xếp i trên j, λ_ij = gradient RankNet × |ΔNDCG_ij|, trong đó ΔNDCG_ij là mức thay đổi nDCG nếu hoán đổi i và j. Cặp ở top, nơi đổi chỗ làm nDCG đổi nhiều, được ưu tiên sửa. LambdaMART dùng các λ đó làm pseudo-residual cho gradient boosted trees (MART), và vẫn là baseline rất mạnh cho LTR dạng bảng (LightGBM `lambdarank`, XGBoost `rank:ndcg`). Nó vẫn xét cả cặp ngoài top-k, chỉ là với trọng số nhỏ hơn."
+    },
+    {
+      "id": "sysdesign-020",
+      "sub": "ΔNDCG cho một cặp",
+      "level": 3,
+      "type": "numeric",
+      "trap": false,
+      "q": "Một query có 3 tài liệu, model đang xếp chúng với relevance theo thứ tự `[0, 3, 1]`. Dùng gain = 2^rel − 1, discount = 1/log2(i + 1) với i là vị trí bắt đầu từ 1. IDCG tính từ thứ tự lý tưởng của chính 3 tài liệu này. Nếu hoán đổi hai tài liệu ở vị trí 1 và 2, **|ΔNDCG@3|** (trọng số LambdaRank gán cho cặp này) bằng bao nhiêu? (3 chữ số thập phân)",
+      "answer": 0.339,
+      "tolerance": 0.001,
+      "unit": "",
+      "explain": "Gain: rel 0 → 0, rel 3 → 7, rel 1 → 1. Discount: vị trí 1 → 1, vị trí 2 → 1/log2(3) ≈ 0.6309, vị trí 3 → 1/log2(4) = 0.5. DCG hiện tại [0, 3, 1] = 0 + 7 × 0.6309 + 1 × 0.5 ≈ 4.9165. Sau hoán đổi thành [3, 0, 1]: DCG = 7 + 0 + 0.5 = 7.5. IDCG = [3, 1, 0] = 7 + 0.6309 + 0 ≈ 7.6309. |ΔNDCG| = (7.5 − 4.9165)/7.6309 ≈ 2.5835/7.6309 ≈ 0.339. nDCG nhảy từ ≈ 0.644 lên ≈ 0.983. Cặp này có trọng số lớn vì kéo tài liệu rel 3 lên đầu danh sách. Cặp đổi chỗ ở cuối danh sách có |ΔNDCG| nhỏ hơn nhiều, đúng như trực giác “ưu tiên sửa lỗi ở top”."
+    },
+    {
+      "id": "sysdesign-021",
+      "sub": "nDCG / MRR / MAP",
+      "level": 2,
+      "type": "multi",
+      "trap": true,
+      "q": "Chọn **TẤT CẢ** phát biểu ĐÚNG về metric ranking offline.",
+      "options": [
+        "IDCG nên tính bằng cách sắp lại chính top-k model trả về theo relevance, vì đó là những gì người dùng nhìn thấy",
+        "nDCG@k được chuẩn hoá theo từng query, nên lấy trung bình được giữa các query có số tài liệu relevant khác nhau",
+        "MRR chỉ phụ thuộc vị trí của kết quả relevant đầu tiên, nên hợp với query cần đúng một đáp án (navigational)",
+        "Precision@10 tăng thì nDCG@10 chắc chắn tăng, vì cả hai đều đếm số tài liệu relevant trong top-10",
+        "nDCG dùng được với relevance nhiều mức (graded), còn MAP theo định nghĩa chuẩn cần relevance nhị phân"
+      ],
+      "answer": [
+        1,
+        2,
+        4
+      ],
+      "explain": "MRR = trung bình 1/rank của kết quả đúng đầu tiên. Nó bỏ qua mọi thứ phía sau, nên hợp với navigational query hoặc QA một đáp án. nDCG hỗ trợ relevance nhiều mức qua gain, còn MAP (trung bình của AP) dựa trên relevant/không relevant. Bẫy IDCG: IDCG phải tính từ toàn bộ tài liệu relevant đã biết của query. Nếu chỉ sắp lại chính danh sách model trả về, model bỏ sót tài liệu rel 3 mà xếp đúng thứ tự phần còn lại vẫn đạt nDCG = 1. Precision@10 không quan tâm vị trí hay mức relevance, nên có thể tăng (thêm một tài liệu rel 1 ở cuối) trong khi nDCG@10 giảm (đẩy tài liệu rel 3 từ top 1 xuống). Chuẩn hoá theo IDCG đưa nDCG về [0, 1] cho từng query, nhờ đó mới lấy trung bình giữa các query."
+    },
+    {
+      "id": "sysdesign-022",
+      "sub": "Position bias & click model",
+      "level": 2,
+      "type": "single",
+      "trap": false,
+      "q": "Theo examination hypothesis: P(click) = P(xem vị trí) × P(hấp dẫn | được xem). Từ một thí nghiệm randomization, propensity xem vị trí 1 là **1.0**, vị trí 4 là **0.3**. Item A luôn ở vị trí 1 có CTR **10%**; item B luôn ở vị trí 4 có CTR **4%**. Kết luận nào đúng?",
+      "options": [
+        "A hấp dẫn hơn B 2.5 lần vì CTR là 10% so với 4%, nên giữ nguyên thứ tự hiện tại là tối ưu cho người dùng",
+        "B có độ hấp dẫn ước lượng ≈ 13.3%, cao hơn A (10%); xếp theo CTR thô sẽ đánh giá thấp B do position bias",
+        "B có độ hấp dẫn ước lượng ≈ 1.2%, vì phải nhân CTR với propensity 0.3 để loại bỏ hiệu ứng của vị trí",
+        "Không so sánh được vì hai item ở hai vị trí khác nhau; chỉ A/B test mới cho biết item nào hấp dẫn hơn"
+      ],
+      "answer": 1,
+      "explain": "Theo examination hypothesis, độ hấp dẫn = CTR / P(xem). A: 0.10 / 1.0 = 10%. B: 0.04 / 0.3 ≈ 13.3%. B thật ra hấp dẫn hơn, nhưng vì nằm ở vị trí ít được xem nên CTR thô thấp. Train ranker trên click thô sẽ học sai và củng cố thứ tự hiện tại (rich-get-richer). Nhân với propensity là làm ngược: phải chia để “bù” cho xác suất được xem thấp. Click model (position-based model, cascade model) và randomization chính là công cụ để so sánh item ở các vị trí khác nhau mà không cần A/B riêng cho từng cặp item. Propensity thường ước lượng bằng các thí nghiệm hoán đổi kết quả (RandPair, result randomization) hoặc EM trên click log."
+    },
+    {
+      "id": "sysdesign-023",
+      "sub": "Counterfactual LTR / IPS",
+      "level": 3,
+      "type": "single",
+      "trap": false,
+      "q": "Trong counterfactual learning-to-rank, ta huấn luyện trên click log với trọng số inverse propensity (IPS): mỗi click ở vị trí k được nhân 1/p_k, với p_k là xác suất người dùng xem vị trí k. Phát biểu nào ĐÚNG?",
+      "options": [
+        "IPS loại bỏ được cả bias với item chưa từng được hiển thị, vì trọng số 1/p_k bù cho mọi item trong catalog",
+        "Trọng số 1/p_k làm giảm variance so với học trực tiếp trên click, nên cần ít log hơn hẳn cách làm naive",
+        "Nếu p_k đúng thì IPS không chệch so với loss trên relevance thật, nhưng variance lớn khi p_k nhỏ nên hay clip trọng số",
+        "Lấy p_k bằng CTR trung bình tại vị trí k trong click log là đủ, không cần thí nghiệm randomization hay click model riêng biệt"
+      ],
+      "answer": 2,
+      "explain": "IPS hiệu chỉnh việc click chỉ xảy ra khi người dùng đã xem: kỳ vọng của click/p_k bằng relevance nếu p_k đúng, nên loss có trọng số là ước lượng không chệch. Cái giá là variance. p_k nhỏ (vị trí sâu) cho trọng số rất lớn, vài click hiếm chi phối cả gradient, nên người ta clip trọng số (đổi lại một chút bias) hoặc dùng self-normalized IPS. IPS chỉ hiệu chỉnh cho item có xác suất được hiển thị > 0; item chưa từng hiện ra thì không có click nào để bù. Đó là lý do cần exploration. CTR trung bình theo vị trí lẫn lộn position bias với relevance, vì item tốt vốn hay được xếp ở top, nên không phải propensity đúng. Propensity cần ước lượng qua randomization (hoán đổi kết quả) hoặc click model/EM."
+    },
+    {
+      "id": "sysdesign-024",
+      "sub": "Query understanding",
+      "level": 1,
+      "type": "multi",
+      "trap": false,
+      "q": "Trong hệ thống search sản phẩm, những thành phần nào thuộc khối **query understanding** (xử lý query trước khi truy hồi)? (chọn tất cả)",
+      "options": [
+        "Phân loại intent/danh mục của query để giới hạn hoặc boost category phù hợp",
+        "Tính nDCG@10 trên tập query có nhãn relevance để so sánh hai phiên bản ranker trước khi chạy A/B",
+        "Sửa lỗi chính tả, chuẩn hoá (“ip 15 pro max” → “iphone 15 pro max”), khôi phục dấu tiếng Việt",
+        "Cập nhật embedding của sản phẩm mới đăng bán vào ANN index để chúng xuất hiện trong kết quả tìm kiếm",
+        "Nhận diện thực thể và thuộc tính (thương hiệu, màu, dung lượng) để chuyển thành filter có cấu trúc"
+      ],
+      "answer": [
+        0,
+        2,
+        4
+      ],
+      "explain": "Query understanding biến chuỗi người dùng gõ thành biểu diễn mà retrieval và ranking dùng tốt hơn. Các bước gồm: chuẩn hoá và sửa chính tả (rất quan trọng với tiếng Việt không dấu, viết tắt), phân loại intent/category, nhận diện thực thể và thuộc tính để tạo filter (brand = Apple, storage = 256GB), query expansion/rewriting (từ đồng nghĩa, LLM rewrite) và gợi ý autocomplete. nDCG@10 là bước đánh giá offline, không nằm trong luồng xử lý query. Cập nhật ANN index thuộc pipeline indexing phía tài liệu. Hai việc này đều cần thiết nhưng không thuộc khối query understanding."
+    },
+    {
+      "id": "sysdesign-025",
+      "sub": "Two-tower vs cross-encoder",
+      "level": 2,
+      "type": "numeric",
+      "trap": false,
+      "q": "Search 2 tầng: two-tower lấy top ứng viên, sau đó cross-encoder rerank. Cross-encoder chạy trên GPU theo batch **32** cặp (query, doc), mỗi batch mất **12 ms**, các batch chạy **tuần tự**, và batch cuối dù không đầy vẫn mất đủ 12 ms. Budget cho tầng rerank là **40 ms**. Số ứng viên **tối đa** có thể rerank là bao nhiêu?",
+      "answer": 96,
+      "tolerance": 0,
+      "unit": "ứng viên",
+      "explain": "Trong 40 ms chỉ chạy trọn được ⌊40/12⌋ = 3 batch (36 ms); batch thứ 4 sẽ kết thúc ở 48 ms, vượt budget. 3 batch × 32 cặp = 96 ứng viên. Bẫy là tính 40/12 × 32 ≈ 106.7: không có “nửa batch” rẻ hơn, vì batch không đầy vẫn tốn trọn thời gian. Đây là lý do cascade cần thiết. Two-tower encode item offline và chỉ encode query lúc request, sau đó dùng ANN, nên quét được hàng triệu item. Cross-encoder cho query và doc attention lẫn nhau nên chính xác hơn, nhưng phải chạy lại cho từng cặp và chỉ chịu nổi vài chục đến vài trăm ứng viên. Muốn rerank nhiều hơn: chạy song song nhiều batch/GPU, distill sang model nhỏ hơn, hoặc dùng ColBERT/late interaction."
+    },
+    {
+      "id": "sysdesign-026",
+      "sub": "Exploration trong ranking",
+      "level": 2,
+      "type": "single",
+      "trap": false,
+      "q": "Feed tin tức luôn xếp theo predicted CTR. Sau vài tháng, item mới hiếm khi lên top, độ đa dạng giảm, và model train lại vẫn ưu tiên các item cũ phổ biến. Hướng xử lý căn bản nhất?",
+      "options": [
+        "Thêm exploration có kiểm soát (slot cho UCB/Thompson sampling với item ít exposure) và log propensity hiển thị",
+        "Tăng capacity của model (thêm layer, thêm feature), vì model hiện tại chưa đủ mạnh để nhận ra item mới hấp dẫn",
+        "Retrain hằng giờ thay vì hằng ngày để model cập nhật nhanh hơn theo các click mới nhất trên feed",
+        "Đổi metric offline từ AUC sang nDCG để model chú trọng thứ tự hơn là xác suất click tuyệt đối"
+      ],
+      "answer": 0,
+      "explain": "Đây là feedback loop của policy thuần exploitation. Model chỉ thấy click trên item nó đã chọn hiển thị, nên item mới hoặc ít exposure không bao giờ có dữ liệu để chứng minh mình tốt. Dữ liệu train ngày càng lệch về item cũ. Tăng capacity hay retrain dày hơn không thêm thông tin về vùng chưa được hiển thị, chỉ học nhanh hơn trên cùng dữ liệu lệch. Đổi metric offline cũng không giải quyết nguồn dữ liệu. Cần exploration: ε-greedy, UCB hoặc Thompson sampling cho một phần slot, boost item mới có giới hạn. Đồng thời log xác suất hiển thị (propensity) để sau này dùng off-policy evaluation và IPS. Chi phí exploration (CTR ngắn hạn giảm nhẹ) nên được theo dõi như một guardrail."
+    },
+    {
+      "id": "sysdesign-027",
+      "sub": "Interleaving & offline–online mismatch",
+      "level": 3,
+      "type": "multi",
+      "trap": false,
+      "q": "So sánh ranker mới với ranker hiện tại. Chọn **TẤT CẢ** phát biểu ĐÚNG.",
+      "options": [
+        "nDCG offline tăng mà online không đổi có thể do nhãn offline lấy từ click log của ranker cũ (bias) hoặc metric lệch KPI",
+        "Interleaving cho mỗi người dùng thấy danh sách của đúng một ranker, nên thực chất chỉ là A/B test chia theo user",
+        "Team-draft interleaving trộn kết quả hai ranker vào một danh sách, ghi công click theo ranker góp item; cần ít traffic hơn A/B",
+        "Nếu nDCG offline tăng có ý nghĩa thống kê trên một tập test đủ lớn thì có thể bỏ qua A/B và ship thẳng ranker mới",
+        "Interleaving đo mức ưa thích tương đối, không thay được A/B khi cần ước lượng tác động lên doanh thu hay retention"
+      ],
+      "answer": [
+        0,
+        2,
+        4
+      ],
+      "explain": "Team-draft interleaving: hai ranker luân phiên “chọn” item vào một danh sách chung, click được ghi công cho ranker đã đóng góp item đó. Vì mỗi user tự so sánh hai ranker trong cùng ngữ cảnh, variance giữa các user bị loại bỏ, và các nghiên cứu ở Bing/Netflix cho thấy cần ít traffic hơn A/B nhiều lần. Tuy nhiên kết quả chỉ là “ranker nào được ưa hơn”, không cho ra lift doanh thu hay retention, nên thường dùng interleaving để sàng lọc rồi A/B cho ứng viên tốt nhất. Mismatch giữa offline và online là chuyện thường: nhãn offline sinh từ log của policy cũ (chỉ có click trên item ranker cũ hiển thị), metric offline không bám KPI, novelty, hay hiệu ứng toàn trang. Ý nghĩa thống kê trên tập offline không thay thế được thí nghiệm online."
+    },
+    {
+      "id": "sysdesign-028",
+      "sub": "Point / contextual / collective anomaly",
+      "level": 1,
+      "type": "single",
+      "trap": false,
+      "q": "Hệ thống giám sát điện năng toà nhà: mức tiêu thụ 300 kW lúc 14h ngày làm việc là bình thường, nhưng cùng mức 300 kW lúc 3h sáng Chủ nhật bị coi là bất thường. Đây là loại anomaly nào?",
+      "options": [
+        "Point anomaly: giá trị 300 kW nằm ngoài phân phối toàn cục của mọi lần đo trong năm của toà nhà",
+        "Collective anomaly: một chuỗi điểm liên tiếp cùng nhau tạo ra mẫu bất thường dù từng điểm bình thường",
+        "Contextual anomaly: giá trị chỉ bất thường khi xét theo ngữ cảnh (thời điểm), không bất thường tuyệt đối",
+        "Concept drift: phân phối tiêu thụ đổi vĩnh viễn, nên mọi mức 300 kW về sau đều là bất thường"
+      ],
+      "answer": 2,
+      "explain": "Ba loại anomaly kinh điển: point anomaly là một điểm lệch so với toàn bộ dữ liệu (giao dịch 500 triệu khi mọi giao dịch khác < 10 triệu). Contextual (conditional) anomaly là giá trị bình thường ở ngữ cảnh này nhưng bất thường ở ngữ cảnh khác, với ngữ cảnh thường là thời gian, mùa hay vị trí. Collective anomaly là một nhóm điểm cùng nhau mới bất thường (chuỗi nhịp tim phẳng kéo dài, chuỗi login thất bại liên tiếp). Ở đây 300 kW xuất hiện thường xuyên vào giờ làm việc nên không phải point anomaly toàn cục. Nó chỉ bất thường khi điều kiện theo giờ/ngày. Cách xử lý: đưa ngữ cảnh vào model (feature giờ/ngày, so với baseline theo mùa vụ, hoặc dùng residual sau khi khử seasonality)."
+    },
+    {
+      "id": "sysdesign-029",
+      "sub": "IQR (Tukey fences)",
+      "level": 1,
+      "type": "numeric",
+      "trap": false,
+      "q": "10 giá trị latency (ms) đã sắp xếp: `12, 14, 15, 15, 16, 18, 19, 21, 22, 60`. Tính Q1 là median của nửa dưới (5 giá trị đầu), Q3 là median của nửa trên (5 giá trị cuối). Ngưỡng trên (upper fence) theo quy tắc Tukey **Q3 + 1.5 × IQR** là bao nhiêu ms?",
+      "answer": 30,
+      "tolerance": 0,
+      "unit": "ms",
+      "explain": "Nửa dưới `12, 14, 15, 15, 16` có median Q1 = 15. Nửa trên `18, 19, 21, 22, 60` có median Q3 = 21. IQR = 21 − 15 = 6. Upper fence = 21 + 1.5 × 6 = 30 ms; lower fence = 15 − 9 = 6 ms. Giá trị 60 > 30 nên bị đánh dấu outlier. IQR dựa trên quantile nên robust: outlier 60 hầu như không làm dịch Q1/Q3. Lưu ý: có nhiều cách tính quantile (numpy mặc định nội suy tuyến tính cho Q1 = 15, Q3 = 20.5), nên đề cần nói rõ quy ước. Hệ số 1.5 là quy ước; dùng 3 × IQR cho “extreme outlier”."
+    },
+    {
+      "id": "sysdesign-030",
+      "sub": "z-score & masking",
+      "level": 2,
+      "type": "single",
+      "trap": true,
+      "q": "Với đúng 10 giá trị ở trên (`12, 14, 15, 15, 16, 18, 19, 21, 22, 60`), một đồng nghiệp áp quy tắc |z| > 3, với z = (x − mean)/std (std quần thể), và kết luận “không có outlier”. Nhận định nào đúng?",
+      "options": [
+        "Kết luận đúng: 60 có z ≈ 2.92 < 3 nên chỉ là biến động tự nhiên; chính quy tắc IQR mới cho kết quả sai",
+        "z của 60 ≈ 4.5 > 3, đồng nghiệp tính sai vì phải dùng std mẫu (chia n − 1) thay cho std quần thể",
+        "z-score sai ở đây chỉ vì latency không âm; chuyển sang log-scale thì kết quả sẽ luôn trùng với IQR",
+        "z(60) ≈ 2.92 do outlier kéo mean và std lên (masking); hơn nữa với n = 10, |z| không thể vượt √(n−1) = 3"
+      ],
+      "answer": 3,
+      "explain": "Mean = 21.2, std quần thể ≈ 13.27, nên z(60) = (60 − 21.2)/13.27 ≈ 2.92 < 3. Chính giá trị 60 đã kéo mean từ ~16.9 lên 21.2 và làm std phình to, nên nó “che” chính mình (masking). Còn có giới hạn toán học (bất đẳng thức Samuelson): với std quần thể, |z| ≤ √(n − 1), nên với n = 10 không điểm nào có thể có |z| > 3. Dùng std mẫu thì z còn nhỏ hơn (≈ 2.77, cận trên (n−1)/√n ≈ 2.85), không phải 4.5. Cách khắc phục: dùng thống kê robust như IQR, hoặc modified z-score với median và MAD (0.6745·(x − median)/MAD, ngưỡng 3.5). Log-scale có thể giúp với dữ liệu lệch phải nhưng không tự đảm bảo khớp với IQR."
+    },
+    {
+      "id": "sysdesign-031",
+      "sub": "Isolation Forest",
+      "level": 2,
+      "type": "single",
+      "trap": false,
+      "q": "Vì sao trong Isolation Forest, điểm có **độ dài đường đi trung bình ngắn** (từ gốc tới lá) được coi là bất thường?",
+      "options": [
+        "Cây được xây để tối thiểu hoá impurity theo nhãn anomaly, nên điểm bất thường rơi vào các lá nông có độ thuần khiết cao",
+        "Điểm bất thường ít và khác biệt, nên phép chia ngẫu nhiên (feature, ngưỡng ngẫu nhiên) cô lập chúng sau ít bước hơn",
+        "Đường đi ngắn nghĩa là điểm nằm gần tâm phân phối, và Isolation Forest đảo dấu score nên tâm trở thành bất thường",
+        "Đường đi ngắn vì điểm có nhiều neighbor gần nên được gộp vào lá sớm; mật độ cao là dấu hiệu của sự bất thường"
+      ],
+      "answer": 1,
+      "explain": "Isolation Forest (Liu et al., 2008) không mô hình hoá vùng bình thường mà cô lập trực tiếp từng điểm. Mỗi cây chọn ngẫu nhiên một feature và một ngưỡng ngẫu nhiên trong khoảng [min, max], chia tiếp tới khi mỗi điểm ở một lá riêng. Điểm nằm trong vùng dày đặc cần rất nhiều lần chia mới tách được khỏi hàng xóm. Điểm thưa và xa đám đông bị tách ra chỉ sau vài lần chia. Score s(x) = 2^(−E[h(x)]/c(n)), với c(n) là độ dài path trung bình của một cây với n điểm (dùng để chuẩn hoá): s gần 1 là bất thường, nhỏ hơn hẳn 0.5 là bình thường. Thuật toán không dùng nhãn hay impurity. Mật độ cao là dấu hiệu bình thường, không phải bất thường. Isolation Forest nhanh, sub-sampling nhỏ (256 mẫu/cây) và hợp với dữ liệu nhiều chiều dạng bảng."
+    },
+    {
+      "id": "sysdesign-032",
+      "sub": "LOF, One-Class SVM, autoencoder",
+      "level": 3,
+      "type": "multi",
+      "trap": true,
+      "q": "Chọn **TẤT CẢ** phát biểu ĐÚNG về các phương pháp anomaly detection không giám sát.",
+      "options": [
+        "Autoencoder train trên dữ liệu lẫn nhiều anomaly có thể học tái tạo luôn chúng, làm reconstruction error mất khả năng phân biệt",
+        "LOF so sánh mật độ cục bộ của một điểm với mật độ các láng giềng, nên bắt được điểm lạ cạnh các cụm mật độ khác nhau",
+        "LOF ≈ 1 nghĩa là điểm rất bất thường so với láng giềng, còn LOF ≪ 1 nghĩa là điểm nằm sâu trong vùng bình thường",
+        "Isolation Forest cần nhãn anomaly để chọn ngưỡng chia ở mỗi node, nên không dùng được khi hoàn toàn không có nhãn",
+        "Với One-Class SVM, ν là cận trên của tỉ lệ điểm train bị coi là outlier và cận dưới của tỉ lệ support vector"
+      ],
+      "answer": [
+        0,
+        1,
+        4
+      ],
+      "explain": "LOF (Local Outlier Factor) = tỉ số giữa mật độ cục bộ trung bình của các láng giềng và mật độ cục bộ của chính điểm. LOF ≈ 1 nghĩa là mật độ tương đương láng giềng, tức bình thường; LOF ≫ 1 mới là bất thường. Phát biểu đảo chiều là bẫy. Vì so sánh cục bộ, LOF xử lý được trường hợp một cụm dày và một cụm thưa, nơi ngưỡng khoảng cách toàn cục thất bại. One-Class SVM học biên bao vùng dữ liệu bình thường; ν ∈ (0, 1] vừa là cận trên tỉ lệ lỗi train (outlier) vừa là cận dưới tỉ lệ support vector (Schölkopf et al.). Autoencoder dùng reconstruction error làm score với giả định model chỉ học tốt “bình thường”; nếu dữ liệu train nhiễm nhiều anomaly, giả định này vỡ. Isolation Forest hoàn toàn không cần nhãn; nhãn (nếu có) chỉ dùng để chọn ngưỡng và đánh giá."
+    },
+    {
+      "id": "sysdesign-033",
+      "sub": "Đánh giá khi rất ít nhãn",
+      "level": 2,
+      "type": "single",
+      "trap": false,
+      "q": "Hệ phát hiện giao dịch bất thường chấm điểm 2 triệu giao dịch/tháng. Chỉ có ~40 case gian lận đã được xác nhận, phần còn lại chưa gán nhãn. Analyst chỉ xem được khoảng 200 cảnh báo mỗi tháng. Cách đánh giá model hợp lý nhất?",
+      "options": [
+        "Analyst review top-k cảnh báo (k ≈ năng lực xem) để đo precision@k, kèm recall/PR-AUC trên case đã xác nhận",
+        "Coi mọi giao dịch chưa gán nhãn là bình thường rồi báo accuracy; con số 99.99% chứng minh model đủ tốt",
+        "Dùng ROC-AUC trên toàn bộ dữ liệu, vì metric này không phụ thuộc tỉ lệ lớp nên phản ánh đúng chất lượng cảnh báo",
+        "Dùng silhouette score của các cụm anomaly, vì không cần nhãn và tương quan chặt với số gian lận bắt được"
+      ],
+      "answer": 0,
+      "explain": "Ràng buộc vận hành là chỉ xem được khoảng 200 cảnh báo, nên câu hỏi kinh doanh là “trong top-k model đưa ra, bao nhiêu là thật”. Đó chính là precision@k, đo được bằng cách cho analyst review (có thể lấy thêm mẫu ngẫu nhiên ngoài top-k để ước lượng phần bỏ sót). Recall trên 40 case đã biết, PR-AUC, hoặc backtest trên các sự cố lịch sử bổ sung góc nhìn độ phủ. Accuracy với 99.99% là vô nghĩa khi tỉ lệ dương cực thấp. ROC-AUC không đổi theo tỉ lệ lớp nhưng chính vì vậy nó có thể rất cao trong khi precision ở top thấp, vì FPR nhỏ nhân với hàng triệu âm tính vẫn là hàng nghìn cảnh báo sai. Silhouette đo chất lượng phân cụm, không liên quan tới việc bắt đúng gian lận."
+    },
+    {
+      "id": "sysdesign-034",
+      "sub": "Chọn threshold theo chi phí",
+      "level": 3,
+      "type": "numeric",
+      "trap": false,
+      "q": "Trong một tháng có tổng cộng **40** vụ gian lận (biết được về sau qua chargeback). Mỗi cảnh báo được analyst review tốn **$5** (kể cả cảnh báo đúng). Mỗi vụ gian lận bị bỏ sót gây thiệt hại **$400**. Ba ngưỡng ứng viên:\n\n| Ngưỡng | Số cảnh báo/tháng | Số vụ gian lận bắt được |\n|---|---|---|\n| T1 (cao) | 200 | 30 |\n| T2 | 600 | 36 |\n| T3 (thấp) | 3 000 | 39 |\n\nTổng chi phí/tháng (review + thiệt hại bỏ sót) **thấp nhất** trong ba ngưỡng là bao nhiêu **USD**?",
+      "answer": 4600,
+      "tolerance": 1,
+      "unit": "USD/tháng",
+      "explain": "Chi phí = số cảnh báo × 5 + (40 − số bắt được) × 400. T1: 200 × 5 + 10 × 400 = 1 000 + 4 000 = $5 000. T2: 600 × 5 + 4 × 400 = 3 000 + 1 600 = $4 600. T3: 3 000 × 5 + 1 × 400 = 15 000 + 400 = $15 400. T2 tối ưu. T1 có precision cao nhất (15%) nhưng bỏ sót nhiều. T3 có recall cao nhất (97.5%) nhưng chi phí review bùng nổ, và năng lực analyst thực tế có thể không đủ. Ngưỡng tốt nhất phụ thuộc tỉ lệ chi phí FN/FP chứ không phải điểm F1 hay recall tối đa. Khi chi phí thay đổi (giá trị giao dịch khác nhau), có thể dùng ngưỡng theo kỳ vọng thiệt hại: cảnh báo khi P(fraud) × số tiền > chi phí review."
+    },
+    {
+      "id": "sysdesign-035",
+      "sub": "Thiết kế A/B test & guardrail",
+      "level": 2,
+      "type": "multi",
+      "trap": false,
+      "q": "Bạn A/B test thuật toán ranking mới cho trang chủ app; primary metric là số đơn hàng/user. Chọn **TẤT CẢ** thực hành ĐÚNG.",
+      "options": [
+        "Randomize theo request để có nhiều đơn vị mẫu hơn và đơn giản hoá việc tính variance cho metric theo user",
+        "Randomize theo user_id (hash ổn định) để mỗi user luôn thấy cùng một biến thể trong suốt thí nghiệm",
+        "Khai báo trước primary metric, thời lượng và guardrail metric (latency p99, tỉ lệ crash, tỉ lệ huỷ đơn)",
+        "Theo dõi 20 metric rồi chọn metric có p-value nhỏ nhất làm primary metric khi viết báo cáo",
+        "Chạy trọn ít nhất 1–2 chu kỳ tuần để kết quả không lệch theo hành vi ngày trong tuần"
+      ],
+      "answer": [
+        1,
+        2,
+        4
+      ],
+      "explain": "Đơn vị randomize phải khớp với đơn vị phân tích của metric và với trải nghiệm. Metric “đơn hàng/user” cần randomize theo user. Randomize theo request làm cùng một user thấy lúc A lúc B: trải nghiệm không nhất quán, hai nhóm “lây” sang nhau, và các request của cùng user không độc lập nên công thức variance theo request bị sai (cần delta method). Pre-registration chống p-hacking. Chọn primary metric sau khi xem kết quả chính là multiple testing trá hình. Guardrail metric bảo vệ những thứ không được phép xấu đi dù primary tăng. Chạy theo chu kỳ tuần tránh lệch hành vi cuối tuần/ngày thường. Thời lượng nên được tính từ power analysis ngay từ đầu."
+    },
+    {
+      "id": "sysdesign-036",
+      "sub": "Sample size",
+      "level": 1,
+      "type": "numeric",
+      "trap": false,
+      "q": "Conversion baseline p = 5%. Muốn phát hiện mức tăng **tuyệt đối** δ = 0.5 điểm phần trăm (5% → 5.5%) với α = 0.05 hai phía, power 80%. Dùng xấp xỉ **n ≈ 16·σ²/δ² mỗi nhóm**, σ² = p(1 − p) tính tại baseline. Mỗi nhóm cần bao nhiêu user?",
+      "answer": 30400,
+      "tolerance": 1,
+      "unit": "user/nhóm",
+      "explain": "σ² = 0.05 × 0.95 = 0.0475. δ = 0.005, nên δ² = 0.000025. n ≈ 16 × 0.0475 / 0.000025 = 30 400 user mỗi nhóm, tổng 60 800. Hằng số 16 đến từ 2 × (z_{0.975} + z_{0.8})² = 2 × (1.96 + 0.84)² ≈ 15.7 ≈ 16, trong đó hệ số 2 là vì so sánh hai nhóm cùng variance. Điểm cần nhớ: n tỉ lệ nghịch với δ². Muốn phát hiện hiệu ứng nhỏ bằng một nửa thì cần gấp 4 lần mẫu. Lưu ý đề cho δ tuyệt đối (0.5 điểm %), không phải 0.5% tương đối (5% → 5.025%, khi đó cần gấp 400 lần)."
+    },
+    {
+      "id": "sysdesign-037",
+      "sub": "MDE",
+      "level": 3,
+      "type": "numeric",
+      "trap": true,
+      "q": "Trang có **20 000** user mới/ngày, chia đều 50/50 cho control và treatment, chạy **14 ngày** (mỗi user chỉ tính một lần). Baseline conversion 5%, α = 0.05 hai phía, power 80%. Dùng n ≈ 16·σ²/δ² **mỗi nhóm**, σ² = p(1 − p). MDE **tương đối** (δ chia cho baseline) là bao nhiêu **%**? (2 chữ số thập phân)",
+      "answer": 4.66,
+      "tolerance": 0.01,
+      "unit": "%",
+      "explain": "Tổng user = 20 000 × 14 = 280 000, nên mỗi nhóm có n = 140 000. Đảo công thức: δ = √(16σ²/n) = √(16 × 0.0475 / 140 000) = √(5.4286 × 10⁻⁶) ≈ 0.00233, tức 0.233 điểm %. MDE tương đối = 0.00233 / 0.05 ≈ 4.66%. Bẫy: dùng n = 280 000 (quên chia hai nhóm) cho ra ≈ 3.30%, làm thí nghiệm có vẻ nhạy hơn thực tế. Nếu kỳ vọng thực tế của tính năng chỉ là +2% tương đối, thí nghiệm này underpowered. Khi đó cần chạy lâu hơn, giảm variance (CUPED), dùng metric nhạy hơn, hoặc chấp nhận chỉ phát hiện được hiệu ứng lớn."
+    },
+    {
+      "id": "sysdesign-038",
+      "sub": "Multiple testing & Bonferroni",
+      "level": 2,
+      "type": "single",
+      "trap": false,
+      "q": "Thí nghiệm có 4 biến thể so với control, mỗi cặp so sánh trên 5 metric, tổng cộng **20 kiểm định**. Muốn giữ family-wise error rate ≤ 0.05 bằng Bonferroni. Các p-value nhỏ nhất thu được: `0.0008, 0.0021, 0.0030, 0.012, 0.031, 0.044` (14 p-value còn lại > 0.05). Có bao nhiêu kết quả còn có ý nghĩa?",
+      "options": [
+        "6, vì cả sáu p-value đều nhỏ hơn α = 0.05",
+        "3, vì chỉ cần chia α cho 5 metric nên ngưỡng là 0.01",
+        "2, vì ngưỡng cho mỗi kiểm định là 0.05/20 = 0.0025",
+        "0, vì phải chia α cho 20 × 4 = 80 nên ngưỡng ≈ 0.0006"
+      ],
+      "answer": 2,
+      "explain": "Bonferroni chia α cho tổng số kiểm định trong family: 0.05/20 = 0.0025. Chỉ 0.0008 và 0.0021 nhỏ hơn ngưỡng, nên có 2 kết quả. Không sửa thì xác suất có ít nhất một false positive khi cả 20 giả thuyết null đều đúng là 1 − 0.95²⁰ ≈ 64%, nên đếm 6 kết quả là quá lạc quan. Chỉ chia cho 5 metric là bỏ quên chiều biến thể. Chia cho 80 là đếm số biến thể hai lần, vì 20 đã bao gồm 4 × 5. Bonferroni bảo thủ khi số kiểm định lớn hoặc các metric tương quan; Holm cũng kiểm soát FWER nhưng mạnh hơn. Benjamini–Hochberg kiểm soát FDR, hợp khi sàng lọc nhiều metric phụ. Thực hành tốt: chỉ một primary metric được dùng để ra quyết định, các metric khác là secondary/guardrail."
+    },
+    {
+      "id": "sysdesign-039",
+      "sub": "Peeking problem",
+      "level": 2,
+      "type": "single",
+      "trap": true,
+      "q": "PM xem dashboard A/B mỗi ngày và dừng thí nghiệm ngay khi p-value < 0.05 (t-test kiểu fixed-horizon). Vấn đề là gì?",
+      "options": [
+        "Không có vấn đề gì, vì p-value ở mỗi thời điểm đều hợp lệ nên dừng sớm chỉ giúp tiết kiệm traffic",
+        "Chỉ làm giảm power (dễ bỏ sót hiệu ứng thật), còn tỉ lệ false positive vẫn được giữ đúng mức 5% như thiết kế ban đầu",
+        "Vấn đề duy nhất là novelty effect; chỉ cần bỏ dữ liệu 3 ngày đầu tiên thì có thể peek hằng ngày thoải mái",
+        "Nhìn lặp lại nhiều lần làm tỉ lệ false positive thực tế vượt xa 5%; cần cố định thời lượng hoặc dùng sequential test"
+      ],
+      "answer": 3,
+      "explain": "p-value của t-test fixed-horizon chỉ đúng nếu ta nhìn đúng một lần ở cỡ mẫu đã định trước. Dưới H0, p-value dao động ngẫu nhiên theo thời gian. Nếu kiểm tra hằng ngày và dừng khi lần đầu chạm < 0.05, xác suất “từng chạm” cao hơn nhiều so với 5%; mô phỏng cho thấy nhìn 10 lần đã đẩy tỉ lệ false positive lên ≈ 19%, nhìn 20 lần ≈ 25%. Peeking làm tăng false positive chứ không chỉ giảm power, đó là bẫy. Giải pháp: cố định thời lượng theo power analysis và chỉ kết luận ở cuối; hoặc dùng sequential testing (group sequential với alpha spending như O'Brien–Fleming, mSPRT hay always-valid p-value) nếu cần dừng sớm. Novelty effect là vấn đề riêng, không liên quan tới cơ chế thống kê này."
+    },
+    {
+      "id": "sysdesign-040",
+      "sub": "Novelty & primacy effect",
+      "level": 2,
+      "type": "single",
+      "trap": false,
+      "q": "Đổi giao diện gợi ý: CTR của treatment cao hơn control **8%** ở tuần 1, **4%** ở tuần 2, và **1%** ở tuần 3. Giải thích hợp lý nhất và cách kiểm tra?",
+      "options": [
+        "Primacy effect: người dùng ban đầu ngại thay đổi, nên hiệu ứng thật sẽ còn tăng dần trong vài tuần tới",
+        "Novelty effect: người dùng tò mò với cái mới rồi quen dần; kiểm tra effect theo thời gian, tách user mới/cũ",
+        "Sample ratio mismatch: tỉ lệ chia nhóm lệch dần theo thời gian khiến hiệu ứng giảm; cần chạy chi-square test",
+        "Regression to the mean của p-value: hiệu ứng thật luôn là 8% nhưng bị ước lượng thấp do tuần sau thiếu mẫu"
+      ],
+      "answer": 1,
+      "explain": "Novelty effect: thay đổi mới thu hút tò mò nên tạo lift ban đầu, rồi giảm dần khi người dùng quen. Primacy (change aversion) là chiều ngược lại: ban đầu người dùng phản ứng tiêu cực vì phải học lại, sau đó hiệu ứng cải thiện. Dữ liệu ở đây giảm dần, khớp với novelty, không khớp với primacy. Cách kiểm tra: vẽ treatment effect theo ngày/tuần; so sánh user mới (lần đầu thấy giao diện nào cũng “mới”) với user cũ; phân tích theo cohort ngày vào thí nghiệm. Nên chạy đủ lâu để hiệu ứng ổn định và quyết định dựa trên hiệu ứng dài hạn (~1% ở đây). SRM là lỗi phân bổ traffic, phát hiện bằng chi-square, không tự gây ra mẫu suy giảm có hệ thống như vậy."
+    },
+    {
+      "id": "sysdesign-041",
+      "sub": "SRM check",
+      "level": 2,
+      "type": "numeric",
+      "trap": false,
+      "q": "Thí nghiệm thiết kế chia **50/50**. Sau 1 tuần: control có **50 600** user, treatment có **49 400** user. Tính thống kê **chi-square goodness-of-fit** (1 bậc tự do) để kiểm tra sample ratio mismatch. (1 chữ số thập phân)",
+      "answer": 14.4,
+      "tolerance": 0.05,
+      "unit": "",
+      "explain": "Kỳ vọng mỗi nhóm = 100 000 / 2 = 50 000. χ² = Σ (O − E)²/E = 600²/50 000 + (−600)²/50 000 = 7.2 + 7.2 = 14.4. Với 1 bậc tự do, p ≈ 0.00015, rất nhỏ (các nền tảng thí nghiệm thường báo SRM khi p < 0.001 hoặc chặt hơn). Chênh lệch 1.2% nhìn qua tưởng nhỏ, nhưng với 100 000 user thì khó xảy ra do ngẫu nhiên, nên có SRM. Khi có SRM, không nên tin kết quả A/B: phải tìm nguyên nhân trước. Nguyên nhân hay gặp: bug redirect/crash ở một biến thể, lọc bot khác nhau, logging mất event ở một nhánh, điều kiện trigger phụ thuộc treatment, hoặc user bị gán lại nhóm. SRM check nên là guardrail tự động trên mọi thí nghiệm."
+    },
+    {
+      "id": "sysdesign-042",
+      "sub": "Network effect & interference",
+      "level": 3,
+      "type": "multi",
+      "trap": false,
+      "q": "Thí nghiệm thuật toán định giá (surge pricing) trên ứng dụng gọi xe, nơi tài xế được dùng chung cho mọi hành khách. Chọn **TẤT CẢ** phát biểu ĐÚNG.",
+      "options": [
+        "Randomize theo hành khách vi phạm SUTVA: treatment và control tranh cùng nguồn cung tài xế nên ước lượng hiệu ứng bị chệch",
+        "Switchback (luân phiên cả khu vực giữa treatment và control theo khung thời gian) là thiết kế phổ biến cho marketplace",
+        "Randomize theo cụm địa lý (geo/cluster) giảm interference nhưng tăng variance vì số đơn vị randomize ít đi",
+        "Tăng số hành khách trong thí nghiệm lên đủ lớn sẽ loại bỏ được chệch do interference, vì sai số ước lượng tiến về 0",
+        "Interference chỉ xảy ra trên mạng xã hội nơi người dùng kết bạn; marketplace hai phía không bị ảnh hưởng"
+      ],
+      "answer": [
+        0,
+        1,
+        2
+      ],
+      "explain": "SUTVA giả định kết quả của một đơn vị chỉ phụ thuộc treatment của chính nó. Trong marketplace, nếu treatment làm hành khách đặt nhiều xe hơn, họ lấy bớt tài xế của nhóm control, làm control xấu đi giả tạo và phóng đại hiệu ứng. Đây là chệch (bias), nên tăng cỡ mẫu chỉ thu hẹp khoảng tin cậy quanh một con số sai. Switchback randomize theo (khu vực × khung thời gian), nên toàn bộ thị trường trong một khung cùng nhận một chính sách; cần xử lý carryover giữa các khung. Cluster/geo randomization giữ phần lớn tương tác trong cùng cụm, nhưng số đơn vị ít nên variance lớn, cần nhiều cụm hoặc chạy lâu. Interference xuất hiện ở mạng xã hội, marketplace, quảng cáo đấu giá chung ngân sách và hệ thống chia sẻ tài nguyên."
+    },
+    {
+      "id": "sysdesign-043",
+      "sub": "CUPED",
+      "level": 3,
+      "type": "numeric",
+      "trap": true,
+      "q": "Metric doanh thu/user có variance lớn. Bạn áp dụng **CUPED** với covariate là doanh thu của chính user trong 4 tuần trước thí nghiệm; hệ số tương quan giữa covariate và metric là **ρ = 0.6**. Nếu không dùng CUPED cần **50 000** user/nhóm, thì với CUPED (cùng MDE, α, power) cần khoảng bao nhiêu user/nhóm?",
+      "answer": 32000,
+      "tolerance": 1,
+      "unit": "user/nhóm",
+      "explain": "CUPED dùng Y_cuped = Y − θ(X − mean(X)) với θ = cov(X, Y)/var(X). Covariate X đo trước thí nghiệm nên không bị treatment ảnh hưởng, và hiệu ứng ước lượng vẫn không chệch. Variance còn lại = var(Y) × (1 − ρ²) = var(Y) × (1 − 0.36) = 0.64 × var(Y). Cỡ mẫu tỉ lệ thuận với variance, nên n ≈ 50 000 × 0.64 = 32 000 user/nhóm. Bẫy: dùng (1 − ρ) = 0.4 cho ra 20 000, phóng đại lợi ích. Covariate phải là dữ liệu trước khi randomize. Dùng metric trong lúc thí nghiệm làm covariate có thể “hấp thụ” mất chính hiệu ứng treatment. User mới không có lịch sử thì gán X = 0 hoặc giá trị trung bình, lợi ích CUPED cho nhóm đó giảm."
+    },
+    {
+      "id": "sysdesign-044",
+      "sub": "A/A test",
+      "level": 1,
+      "type": "single",
+      "trap": true,
+      "q": "Team chạy **A/A test** (hai nhóm nhận cùng một phiên bản) và so sánh 100 metric độc lập với α = 0.05. Có 6 metric cho p < 0.05. Kết luận nào hợp lý?",
+      "options": [
+        "Khớp kỳ vọng ≈ 5 false positive; nên xem thêm phân phối p-value (gần đều) và kiểm tra SRM",
+        "Hệ thống randomization chắc chắn bị lỗi, vì A/A test đúng thì không metric nào được có p < 0.05",
+        "6 metric đó thật sự khác nhau giữa hai nhóm và nên được ghi nhận như insight về hành vi người dùng",
+        "A/A test vô nghĩa vì hai nhóm giống hệt nhau; chỉ nên dành traffic cho các A/B test thật"
+      ],
+      "answer": 0,
+      "explain": "Dưới H0 (không có khác biệt thật), mỗi kiểm định có 5% xác suất cho p < 0.05. Với 100 metric độc lập, kỳ vọng khoảng 5 false positive (độ lệch chuẩn ≈ √(100 × 0.05 × 0.95) ≈ 2.2), nên 6 là hoàn toàn bình thường. Bẫy là nghĩ A/A đúng thì phải “sạch” hoàn toàn. A/A test hữu ích để kiểm tra hạ tầng: randomization không lệch (không có SRM), pipeline metric đúng, công thức variance đúng (qua nhiều lần A/A, p-value phải phân phối gần đều trên [0, 1] và tỉ lệ p < 0.05 ≈ 5%). Nếu tỉ lệ false positive vượt xa α, ví dụ do tính variance sai khi đơn vị phân tích khác đơn vị randomize, thì A/A sẽ phát hiện trước khi A/B thật đưa ra kết luận sai."
+    },
+    {
+      "id": "sysdesign-045",
+      "sub": "Simpson's paradox",
+      "level": 2,
+      "type": "single",
+      "trap": true,
+      "q": "Hai model trả lời được đánh giá trên các tập query khác nhau (do routing cũ):\n\n| | Query dễ | Query khó | Tổng |\n|---|---|---|---|\n| Model A | 81/87 (93.1%) | 192/263 (73.0%) | 273/350 (78.0%) |\n| Model B | 234/270 (86.7%) | 55/80 (68.8%) | 289/350 (82.6%) |\n\nKết luận nào đúng?",
+      "options": [
+        "B tốt hơn vì tỉ lệ tổng 82.6% so với 78.0%, và tỉ lệ tổng là con số duy nhất phản ánh trải nghiệm người dùng",
+        "Hai model ngang nhau, vì A thắng ở từng nhóm còn B thắng ở tổng nên hai hiệu ứng triệt tiêu nhau",
+        "A tốt hơn ở từng nhóm; B cao hơn ở tổng chỉ vì nhận nhiều query dễ hơn (Simpson's paradox), nên phải so theo tầng",
+        "Không kết luận được gì, vì số query của hai model trong từng nhóm khác nhau nên không được phép tính tỉ lệ"
+      ],
+      "answer": 2,
+      "explain": "A thắng ở cả query dễ (93.1% so với 86.7%) lẫn query khó (73.0% so với 68.8%), nhưng thua ở tổng (78.0% so với 82.6%). Lý do: 263/350 query của A là query khó, trong khi B chỉ nhận 80/350 query khó. Độ khó là confounder: nó ảnh hưởng cả việc model nào nhận query (routing) lẫn tỉ lệ trả lời đúng. Tỉ lệ tổng là trung bình có trọng số theo một hỗn hợp query khác nhau, nên so sánh hai con số đó là so táo với cam. Cách đúng: so theo từng tầng, hoặc chuẩn hoá về cùng một phân phối query (direct standardization); tốt nhất là đánh giá cả hai model trên cùng tập query hoặc randomize việc routing. Hai hiệu ứng không “triệt tiêu” nhau, và tỉ lệ vẫn tính được bình thường dù cỡ nhóm khác nhau."
+    },
+    {
+      "id": "sysdesign-046",
+      "sub": "Correlation vs causation",
+      "level": 1,
+      "type": "single",
+      "trap": false,
+      "q": "Phân tích log: user có dùng chatbot hỗ trợ có retention 30 ngày cao hơn user không dùng **20 điểm phần trăm**. Kết luận nào đúng nhất?",
+      "options": [
+        "Chatbot làm tăng retention 20 điểm %, nên ép mọi user mở chatbot sẽ làm retention tăng tương ứng",
+        "Vì mẫu lớn và chênh lệch có ý nghĩa thống kê, đây đã là bằng chứng nhân quả đủ mạnh để ra quyết định",
+        "Chatbot chắc chắn làm giảm retention, vì chỉ user gặp sự cố mới dùng chatbot nên chênh lệch thật phải âm",
+        "Chưa suy ra được nhân quả: user gắn bó vốn dễ dùng chatbot hơn (confounder); cần thí nghiệm ngẫu nhiên"
+      ],
+      "answer": 3,
+      "explain": "Đây là dữ liệu quan sát: user tự chọn dùng chatbot (self-selection). Những user gắn bó, hoạt động nhiều vốn có retention cao và cũng có nhiều cơ hội dùng chatbot hơn, nên mức độ gắn bó là confounder tạo tương quan mà không cần quan hệ nhân quả. Ý nghĩa thống kê chỉ nói chênh lệch khó là ngẫu nhiên, không nói chênh lệch do đâu. Chiều ngược lại (chỉ user gặp sự cố mới dùng) cũng là một giả thuyết confounding khác, không thể khẳng định “chắc chắn” khi chưa có bằng chứng. Để ước lượng nhân quả: A/B test (ví dụ hiển thị nổi bật chatbot cho nhóm ngẫu nhiên, rồi phân tích intent-to-treat), hoặc khi không thí nghiệm được thì dùng propensity score, DiD hay instrumental variable, kèm giả định rõ ràng."
+    },
+    {
+      "id": "sysdesign-047",
+      "sub": "Propensity score",
+      "level": 3,
+      "type": "single",
+      "trap": true,
+      "q": "Không thể A/B test, team dùng **propensity score** để ước lượng tác động của chương trình voucher (user tự chọn tham gia). Phát biểu nào ĐÚNG?",
+      "options": [
+        "Propensity score là P(chuyển đổi | tham gia, X); dùng nó để điền outcome bị thiếu của nhóm không tham gia",
+        "Propensity là P(tham gia | X); matching/IPW theo nó cân bằng covariate quan sát được, không xử lý confounder ẩn",
+        "Đã matching theo propensity score thì kết quả tương đương A/B ngẫu nhiên, kể cả với confounder không quan sát được",
+        "Nên đưa càng nhiều biến càng tốt vào model propensity, kể cả biến đo sau khi user đã tham gia chương trình"
+      ],
+      "answer": 1,
+      "explain": "Propensity score e(X) = P(T = 1 | X) là xác suất nhận treatment theo covariate (Rosenbaum & Rubin, 1983). Nếu mọi confounder đều nằm trong X (giả định unconfoundedness) và có overlap (0 < e(X) < 1), thì so sánh các user có cùng e(X), qua matching, stratification hay IPW với trọng số 1/e và 1/(1 − e), cho ước lượng không chệch. Điểm yếu cốt lõi là phương pháp chỉ cân bằng biến quan sát được; confounder ẩn (động lực mua sắm chưa đo) vẫn gây chệch. Đó là bẫy “tương đương A/B”. Định nghĩa P(chuyển đổi | …) là mô hình outcome, không phải propensity. Biến đo sau treatment có thể bị treatment ảnh hưởng (post-treatment bias), nên không được đưa vào. Luôn kiểm tra balance (standardized mean difference) và overlap sau khi matching."
+    },
+    {
+      "id": "sysdesign-048",
+      "sub": "Difference-in-differences",
+      "level": 2,
+      "type": "numeric",
+      "trap": false,
+      "q": "Tính năng mới chỉ ra mắt ở thành phố A từ tháng 7; thành phố B không thay đổi gì. Conversion trung bình:\n\n| | Trước tháng 7 | Sau tháng 7 |\n|---|---|---|\n| Thành phố A | 4.0% | 5.1% |\n| Thành phố B | 3.5% | 4.0% |\n\nƯớc lượng **difference-in-differences** tác động của tính năng là bao nhiêu **điểm phần trăm**? (1 chữ số thập phân)",
+      "answer": 0.6,
+      "tolerance": 0.05,
+      "unit": "điểm %",
+      "explain": "DiD = (A_sau − A_trước) − (B_sau − B_trước) = (5.1 − 4.0) − (4.0 − 3.5) = 1.1 − 0.5 = 0.6 điểm %. So sánh trước–sau thuần ở A (1.1 điểm) gộp cả xu hướng chung như mùa vụ hay marketing toàn quốc. So A với B sau tháng 7 (1.1 điểm) gộp cả khác biệt sẵn có giữa hai thành phố (0.5 điểm từ trước). DiD trừ đi cả hai. Giả định then chốt là parallel trends: nếu không có tính năng, A sẽ thay đổi giống B. Kiểm tra bằng cách vẽ xu hướng nhiều kỳ trước can thiệp (event study), và cảnh giác khi A có sự kiện riêng trùng thời điểm. Có thể ước lượng bằng hồi quy Y = β₀ + β₁·treat + β₂·post + β₃·treat·post, với β₃ là hiệu ứng DiD."
+    },
+    {
+      "id": "sysdesign-049",
+      "sub": "Instrumental variable & uplift",
+      "level": 3,
+      "type": "multi",
+      "trap": false,
+      "q": "Chọn **TẤT CẢ** phát biểu ĐÚNG về instrumental variable (IV) và uplift modeling.",
+      "options": [
+        "Train uplift model cần dữ liệu có cả nhóm treatment và nhóm control, tốt nhất là từ thí nghiệm ngẫu nhiên",
+        "Instrument hợp lệ phải ảnh hưởng tới việc nhận treatment và chỉ tác động lên outcome thông qua treatment (exclusion restriction)",
+        "Uplift modeling ước lượng P(mua | được tiếp thị) − P(mua | không) cho từng user để nhắm đúng nhóm “persuadables”",
+        "Bất kỳ biến nào tương quan mạnh với outcome đều dùng được làm instrument; tương quan càng mạnh càng tốt",
+        "Gửi voucher cho top user có P(mua) cao nhất là tối ưu, vì đó chính là nhóm có uplift lớn nhất"
+      ],
+      "answer": [
+        0,
+        1,
+        2
+      ],
+      "explain": "IV dùng khi có confounder không quan sát. Instrument Z cần: liên quan tới treatment (relevance), không liên quan tới confounder, và chỉ ảnh hưởng outcome thông qua treatment (exclusion). Ví dụ kinh điển: lời mời ngẫu nhiên dùng tính năng (encouragement design) làm instrument cho việc dùng tính năng; ước lượng thu được là LATE cho nhóm “compliers”. Biến tương quan trực tiếp với outcome lại vi phạm exclusion, nên đó là instrument tồi. Uplift modeling (T-learner, S-learner, X-learner, class transformation) ước lượng hiệu ứng có điều kiện (CATE). Nó cần cả treatment và control để học được phần chênh lệch, đánh giá bằng Qini/uplift curve. User có P(mua) cao nhất thường là “sure things” (vẫn mua dù không có voucher), nên tặng voucher cho họ là lãng phí: uplift ≈ 0, còn chi phí là thật."
+    },
+    {
+      "id": "sysdesign-050",
+      "sub": "Bandit vs A/B test",
+      "level": 3,
+      "type": "single",
+      "trap": false,
+      "q": "Chiến dịch flash sale 3 ngày cần chọn 1 trong 4 banner. So sánh multi-armed bandit với A/B test cố định. Phát biểu nào ĐÚNG?",
+      "options": [
+        "Với ε-greedy ε = 0.1, banner tốt nhất (khi đã xác định đúng) nhận 90% traffic, 10% còn lại chia đều cho 3 banner kia",
+        "Thompson sampling luôn chọn banner có tỉ lệ click trung bình quan sát cao nhất, nên không có cơ chế thăm dò nào",
+        "Bandit dồn dần traffic vào banner tốt để giảm regret, hợp chiến dịch ngắn, nhưng ước lượng hiệu ứng kém chuẩn hơn A/B",
+        "Bandit cho p-value và khoảng tin cậy không chệch như A/B, nên là lựa chọn mặc định cho mọi quyết định sản phẩm dài hạn"
+      ],
+      "answer": 2,
+      "explain": "A/B test cố định chia đều traffic suốt thí nghiệm để ước lượng chính xác hiệu ứng, và chấp nhận “trả giá” cho các biến thể kém. Bandit cân bằng explore/exploit, chuyển dần traffic sang biến thể tốt để giảm regret. Cách này hợp khi thời gian ngắn (flash sale 3 ngày, không kịp chạy A/B rồi mới áp dụng), có nhiều biến thể, hoặc khi mục tiêu là tối ưu hoá chứ không phải đo lường. Với ε-greedy, phần explore 10% chọn ngẫu nhiên trong cả 4 banner, nên banner tốt nhất nhận 0.9 + 0.1/4 = 92.5% traffic, không phải 90%. Thompson sampling lấy mẫu từ posterior (ví dụ Beta cho CTR) rồi chọn arm có mẫu cao nhất, nên arm còn bất định vẫn có cơ hội được chọn: đó chính là cơ chế thăm dò. Vì phân bổ traffic phụ thuộc dữ liệu thu được, ước lượng hiệu ứng từ bandit dễ chệch và khó suy diễn thống kê. Quyết định dài hạn cần đo tác động chính xác vẫn nên dùng A/B."
+    }
+  ]
+}

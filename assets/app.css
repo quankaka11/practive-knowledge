@@ -363,3 +363,11 @@ table.hist td.num, table.hist th.num { text-align: right; }
 @media (prefers-reduced-motion: reduce) {
   * { transition: none !important; animation: none !important; }
 }
+
+/* topic groups (foundation vs deep-dive) */
+.tgroup + .tgroup { margin-top: 18px; }
+.tgroup-head { display: flex; flex-wrap: wrap; gap: 4px 12px; align-items: baseline; margin-bottom: 10px; }
+.tgroup-head b { font: 700 14px/1.4 var(--f-display); text-transform: uppercase; letter-spacing: .06em; color: var(--accent); }
+.side-head { padding: 10px 10px 2px; }
+.side-head:first-of-type { padding-top: 2px; }
+@media (max-width: 860px) { .side-head { width: 100%; padding: 6px 0 0; } }
